@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+*.db
+
+# Node
+node_modules/
+dist/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Environment
+.env
+
+# Build artifacts
+*.log
+
+# Internal tools
+.zcf/
+.playwright-mcp/
+
+# Images (非项目资源)
+*.jpg
+*.png
+*.jpeg
+*.gif
+*.ico
