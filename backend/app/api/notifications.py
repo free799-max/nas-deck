@@ -11,7 +11,9 @@
 所有端点挂载在 /api/notifications 路径下，需要用户已登录。
 """
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, status
+
+from app.core.exceptions import APIException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -62,12 +64,12 @@ async def test_notifier(
         dict: 包含 success 字段，表示测试是否成功
 
     Raises:
-        HTTPException: 当通知器类型不存在时返回 400 错误
+        APIException: 当通知器类型不存在时返回 400 错误
     """
     # 根据类型获取对应的通知器实例
     notifier = notification_engine.get(data.type)
     if not notifier:
-        raise HTTPException(status_code=400, detail="Unknown notifier type")
+        raise APIException("未知的通知渠道类型", 400)
     # 执行测试通知发送
     success = await notifier.test(data.config)
     return {"success": success}
@@ -151,7 +153,7 @@ async def delete_channel(
         None: 成功删除返回 204 状态码（无内容）
 
     Raises:
-        HTTPException: 当渠道不存在或不属于当前用户时返回 404 错误
+        APIException: 当渠道不存在或不属于当前用户时返回 404 错误
     """
     # 查询渠道，同时验证渠道属于当前用户（防止越权删除）
     result = await db.execute(
@@ -162,6 +164,6 @@ async def delete_channel(
     )
     channel = result.scalar_one_or_none()
     if not channel:
-        raise HTTPException(status_code=404)
+        raise APIException("通知渠道不存在", 404)
     # 从数据库中删除该渠道
     await db.delete(channel)

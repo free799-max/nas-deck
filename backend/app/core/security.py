@@ -8,7 +8,9 @@ from datetime import datetime, timedelta, timezone
 
 import bcrypt as _bcrypt
 from jose import JWTError, jwt
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, status
+
+from app.core.exceptions import APIException
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -60,18 +62,18 @@ async def get_current_user(
         payload = jwt.decode(credentials.credentials, settings.SECRET_KEY, algorithms=["HS256"])
         sub = payload.get("sub")
         if sub is None:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)
+            raise APIException("认证失败", 401)
         # 提取用户 ID
         try:
             user_id = int(sub)
         except (ValueError, TypeError):
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)
+            raise APIException("认证失败", 401)
     except JWTError:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)
+        raise APIException("认证失败", 401)
 
     # 查询用户是否存在
     result = await db.execute(select(User).where(User.id == user_id))
     user = result.scalar_one_or_none()
     if user is None:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)
+        raise APIException("认证失败", 401)
     return user

@@ -9,8 +9,10 @@
 所有端点挂载在 /api/auth 路径下。
 """
 
-from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
+from fastapi import APIRouter, Depends, status
+
+from app.core.exceptions import APIException
+from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -28,7 +30,7 @@ async def register(data: UserCreate, db: AsyncSession = Depends(get_db)):
     用户注册端点
 
     接收用户名和密码，创建新用户。如果用户名已存在则返回 400 错误。
-    新注册用户默认角色为 admin。
+    第一个注册用户自动成为 admin，后续注册用户为普通 user。
 
     Args:
         data: 用户注册数据（用户名、密码）
@@ -38,18 +40,22 @@ async def register(data: UserCreate, db: AsyncSession = Depends(get_db)):
         UserResponse: 新创建的用户信息
 
     Raises:
-        HTTPException: 当用户名已被注册时返回 400 错误
+        APIException: 当用户名已被注册时返回 400 错误
     """
     # 查询数据库检查用户名是否已存在
     result = await db.execute(select(User).where(User.username == data.username))
     if result.scalar_one_or_none():
-        raise HTTPException(status_code=400, detail="Username already exists")
+        raise APIException("用户名已存在", 400)
+
+    # 判断是否为第一个用户：查询数据库中是否已有用户
+    count_result = await db.execute(select(func.count(User.id)))
+    is_first_user = count_result.scalar_one() == 0
 
     # 创建新用户对象，密码经过哈希处理
     user = User(
         username=data.username,
         hashed_password=hash_password(data.password),
-        role="admin",
+        role="admin" if is_first_user else "user",
     )
     # 将用户添加到数据库会话
     db.add(user)
@@ -75,14 +81,14 @@ async def login(data: UserLogin, db: AsyncSession = Depends(get_db)):
         TokenResponse: 包含 access_token 的响应
 
     Raises:
-        HTTPException: 当用户名或密码错误时返回 401 错误
+        APIException: 当用户名或密码错误时返回 401 错误
     """
     # 根据用户名查询用户
     result = await db.execute(select(User).where(User.username == data.username))
     user = result.scalar_one_or_none()
     # 验证用户是否存在以及密码是否正确
     if not user or not verify_password(data.password, user.hashed_password):
-        raise HTTPException(status_code=401, detail="Invalid credentials")
+        raise APIException("用户名或密码错误", 401)
 
     # 生成 JWT 访问令牌，以用户 ID 作为主题（sub）
     token = create_access_token({"sub": str(user.id)})

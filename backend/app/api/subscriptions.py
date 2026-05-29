@@ -10,7 +10,9 @@
 订阅数据按用户隔离，用户只能操作自己的订阅。
 """
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, status
+
+from app.core.exceptions import APIException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -104,7 +106,7 @@ async def delete_subscription(
         None: 成功删除返回 204 状态码（无内容）
 
     Raises:
-        HTTPException: 当订阅不存在或不属于当前用户时返回 404 错误
+        APIException: 当订阅不存在或不属于当前用户时返回 404 错误
     """
     # 查询订阅，同时验证订阅属于当前用户（防止越权删除）
     result = await db.execute(
@@ -112,6 +114,6 @@ async def delete_subscription(
     )
     sub = result.scalar_one_or_none()
     if not sub:
-        raise HTTPException(status_code=404, detail="Subscription not found")
+        raise APIException("订阅不存在", 404)
     # 从数据库中删除该订阅
     await db.delete(sub)

@@ -11,11 +11,13 @@ Docker 容器管理 API 模块
 所有端点挂载在 /api/docker 路径下，需要用户已登录。
 """
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
+
+from app.core.exceptions import APIException
 import docker
 
 from app.models.user import User
-from app.schemas.docker import ContainerInfo, ContainerAction
+from app.schemas.docker import ContainerInfo, ContainerAction, HostInfo
 from app.core.security import get_current_user
 from app.core.docker_manager import docker_manager
 
@@ -70,12 +72,12 @@ async def get_container(container_id: str, current_user: User = Depends(get_curr
         ContainerInfo: 容器详细信息
 
     Raises:
-        HTTPException: 当容器不存在时返回 404 错误
+        APIException: 当容器不存在时返回 404 错误
     """
     # 通过 docker_manager 查询容器
     container = docker_manager.get_container(container_id)
     if not container:
-        raise HTTPException(status_code=404, detail="Container not found")
+        raise APIException("容器不存在", 404)
     return container
 
 
@@ -99,8 +101,8 @@ async def container_action(
         dict: 包含 success 字段，表示操作是否成功
 
     Raises:
-        HTTPException: 当容器不存在时返回 404 错误
-        HTTPException: 当操作执行失败时返回 500 错误
+        APIException: 当容器不存在时返回 404 错误
+        APIException: 当操作执行失败时返回 500 错误
     """
     try:
         # 执行容器操作（如 start、stop、restart）
@@ -108,10 +110,10 @@ async def container_action(
         return {"success": True}
     except docker.errors.NotFound:
         # 容器不存在
-        raise HTTPException(status_code=404, detail="Container not found")
+        raise APIException("容器不存在", 404)
     except Exception as e:
         # 其他操作异常（如容器状态不允许该操作）
-        raise HTTPException(status_code=500, detail=str(e))
+        raise APIException(f"容器操作失败: {e}", 500)
 
 
 @router.get("/containers/{container_id}/logs")
@@ -136,3 +138,28 @@ async def container_logs(
     # 获取容器的日志，tail 参数控制返回的行数
     logs = docker_manager.get_container_logs(container_id, tail=tail)
     return {"logs": logs}
+
+
+@router.get("/host/info", response_model=HostInfo)
+async def get_host_info(current_user: User = Depends(get_current_user)):
+    """获取 Docker 宿主机综合信息。
+
+    返回 Docker 宿主机的主机名、操作系统、架构、内核版本、
+    Docker 引擎版本、资源信息、Docker 统计信息和网络列表。
+    即使后端部署在 Docker 容器内，返回的也是宿主机的信息。
+
+    Args:
+        current_user: 当前登录用户（通过依赖注入获取）
+
+    Returns:
+        HostInfo: 宿主机综合信息
+
+    Raises:
+        APIException: 当 Docker 服务不可用时返回 503 错误
+    """
+    if not docker_manager.available:
+        raise APIException("Docker 不可用", 503)
+    info = docker_manager.get_host_info()
+    if not info:
+        raise APIException("Docker 不可用", 503)
+    return info

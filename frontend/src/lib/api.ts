@@ -24,16 +24,35 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
-// 响应拦截器：处理响应错误，特别是 401 未授权的情况
+// 响应拦截器：解包 StandardResponse 并处理错误
 api.interceptors.response.use(
-  // 成功响应直接返回
-  (response) => response,
-  // 错误响应处理
+  (response) => {
+    // 204 No Content 直接透传
+    if (response.status === 204) return response;
+    // 提取 data 字段（StandardResponse 包装层）
+    if (
+      response.data &&
+      typeof response.data === "object" &&
+      "data" in response.data
+    ) {
+      response.data = response.data.data;
+    }
+    return response;
+  },
   (error) => {
-    if (error.response?.status === 401) {
-      // 收到 401 状态码，说明 token 已失效或未登录
-      localStorage.removeItem("token");  // 清除本地存储的 token
-      window.location.href = "/login";   // 跳转到登录页
+    if (error.response) {
+      const data = error.response.data;
+      // 提取后端返回的错误消息
+      error.displayMessage = data?.message || "请求失败";
+
+      if (error.response.status === 401) {
+        // 排除登录接口本身的 401（让用户界面处理错误提示）
+        const isLoginRequest = error.config?.url?.includes("/auth/login");
+        if (!isLoginRequest) {
+          localStorage.removeItem("token");
+          window.location.href = "/login";
+        }
+      }
     }
     return Promise.reject(error);
   }

@@ -9,6 +9,7 @@
 
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import api from "@/lib/api";
+import { useToast } from "@/components/ui/toast";
 
 /**
  * 订阅信息接口
@@ -60,6 +61,7 @@ export function useSubscriptions() {
 export function useCreateSubscription() {
   // 获取 QueryClient 实例，用于手动刷新缓存
   const qc = useQueryClient();
+  const toast = useToast();
   return useMutation({
     // 向订阅创建接口发送 POST 请求
     mutationFn: (data: {
@@ -69,7 +71,13 @@ export function useCreateSubscription() {
       item_meta: Record<string, unknown>;
     }) => api.post("/subscriptions", data),
     // 创建成功后，使订阅列表缓存失效以触发重新查询
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["subscriptions"] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["subscriptions"] });
+      toast.success("订阅成功");
+    },
+    onError: (error: any) => {
+      toast.error(error.displayMessage || "订阅失败");
+    },
   });
 }
 
@@ -83,10 +91,17 @@ export function useCreateSubscription() {
 export function useDeleteSubscription() {
   // 获取 QueryClient 实例，用于手动刷新缓存
   const qc = useQueryClient();
+  const toast = useToast();
   return useMutation({
     // 向订阅删除接口发送 DELETE 请求
     mutationFn: (id: number) => api.delete(`/subscriptions/${id}`),
     // 删除成功后，使订阅列表缓存失效以触发重新查询
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["subscriptions"] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["subscriptions"] });
+      toast.success("取消订阅成功");
+    },
+    onError: (error: any) => {
+      toast.error(error.displayMessage || "取消订阅失败");
+    },
   });
 }

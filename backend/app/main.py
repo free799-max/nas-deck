@@ -6,8 +6,13 @@
 
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+
+from app.core.exceptions import APIException
+from app.schemas.response import StandardResponse
+from app.core.custom_route import CustomAPIRoute
 
 from app.config import settings
 from app.database import init_db
@@ -15,6 +20,7 @@ from app.core.scheduler import setup_scheduler, scheduler
 from app.api.auth import router as auth_router
 from app.api.plugins import router as plugins_router
 from app.api.subscriptions import router as subscriptions_router
+# trigger-reload: docker_manager fixed
 
 
 @asynccontextmanager
@@ -39,6 +45,35 @@ async def lifespan(app: FastAPI):
 
 # 创建 FastAPI 应用实例
 app = FastAPI(title=settings.APP_NAME, lifespan=lifespan)
+app.router.route_class = CustomAPIRoute
+
+
+@app.exception_handler(APIException)
+async def api_exception_handler(request: Request, exc: APIException):
+    """捕获业务 API 异常，返回统一格式。"""
+    return JSONResponse(
+        status_code=exc.status_code,
+        content=StandardResponse.fail(exc.message).model_dump(),
+    )
+
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    """捕获 FastAPI HTTPException，统一包装为标准格式。"""
+    message = exc.detail if isinstance(exc.detail, str) else "请求失败"
+    return JSONResponse(
+        status_code=exc.status_code,
+        content=StandardResponse.fail(message).model_dump(),
+    )
+
+
+@app.exception_handler(Exception)
+async def general_exception_handler(request: Request, exc: Exception):
+    """捕获未预料异常，返回 500 统一格式。"""
+    return JSONResponse(
+        status_code=500,
+        content=StandardResponse.fail("服务器内部错误").model_dump(),
+    )
 
 # 配置 CORS 中间件，允许所有来源（开发环境）
 app.add_middleware(

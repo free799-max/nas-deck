@@ -10,6 +10,7 @@
 
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import api from "@/lib/api";
+import { useToast } from "@/components/ui/toast";
 
 /**
  * 插件信息接口
@@ -87,6 +88,7 @@ export function usePluginInstances() {
 export function useCreateInstance() {
   // 获取 QueryClient 实例，用于手动刷新缓存
   const qc = useQueryClient();
+  const toast = useToast();
   return useMutation({
     // 向实例创建接口发送 POST 请求
     mutationFn: (data: {
@@ -95,7 +97,13 @@ export function useCreateInstance() {
       config: Record<string, unknown>;
     }) => api.post("/plugins/instances", data),
     // 创建成功后，使实例列表缓存失效以触发重新查询
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["plugins", "instances"] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["plugins", "instances"] });
+      toast.success("创建成功");
+    },
+    onError: (error: any) => {
+      toast.error(error.displayMessage || "创建失败");
+    },
   });
 }
 
@@ -109,10 +117,17 @@ export function useCreateInstance() {
 export function useDeleteInstance() {
   // 获取 QueryClient 实例，用于手动刷新缓存
   const qc = useQueryClient();
+  const toast = useToast();
   return useMutation({
     // 向实例删除接口发送 DELETE 请求
     mutationFn: (id: number) => api.delete(`/plugins/instances/${id}`),
     // 删除成功后，使实例列表缓存失效以触发重新查询
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["plugins", "instances"] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["plugins", "instances"] });
+      toast.success("删除成功");
+    },
+    onError: (error: any) => {
+      toast.error(error.displayMessage || "删除失败");
+    },
   });
 }

@@ -7,5 +7,7 @@ async def test_health_check(client):
     resp = await client.get("/api/health")
     assert resp.status_code == 200
     data = resp.json()
-    assert data["status"] == "ok"
-    assert data["app"] == settings.APP_NAME
+    assert data["success"] is True
+    assert data["message"] == "ok"
+    assert data["data"]["status"] == "ok"
+    assert data["data"]["app"] == settings.APP_NAME

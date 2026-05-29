@@ -11,6 +11,7 @@
 
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import api from "@/lib/api";
+import { useToast } from "@/components/ui/toast";
 
 /**
  * 通知渠道接口
@@ -80,12 +81,19 @@ export function useChannels() {
 export function useCreateChannel() {
   // 获取 QueryClient 实例，用于手动刷新缓存
   const qc = useQueryClient();
+  const toast = useToast();
   return useMutation({
     // 向渠道创建接口发送 POST 请求
     mutationFn: (data: { type: string; config: Record<string, unknown>; enabled: boolean }) =>
       api.post("/notifications/channels", data),
     // 创建成功后，使渠道列表缓存失效以触发重新查询
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["notifications", "channels"] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["notifications", "channels"] });
+      toast.success("创建成功");
+    },
+    onError: (error: any) => {
+      toast.error(error.displayMessage || "创建失败");
+    },
   });
 }
 
@@ -99,11 +107,18 @@ export function useCreateChannel() {
 export function useDeleteChannel() {
   // 获取 QueryClient 实例，用于手动刷新缓存
   const qc = useQueryClient();
+  const toast = useToast();
   return useMutation({
     // 向渠道删除接口发送 DELETE 请求
     mutationFn: (id: number) => api.delete(`/notifications/channels/${id}`),
     // 删除成功后，使渠道列表缓存失效以触发重新查询
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["notifications", "channels"] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["notifications", "channels"] });
+      toast.success("删除成功");
+    },
+    onError: (error: any) => {
+      toast.error(error.displayMessage || "删除失败");
+    },
   });
 }
 

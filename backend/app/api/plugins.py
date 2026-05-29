@@ -11,7 +11,9 @@
 创建和删除操作额外需要 admin 角色权限。
 """
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, status
+
+from app.core.exceptions import APIException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -63,11 +65,11 @@ async def create_instance(
         PluginInstanceResponse: 新创建的插件实例信息
 
     Raises:
-        HTTPException: 当用户不是 admin 角色时返回 403 错误
+        APIException: 当用户不是 admin 角色时返回 403 错误
     """
     # 权限检查：只有 admin 角色才能创建插件实例
     if current_user.role != "admin":
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin required")
+        raise APIException("权限不足", 403)
     # 创建插件实例对象，默认为启用状态
     instance = PluginInstance(
         plugin_name=data.plugin_name,
@@ -125,16 +127,16 @@ async def delete_instance(
         None: 成功删除返回 204 状态码（无内容）
 
     Raises:
-        HTTPException: 当用户不是 admin 角色时返回 403 错误
-        HTTPException: 当插件实例不存在时返回 404 错误
+        APIException: 当用户不是 admin 角色时返回 403 错误
+        APIException: 当插件实例不存在时返回 404 错误
     """
     # 权限检查：只有 admin 角色才能删除插件实例
     if current_user.role != "admin":
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin required")
+        raise APIException("权限不足", 403)
     # 查询指定 ID 的插件实例
     result = await db.execute(select(PluginInstance).where(PluginInstance.id == instance_id))
     instance = result.scalar_one_or_none()
     if not instance:
-        raise HTTPException(status_code=404, detail="Instance not found")
+        raise APIException("插件实例不存在", 404)
     # 从数据库中删除该实例
     await db.delete(instance)
