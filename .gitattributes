@@ -1,0 +1,15 @@
+# 统一换行符为 LF，避免 Windows CRLF 警告
+* text=auto eol=lf
+
+# 二进制文件不处理换行符
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.svg binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.eot binary
+*.db binary

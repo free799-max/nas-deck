@@ -1,93 +1,171 @@
-# nas-deck
+# NasDeck
 
+内容订阅聚合平台，追踪 Jellyfin、Komga、MoviePilot 等内容源的更新，通过 Telegram、钉钉、企业微信推送通知。
 
+## 功能特性
 
-## Getting started
+- **多源订阅**：支持 Jellyfin（影视）、Komga（漫画）、MoviePilot（自动化）等内容源
+- **自动更新检测**：每 30 分钟轮询检查订阅内容更新
+- **多渠道通知**：支持 Telegram、钉钉、企业微信推送
+- **Docker 管理**：集成 Docker 容器管理（可选，无 Docker 环境时自动降级）
+- **插件化架构**：基于 `BasePlugin` 抽象基类，新内容源可通过插件扩展
+- **统一 API 响应**：所有接口返回标准格式 `{success, data, message}`
 
-To make it easy for you to get started with GitLab, here's a list of recommended next steps.
+## 技术栈
 
-Already a pro? Just edit this README.md and make it your own. Want to make it easy? [Use the template at the bottom](#editing-this-readme)!
+| 层级 | 技术 |
+|------|------|
+| 后端 | Python 3.12 + FastAPI + SQLAlchemy 2.0 (异步) + SQLite |
+| 前端 | React 19 + TypeScript + Tailwind CSS + shadcn/ui |
+| 数据 | SQLite + aiosqlite (异步驱动) |
+| 调度 | APScheduler (30 分钟轮询) |
+| 认证 | JWT Bearer Token + bcrypt |
+| 容器 | Docker + docker-compose |
 
-## Add your files
+## 快速开始
 
-- [ ] [Create](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#create-a-file) or [upload](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#upload-a-file) files
-- [ ] [Add files using the command line](https://docs.gitlab.com/topics/git/add_files/#add-files-to-a-git-repository) or push an existing Git repository with the following command:
+### 环境要求
+
+- Python 3.12+
+- Node.js 20+
+- Docker（可选，用于容器管理功能）
+
+### 1. 克隆仓库
+
+```bash
+git clone https://github.com/free799-max/nas-deck.git
+cd nas-deck
+```
+
+### 2. 后端启动
+
+```bash
+cd backend
+
+# 创建虚拟环境（Windows）
+python -m venv .venv
+.venv\Scripts\pip install -r requirements.txt
+
+# 启动服务
+PYTHONPATH=./app .venv\Scripts\python.exe -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+```
+
+后端默认运行在 `http://localhost:8000`，API 文档见 `http://localhost:8000/docs`。
+
+### 3. 前端启动
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+前端默认运行在 `http://localhost:5173`，开发时代理 `/api` 到 `localhost:8000`。
+
+### 4. Docker 一键启动
+
+```bash
+docker-compose up --build
+```
+
+- 后端：`http://localhost:8000`
+- 前端：`http://localhost:3000`
+
+## 开发命令
+
+### 后端
+
+```bash
+# 运行全部测试
+PYTHONPATH=./app .venv\Scripts\python.exe -m pytest
+
+# 运行单个测试文件
+PYTHONPATH=./app .venv\Scripts\python.exe -m pytest tests/test_auth.py
+
+# 数据库迁移
+PYTHONPATH=./app .venv\Scripts\python.exe -m alembic upgrade head
+```
+
+### 前端
+
+```bash
+npm run build   # TypeScript 编译 + Vite 构建
+npm run lint    # ESLint 检查
+```
+
+## 项目结构
 
 ```
-cd existing_repo
-git remote add origin https://git.cacty.top/nas/nas-deck.git
-git branch -M main
-git push -uf origin main
+nas-deck/
+├── backend/
+│   ├── app/
+│   │   ├── api/              # 路由层（auth/plugins/subscriptions/notifications/docker）
+│   │   ├── core/             # 核心逻辑（认证、调度、插件加载、Docker管理、通知引擎）
+│   │   ├── models/           # SQLAlchemy ORM 模型
+│   │   ├── schemas/          # Pydantic 请求/响应模型
+│   │   ├── plugins/          # 插件实现（jellyfin/komga/moviepilot）
+│   │   └── main.py           # FastAPI 入口
+│   └── tests/                # 测试套件
+├── frontend/
+│   └── src/
+│       ├── pages/            # 页面组件
+│       ├── hooks/            # React Query hooks
+│       ├── layouts/          # 布局组件
+│       └── lib/api.ts        # Axios 封装
+├── docs/
+│   └── api/
+│       └── api-response-spec.md    # API 响应格式规范
+└── docker-compose.yml
 ```
 
-## Integrate with your tools
+## 插件开发
 
-- [ ] [Set up project integrations](http://gitlab-1/nas/nas-deck/-/settings/integrations)
+继承 `BasePlugin` 并实现 4 个抽象方法即可添加新内容源：
 
-## Collaborate with your team
+```python
+from app.plugins.base import BasePlugin
 
-- [ ] [Invite team members and collaborators](https://docs.gitlab.com/ee/user/project/members/)
-- [ ] [Create a new merge request](https://docs.gitlab.com/ee/user/project/merge_requests/creating_merge_requests.html)
-- [ ] [Automatically close issues from merge requests](https://docs.gitlab.com/ee/user/project/issues/managing_issues.html#closing-issues-automatically)
-- [ ] [Enable merge request approvals](https://docs.gitlab.com/ee/user/project/merge_requests/approvals/)
-- [ ] [Set auto-merge](https://docs.gitlab.com/user/project/merge_requests/auto_merge/)
+class MyPlugin(BasePlugin):
+    name = "my_plugin"
+    display_name = "My Plugin"
+    version = "1.0.0"
+    config_schema = {...}  # JSON Schema，前端据此渲染配置表单
 
-## Test and Deploy
+    async def test_connection(self, config) -> bool: ...
+    async def get_sources(self, config) -> list[Source]: ...
+    async def get_items(self, config, source_id) -> list[Item]: ...
+    async def check_updates(self, config, subscriptions) -> list[Update]: ...
+```
 
-Use the built-in continuous integration in GitLab.
+将插件文件放入 `backend/app/plugins/` 目录，服务启动时自动发现加载。
 
-- [ ] [Get started with GitLab CI/CD](https://docs.gitlab.com/ee/ci/quick_start/)
-- [ ] [Analyze your code for known vulnerabilities with Static Application Security Testing (SAST)](https://docs.gitlab.com/ee/user/application_security/sast/)
-- [ ] [Deploy to Kubernetes, Amazon EC2, or Amazon ECS using Auto Deploy](https://docs.gitlab.com/ee/topics/autodevops/requirements.html)
-- [ ] [Use pull-based deployments for improved Kubernetes management](https://docs.gitlab.com/ee/user/clusters/agent/)
-- [ ] [Set up protected environments](https://docs.gitlab.com/ee/ci/environments/protected_environments.html)
+## 配置
 
-***
+通过环境变量或 `backend/.env` 文件配置：
 
-# Editing this README
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `APP_NAME` | NasDeck | 应用名称 |
+| `DATABASE_URL` | sqlite+aiosqlite:///./nasdeck.db | 数据库连接 |
+| `SECRET_KEY` | change-me-in-production | JWT 签名密钥 |
+| `ACCESS_TOKEN_EXPIRE_MINUTES` | 1440 | Token 过期时间（分钟）|
+| `PLUGIN_DIR` | app/plugins | 插件目录 |
 
-When you're ready to make this README your own, just edit this file and use the handy template below (or feel free to structure it however you want - this is just a starting point!). Thanks to [makeareadme.com](https://www.makeareadme.com/) for this template.
+## 数据模型
 
-## Suggestions for a good README
+```
+User 1--* Subscription *--1 PluginInstance 1--1 DockerContainer
+User 1--* NotificationChannel
+Subscription 1--* UpdateLog（级联删除）
+```
 
-Every project is different, so consider which of these sections apply to yours. The sections used in the template are suggestions for most open source projects. Also keep in mind that while a README can be too long and detailed, too long is better than too short. If you think your README is too long, consider utilizing another form of documentation rather than cutting out information.
+## API 规范
 
-## Name
-Choose a self-explaining name for your project.
+所有接口（除 204 No Content 外）统一返回标准格式：
 
-## Description
-Let people know what your project can do specifically. Provide context and add a link to any reference visitors might be unfamiliar with. A list of Features or a Background subsection can also be added here. If there are alternatives to your project, this is a good place to list differentiating factors.
+```json
+{"success": true, "data": ..., "message": "ok"}
+{"success": false, "data": null, "message": "错误描述"}
+```
 
-## Badges
-On some READMEs, you may see small images that convey metadata, such as whether or not all the tests are passing for the project. You can use Shields to add some to your README. Many services also have instructions for adding a badge.
-
-## Visuals
-Depending on what you are making, it can be a good idea to include screenshots or even a video (you'll frequently see GIFs rather than actual videos). Tools like ttygif can help, but check out Asciinema for a more sophisticated method.
-
-## Installation
-Within a particular ecosystem, there may be a common way of installing things, such as using Yarn, NuGet, or Homebrew. However, consider the possibility that whoever is reading your README is a novice and would like more guidance. Listing specific steps helps remove ambiguity and gets people to using your project as quickly as possible. If it only runs in a specific context like a particular programming language version or operating system or has dependencies that have to be installed manually, also add a Requirements subsection.
-
-## Usage
-Use examples liberally, and show the expected output if you can. It's helpful to have inline the smallest example of usage that you can demonstrate, while providing links to more sophisticated examples if they are too long to reasonably include in the README.
-
-## Support
-Tell people where they can go to for help. It can be any combination of an issue tracker, a chat room, an email address, etc.
-
-## Roadmap
-If you have ideas for releases in the future, it is a good idea to list them in the README.
-
-## Contributing
-State if you are open to contributions and what your requirements are for accepting them.
-
-For people who want to make changes to your project, it's helpful to have some documentation on how to get started. Perhaps there is a script that they should run or some environment variables that they need to set. Make these steps explicit. These instructions could also be useful to your future self.
-
-You can also document commands to lint the code or run tests. These steps help to ensure high code quality and reduce the likelihood that the changes inadvertently break something. Having instructions for running tests is especially helpful if it requires external setup, such as starting a Selenium server for testing in a browser.
-
-## Authors and acknowledgment
-Show your appreciation to those who have contributed to the project.
-
-## License
-For open source projects, say how it is licensed.
-
-## Project status
-If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.
+完整规范见 [docs/api/api-response-spec.md](docs/api/api-response-spec.md)。
