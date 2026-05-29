@@ -11,6 +11,9 @@ Docker 客户端管理器模块。
 本模块在导入时会创建一个全局单例 docker_manager，供其他模块直接使用。
 """
 
+import os
+import shutil
+
 import docker
 
 
@@ -133,6 +136,89 @@ class DockerManager:
             return ""
         # Docker SDK 返回的是 bytes 类型，需解码为字符串
         return container.logs(tail=tail).decode("utf-8", errors="replace")
+
+    def get_host_info(self) -> dict | None:
+        """获取 Docker 宿主机综合信息。
+
+        通过 Docker SDK 获取 Docker 引擎版本信息、系统信息、磁盘使用情况和网络列表。
+        即使后端部署在 Docker 容器内，Docker SDK 调用守护进程返回的也是宿主机视角的数据。
+
+        Returns:
+            dict | None: 包含 hostname、os、arch、kernel_version、docker_version、
+                        resources、stats、storage_driver、docker_root_dir、networks 的字典。
+                        Docker 不可用时返回 None。
+        """
+        if not self._client:
+            return None
+        try:
+            # Docker 版本信息
+            version = self._client.version()
+            # Docker 系统信息
+            info = self._client.info()
+
+            # 磁盘信息：基于 Docker 根目录所在文件系统
+            docker_root_dir = info.get("DockerRootDir", "/var/lib/docker")
+            disk_total = 0
+            disk_free = 0
+            disk_used = 0
+            disk_usage_percent = 0.0
+            try:
+                # 优先使用跨平台的 shutil.disk_usage（Windows / Linux / macOS 均支持）
+                usage = shutil.disk_usage(docker_root_dir)
+                disk_total = usage.total
+                disk_used = usage.used
+                disk_free = usage.free
+                if disk_total > 0:
+                    disk_usage_percent = round((disk_used / disk_total) * 100, 2)
+            except Exception:
+                # 路径不存在或平台不支持时安全降级
+                pass
+
+            # Docker 网络列表
+            networks = []
+            for net in self._client.networks.list():
+                networks.append({
+                    "id": net.id[:12],
+                    "name": net.name,
+                    "driver": net.attrs.get("Driver", "bridge"),
+                    "scope": net.attrs.get("Scope", "local"),
+                })
+
+            return {
+                "hostname": info.get("Name", "unknown"),
+                "os": version.get("Os", "unknown"),
+                "arch": version.get("Arch", "unknown"),
+                "kernel_version": version.get("KernelVersion", "unknown"),
+                "docker_version": {
+                    "version": version.get("Version", "unknown"),
+                    "api_version": version.get("ApiVersion", "unknown"),
+                    "go_version": version.get("GoVersion", "unknown"),
+                    "os": version.get("Os", "unknown"),
+                    "arch": version.get("Arch", "unknown"),
+                    "kernel_version": version.get("KernelVersion", "unknown"),
+                    "build_time": version.get("BuildTime", "unknown"),
+                },
+                "resources": {
+                    "cpu_cores": info.get("NCPU", 0),
+                    "memory_total": info.get("MemTotal", 0),
+                    "disk_total": disk_total,
+                    "disk_used": disk_used,
+                    "disk_free": disk_free,
+                    "disk_usage_percent": disk_usage_percent,
+                },
+                "stats": {
+                    "containers_total": info.get("Containers", 0),
+                    "containers_running": info.get("ContainersRunning", 0),
+                    "containers_paused": info.get("ContainersPaused", 0),
+                    "containers_stopped": info.get("ContainersStopped", 0),
+                    "images": info.get("Images", 0),
+                },
+                "storage_driver": info.get("Driver", "unknown"),
+                "docker_root_dir": docker_root_dir,
+                "networks": networks,
+            }
+        except Exception:
+            return None
 
     def _format_container(self, container) -> dict:
         """将 Docker 容器对象格式化为字典。

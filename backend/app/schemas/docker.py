@@ -1,9 +1,13 @@
-"""
-Docker 容器相关的 Pydantic Schema 模块。
+"""Docker 容器相关的 Pydantic Schema 模块。
 
 定义容器管理模块的请求/响应数据模型：
 - ContainerInfo: 容器信息的响应数据
 - ContainerAction: 容器操作的请求数据
+- DockerVersionInfo: Docker 版本信息
+- ResourceInfo: 宿主机资源信息
+- DockerStatsInfo: Docker 统计信息
+- NetworkInfo: Docker 网络信息
+- HostInfo: 宿主机综合信息
 """
 
 from typing import Literal
@@ -43,3 +47,63 @@ class ContainerAction(BaseModel):
     """
 
     action: Literal["start", "stop", "restart"]  # 操作类型，限定三种取值
+
+
+class DockerVersionInfo(BaseModel):
+    """Docker 引擎版本信息。"""
+
+    version: str
+    api_version: str
+    go_version: str
+    os: str
+    arch: str
+    kernel_version: str
+    build_time: str
+
+
+class ResourceInfo(BaseModel):
+    """宿主机资源信息（CPU、内存、磁盘）。"""
+
+    cpu_cores: int
+    memory_total: int  # 字节
+    disk_total: int    # 字节
+    disk_used: int     # 字节
+    disk_free: int     # 字节
+    disk_usage_percent: float
+
+
+class DockerStatsInfo(BaseModel):
+    """Docker 统计信息（容器、镜像数量）。"""
+
+    containers_total: int
+    containers_running: int
+    containers_paused: int
+    containers_stopped: int
+    images: int
+
+
+class NetworkInfo(BaseModel):
+    """Docker 网络信息。"""
+
+    id: str
+    name: str
+    driver: str
+    scope: str
+
+
+class HostInfo(BaseModel):
+    """Docker 宿主机综合信息。
+
+    包含主机名、操作系统、架构、内核版本、Docker 版本、资源、统计、存储和网络信息。
+    """
+
+    hostname: str
+    os: str
+    arch: str
+    kernel_version: str
+    docker_version: DockerVersionInfo
+    resources: ResourceInfo
+    stats: DockerStatsInfo
+    storage_driver: str
+    docker_root_dir: str
+    networks: list[NetworkInfo]

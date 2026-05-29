@@ -26,7 +26,6 @@ import {
   Monitor,
   Settings,
   ChevronDown,
-  ChevronRight,
 } from "lucide-react";
 import { LogoIcon } from "@/components/LogoIcon";
 
@@ -68,19 +67,30 @@ const bottomItems: NavItemConfig[] = [
 ];
 
 /** 导航项组件 */
-function NavItem({ item, active }: { item: NavItemConfig; active: boolean }) {
+function NavItem({
+  item,
+  active,
+  collapsed,
+}: {
+  item: NavItemConfig;
+  active: boolean;
+  collapsed: boolean;
+}) {
   const Icon = item.icon;
   return (
     <Link
       to={item.path}
-      className={`flex items-center gap-3 px-3 py-2 rounded-xl text-sm transition-colors ${
+      title={collapsed ? item.label : undefined}
+      className={`flex items-center rounded-xl text-sm transition-colors ${
+        collapsed ? "justify-center px-2 py-2.5" : "gap-3 px-3 py-2"
+      } ${
         active
-          ? "bg-white text-foreground font-medium shadow-sm"
-          : "text-muted-foreground hover:bg-white/60 hover:text-foreground"
+          ? "bg-[#f5f5f5] text-foreground font-medium"
+          : "text-muted-foreground hover:bg-[#f5f5f5]/60 hover:text-foreground"
       }`}
     >
-      <Icon className="h-4 w-4" />
-      <span className="flex-1">{item.label}</span>
+      <Icon className="h-4 w-4 shrink-0" />
+      {!collapsed && <span className="flex-1">{item.label}</span>}
     </Link>
   );
 }
@@ -92,50 +102,96 @@ function NavGroup({
   pathname,
   collapsed,
   onToggle,
+  sidebarCollapsed,
+  collapsible = true,
+  uppercaseTitle = true,
 }: {
   title: string;
   items: NavItemConfig[];
   pathname: string;
   collapsed: boolean;
   onToggle: () => void;
+  sidebarCollapsed: boolean;
+  collapsible?: boolean;
+  uppercaseTitle?: boolean;
 }) {
   const isGroupActive = items.some(
     (item) => pathname === item.path || pathname.startsWith(item.path + "/")
   );
 
-  return (
-    <div className="mt-6">
-      <button
-        onClick={onToggle}
-        className={`flex items-center w-full px-3 mb-2 text-[11px] font-semibold uppercase tracking-wider transition-colors ${
-          isGroupActive
-            ? "text-foreground"
-            : "text-muted-foreground hover:text-foreground"
-        }`}
-      >
-        {title}
-        {collapsed ? (
-          <ChevronRight className="h-3 w-3 ml-auto" />
-        ) : (
-          <ChevronDown className="h-3 w-3 ml-auto" />
-        )}
-      </button>
-      {!collapsed && (
+  if (sidebarCollapsed) {
+    return (
+      <div className="mt-3">
+        {/* 收缩状态下的分组标题首字提示 */}
+        <div className="flex items-center justify-center py-1.5">
+          <span className="text-[9px] font-semibold text-muted-foreground/60 tracking-wider">
+            {title.slice(0, 2)}
+          </span>
+        </div>
         <div className="space-y-0.5">
           {items.map((item) => (
             <NavItem
               key={item.path}
               item={item}
               active={pathname === item.path}
+              collapsed={true}
             />
           ))}
         </div>
-      )}
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-6">
+      <button
+        onClick={collapsible ? onToggle : undefined}
+        className={`flex items-center w-full px-3 mb-2 text-[11px] font-semibold tracking-wider transition-colors ${
+          uppercaseTitle ? "uppercase" : ""
+        } ${
+          collapsible ? "cursor-pointer" : "cursor-default"
+        } ${
+          isGroupActive
+            ? "text-foreground"
+            : "text-muted-foreground hover:text-foreground"
+        }`}
+      >
+        {title}
+        {collapsible && (
+          <span
+            className={`ml-auto transition-transform duration-300 ease-in-out ${
+              collapsed ? "-rotate-90" : "rotate-0"
+            }`}
+          >
+            <ChevronDown className="h-3 w-3" />
+          </span>
+        )}
+      </button>
+      <div
+        className={`grid overflow-hidden transition-all duration-300 ease-in-out ${
+          collapsed ? "grid-rows-[0fr] opacity-0" : "grid-rows-[1fr] opacity-100"
+        }`}
+      >
+        <div className="min-h-0 space-y-0.5">
+          {items.map((item) => (
+            <NavItem
+              key={item.path}
+              item={item}
+              active={pathname === item.path}
+              collapsed={false}
+            />
+          ))}
+        </div>
+      </div>
     </div>
   );
 }
 
-export function Sidebar() {
+interface SidebarProps {
+  collapsed: boolean;
+}
+
+export function Sidebar({ collapsed }: SidebarProps) {
   const location = useLocation();
   const pathname = location.pathname;
 
@@ -154,17 +210,27 @@ export function Sidebar() {
   };
 
   return (
-    <aside className="w-64 flex flex-col h-screen bg-[#f5f5f7] border-r border-transparent">
+    <aside
+      className={`flex flex-col h-screen bg-white shadow-[1px_0_0_0_rgba(0,0,0,0.04)] transition-all duration-300 ${
+        collapsed ? "w-[60px]" : "w-64"
+      }`}
+    >
       {/* Logo 区域 */}
-      <div className="p-6 flex items-center gap-2.5">
-        <LogoIcon size={28} />
-        <span className="text-lg font-bold text-foreground tracking-tight">
-          NasDeck
-        </span>
+      <div
+        className={`flex items-center ${
+          collapsed ? "justify-center p-4" : "p-6 gap-2.5"
+        }`}
+      >
+        <LogoIcon size={collapsed ? 24 : 28} />
+        {!collapsed && (
+          <span className="text-lg font-bold text-foreground tracking-tight">
+            NasDeck
+          </span>
+        )}
       </div>
 
       {/* 导航列表 */}
-      <nav className="flex-1 px-3 overflow-y-auto">
+      <nav className="flex-1 px-3 overflow-y-auto scrollbar-hidden">
         {/* 顶部独立项 */}
         <div className="space-y-0.5">
           {topItems.map((item) => (
@@ -176,54 +242,68 @@ export function Sidebar() {
                   ? pathname === "/"
                   : pathname === item.path
               }
+              collapsed={collapsed}
             />
           ))}
         </div>
 
         {/* AUTOMATION 分组 */}
         <NavGroup
-          title="AUTOMATION"
+          title="自动化配置"
           items={automationItems}
           pathname={pathname}
           collapsed={collapsedGroups.has("AUTOMATION")}
           onToggle={() => toggleGroup("AUTOMATION")}
+          sidebarCollapsed={collapsed}
         />
 
-        {/* DOCKER 分组 */}
+        {/* Docker 分组 */}
         <NavGroup
-          title="DOCKER"
+          title="Docker"
           items={dockerItems}
           pathname={pathname}
-          collapsed={collapsedGroups.has("DOCKER")}
-          onToggle={() => toggleGroup("DOCKER")}
+          collapsed={false}
+          onToggle={() => {}}
+          sidebarCollapsed={collapsed}
+          collapsible={false}
+          uppercaseTitle={false}
         />
 
         {/* 底部独立项 */}
-        <div className="mt-6 space-y-0.5">
+        <div className={collapsed ? "mt-4 space-y-1" : "mt-6 space-y-0.5"}>
           {bottomItems.map((item) => (
             <NavItem
               key={item.path}
               item={item}
               active={pathname === item.path}
+              collapsed={collapsed}
             />
           ))}
         </div>
       </nav>
 
       {/* 底部用户卡片 */}
-      <div className="p-4">
-        <div className="flex items-center gap-3 px-3 py-3 rounded-xl bg-white/80 hover:bg-white transition-colors cursor-pointer">
-          <div className="h-9 w-9 rounded-full bg-gradient-to-br from-amber-200 to-orange-300 flex items-center justify-center text-sm font-medium text-foreground">
-            E
-          </div>
-          <div className="flex-1 min-w-0">
-            <div className="text-sm font-medium text-foreground">NasDeck</div>
-            <div className="text-xs text-muted-foreground truncate">
-              NAS 管理平台
+      <div className={collapsed ? "p-2" : "p-4"}>
+        {collapsed ? (
+          <div className="flex justify-center">
+            <div className="h-9 w-9 rounded-full bg-gradient-to-br from-amber-200 to-orange-300 flex items-center justify-center text-sm font-medium text-foreground">
+              E
             </div>
           </div>
-          <ChevronDown className="h-4 w-4 text-muted-foreground" />
-        </div>
+        ) : (
+          <div className="flex items-center gap-3 px-3 py-3 rounded-xl bg-[#f5f5f5]/80 hover:bg-[#f5f5f5] transition-colors cursor-pointer">
+            <div className="h-9 w-9 rounded-full bg-gradient-to-br from-amber-200 to-orange-300 flex items-center justify-center text-sm font-medium text-foreground">
+              E
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="text-sm font-medium text-foreground">NasDeck</div>
+              <div className="text-xs text-muted-foreground truncate">
+                NAS 管理平台
+              </div>
+            </div>
+            <ChevronDown className="h-4 w-4 text-muted-foreground" />
+          </div>
+        )}
       </div>
     </aside>
   );

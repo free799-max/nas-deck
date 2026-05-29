@@ -13,6 +13,7 @@ dist/
 .idea/
 .vscode/
 *.swp
+.claude
 
 # OS
 Thumbs.db
