@@ -95,6 +95,23 @@ async def login(data: UserLogin, db: AsyncSession = Depends(get_db)):
     return TokenResponse(access_token=token)
 
 
+@router.get("/has-users")
+async def has_users(db: AsyncSession = Depends(get_db)):
+    """
+    检查系统中是否已有注册用户。
+
+    用于前端判断是否为首次使用（无用户时展示注册界面）。
+
+    Args:
+        db: 异步数据库会话
+
+    Returns:
+        dict: {"has_users": bool}
+    """
+    count_result = await db.execute(select(func.count(User.id)))
+    return {"has_users": count_result.scalar_one() > 0}
+
+
 @router.get("/me", response_model=UserResponse)
 async def get_me(current_user: User = Depends(get_current_user)):
     """

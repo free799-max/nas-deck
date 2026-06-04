@@ -5,6 +5,7 @@
  * 未来将用于展示所有通知的发送历史记录。
  */
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { PageHeader } from "@/components/PageHeader";
 
 /**
  * 通知中心页面组件
@@ -16,8 +17,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 export function NotificationsPage() {
   return (
     <div>
-      {/* 页面标题 */}
-      <h2 className="text-2xl font-bold mb-6">通知中心</h2>
+      <PageHeader title="通知中心" description="查看所有通知发送历史" />
       {/* 通知历史占位卡片 */}
       <Card className="rounded-xl">
         <CardHeader>

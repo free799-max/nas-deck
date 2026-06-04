@@ -17,7 +17,7 @@ from app.core.exceptions import APIException
 import docker
 
 from app.models.user import User
-from app.schemas.docker import ContainerInfo, ContainerAction, HostInfo
+from app.schemas.docker import ContainerInfo, ContainerAction, HostInfo, ImageInfo, ImageSearchResult, ImagePullRequest
 from app.core.security import get_current_user
 from app.core.docker_manager import docker_manager
 
@@ -163,3 +163,90 @@ async def get_host_info(current_user: User = Depends(get_current_user)):
     if not info:
         raise APIException("Docker 不可用", 503)
     return info
+
+
+# ===================== 镜像管理 =====================
+
+@router.get("/images", response_model=list[ImageInfo])
+async def list_images(current_user: User = Depends(get_current_user)):
+    """获取本地镜像列表。
+
+    Args:
+        current_user: 当前登录用户
+
+    Returns:
+        list[ImageInfo]: 本地镜像列表
+    """
+    return docker_manager.list_images()
+
+
+@router.delete("/images/{image_id}")
+async def remove_image(
+    image_id: str,
+    force: bool = False,
+    current_user: User = Depends(get_current_user),
+):
+    """删除指定镜像。
+
+    Args:
+        image_id: 镜像 ID 或标签
+        force: 是否强制删除
+        current_user: 当前登录用户
+
+    Returns:
+        dict: 操作结果
+
+    Raises:
+        APIException: 镜像不存在或删除失败
+    """
+    try:
+        docker_manager.remove_image(image_id, force=force)
+        return {"success": True}
+    except docker.errors.ImageNotFound:
+        raise APIException("镜像不存在", 404)
+    except docker.errors.APIError as e:
+        raise APIException(f"删除镜像失败: {e}", 500)
+
+
+@router.get("/images/search", response_model=list[ImageSearchResult])
+async def search_images(q: str, current_user: User = Depends(get_current_user)):
+    """从 Docker Hub 搜索镜像。
+
+    Args:
+        q: 搜索关键词
+        current_user: 当前登录用户
+
+    Returns:
+        list[ImageSearchResult]: 搜索结果列表
+    """
+    return docker_manager.search_images(q)
+
+
+@router.post("/images/pull")
+async def pull_image(
+    data: ImagePullRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """拉取指定镜像。
+
+    Args:
+        data: 拉取请求，包含镜像名称
+        current_user: 当前登录用户
+
+    Returns:
+        dict: 操作结果
+
+    Raises:
+        APIException: 拉取失败
+    """
+    if not docker_manager.available:
+        raise APIException("Docker 不可用", 503)
+    try:
+        docker_manager.pull_image(data.image)
+        return {"success": True}
+    except docker.errors.ImageNotFound:
+        raise APIException("镜像不存在", 404)
+    except docker.errors.APIError as e:
+        raise APIException(f"拉取镜像失败: {e}", 500)
+    except Exception as e:
+        raise APIException(f"拉取镜像失败: {e}", 500)

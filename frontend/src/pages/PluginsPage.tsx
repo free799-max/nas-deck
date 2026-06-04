@@ -23,6 +23,7 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { Plus, Trash2 } from "lucide-react";
+import { PageHeader } from "@/components/PageHeader";
 import {
   useAvailablePlugins,
   usePluginInstances,
@@ -95,9 +96,7 @@ export function PluginsPage() {
 
   return (
     <div>
-      {/* 页面头部：标题 + 添加实例按钮 */}
-      <div className="flex items-center justify-between mb-6">
-        <h2 className="text-2xl font-bold">插件管理</h2>
+      <PageHeader title="插件管理" description="管理所有插件实例及其配置">
         {/* 添加插件实例的弹窗 */}
         <Dialog open={open} onOpenChange={setOpen}>
           {/* 弹窗触发按钮 */}
@@ -169,7 +168,7 @@ export function PluginsPage() {
             </div>
           </DialogContent>
         </Dialog>
-      </div>
+      </PageHeader>
 
       {/* 插件实例卡片网格，响应式布局 */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">

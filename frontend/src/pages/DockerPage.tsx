@@ -11,6 +11,7 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { PageHeader } from "@/components/PageHeader";
 import { Play, Square, RotateCcw } from "lucide-react";
 import { useContainers, useContainerAction, useDockerStatus } from "@/hooks/useDocker";
 
@@ -55,7 +56,7 @@ export function DockerPage() {
   if (dockerStatus && !dockerStatus.available) {
     return (
       <div>
-        <h2 className="text-2xl font-bold mb-6">Docker 管理</h2>
+        <PageHeader title="Docker 管理" />
         <p className="text-muted-foreground">Docker 不可用或未连接。</p>
       </div>
     );
@@ -63,8 +64,7 @@ export function DockerPage() {
 
   return (
     <div>
-      {/* 页面标题 */}
-      <h2 className="text-2xl font-bold mb-6">Docker 管理</h2>
+      <PageHeader title="Docker 管理" description="管理所有 Docker 容器的运行状态" />
       {/* 容器卡片网格，响应式布局：1列(小屏) -> 2列(中屏) -> 3列(大屏) */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {/* 遍历容器列表，渲染每个容器卡片 */}

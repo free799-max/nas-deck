@@ -220,6 +220,104 @@ class DockerManager:
         except Exception:
             return None
 
+    def list_images(self) -> list[dict]:
+        """获取本地镜像列表。
+
+        Returns:
+            list[dict]: 格式化后的镜像信息列表，包含 id、tags、size、created、containers。
+                        Docker 不可用时返回空列表。
+        """
+        if not self._client:
+            return []
+        images = self._client.images.list()
+        # 统计每个镜像被多少个容器使用
+        containers = self._client.containers.list(all=True)
+        image_usage = {}
+        for c in containers:
+            img_id = c.image.id
+            image_usage[img_id] = image_usage.get(img_id, 0) + 1
+
+        result = []
+        for img in images:
+            attrs = img.attrs
+            result.append({
+                "id": img.id.split(":")[-1][:12] if ":" in img.id else img.id[:12],
+                "tags": attrs.get("RepoTags") or ["<none>:<none>"],
+                "size": attrs.get("Size", 0),
+                "created": attrs.get("Created", ""),
+                "containers": image_usage.get(img.id, 0),
+            })
+        return result
+
+    def remove_image(self, image_id: str, force: bool = False):
+        """删除指定镜像。
+
+        Args:
+            image_id: 镜像 ID（短 ID 或完整 ID）或标签。
+            force: 是否强制删除（包括有容器引用的镜像）。
+
+        Raises:
+            docker.errors.ImageNotFound: 镜像不存在时抛出。
+            docker.errors.APIError: 删除失败时抛出。
+            RuntimeError: Docker 不可用时抛出。
+        """
+        if not self._client:
+            raise RuntimeError("Docker not available")
+        self._client.images.remove(image_id, force=force)
+
+    def search_images(self, query: str) -> list[dict]:
+        """从 Docker Hub 搜索镜像。
+
+        通过 Docker Hub v2 API 搜索公开镜像仓库。
+
+        Args:
+            query: 搜索关键词。
+
+        Returns:
+            list[dict]: 搜索结果列表，包含 name、description、star_count、official。
+        """
+        import httpx
+        import urllib.parse
+
+        if not query.strip():
+            return []
+
+        url = (
+            "https://hub.docker.com/v2/search/repositories?q="
+            + urllib.parse.quote(query)
+            + "&page_size=20"
+        )
+        try:
+            resp = httpx.get(url, timeout=10)
+            resp.raise_for_status()
+            results = resp.json().get("results", [])
+            return [
+                {
+                    "name": r.get("repo_name", ""),
+                    "description": r.get("short_description", ""),
+                    "star_count": r.get("star_count", 0),
+                    "official": r.get("is_official", False),
+                }
+                for r in results
+            ]
+        except Exception:
+            return []
+
+    def pull_image(self, image: str):
+        """拉取指定镜像。
+
+        Args:
+            image: 镜像名称（含可选标签，如 "nginx:latest"）。
+
+        Raises:
+            docker.errors.ImageNotFound: 镜像不存在时抛出。
+            docker.errors.APIError: 拉取失败时抛出。
+            RuntimeError: Docker 不可用时抛出。
+        """
+        if not self._client:
+            raise RuntimeError("Docker not available")
+        self._client.images.pull(image)
+
     def _format_container(self, container) -> dict:
         """将 Docker 容器对象格式化为字典。
 

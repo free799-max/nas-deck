@@ -20,6 +20,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { useDockerHostInfo, useDockerStatus } from "@/hooks/useDocker";
+import { PageHeader } from "@/components/PageHeader";
 import {
   Monitor,
   Cpu,
@@ -73,7 +74,7 @@ export function DockerHostPage() {
   if (isLoading) {
     return (
       <div>
-        <h2 className="text-2xl font-bold mb-6">Docker 主机</h2>
+        <PageHeader title="Docker 主机" />
         <p className="text-muted-foreground">加载中...</p>
       </div>
     );
@@ -102,8 +103,7 @@ export function DockerHostPage() {
 
   return (
     <div>
-      {/* 页面标题 */}
-      <h2 className="text-2xl font-bold mb-6">Docker 主机</h2>
+      <PageHeader title="Docker 主机" description="查看 Docker 宿主机综合信息" />
 
       {/* 第一行：主机概览 + Docker 引擎 */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-4">

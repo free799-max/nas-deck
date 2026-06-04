@@ -13,6 +13,7 @@ import { DashboardPage } from "./pages/DashboardPage";
 import { PluginsPage } from "./pages/PluginsPage";
 import { DockerPage } from "./pages/DockerPage";
 import { DockerHostPage } from "./pages/DockerHostPage";
+import { DockerImagesPage } from "./pages/DockerImagesPage";
 
 const queryClient = new QueryClient();
 
@@ -108,10 +109,7 @@ export default function App() {
                 element={<PlaceholderPage title="容器编排" />}
               />
               <Route path="/docker/containers" element={<DockerPage />} />
-              <Route
-                path="/docker/images"
-                element={<PlaceholderPage title="镜像" />}
-              />
+              <Route path="/docker/images" element={<DockerImagesPage />} />
               <Route path="/docker/host" element={<DockerHostPage />} />
 
               {/* 系统设置 */}

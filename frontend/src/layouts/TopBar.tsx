@@ -1,18 +1,17 @@
 /**
- * 顶部栏组件 - Weihu 风格
+ * 顶部栏组件 - 极简风格
  *
- * 包含侧边栏收缩按钮、搜索框（内含 ⌘K）、帮助、通知、用户菜单
+ * 包含帮助、通知、用户菜单
  */
 
 import { useState, useRef, useEffect } from "react";
 import {
-  Search,
   Bell,
   HelpCircle,
-  PanelLeft,
-  PanelLeftClose,
   User,
   LogOut,
+  PanelLeft,
+  PanelLeftClose,
 } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
 
@@ -40,58 +39,39 @@ export function TopBar({ sidebarCollapsed, onToggleSidebar }: TopBarProps) {
   }, []);
 
   return (
-    <header className="h-14 flex items-center justify-between px-6 bg-[#f5f5f5]">
-      {/* 左侧：导航收缩按钮 */}
-      <div className="w-40 shrink-0 flex items-center">
-        <button
-          onClick={onToggleSidebar}
-          className="h-9 w-9 rounded-xl bg-white flex items-center justify-center text-muted-foreground hover:text-foreground transition-colors shadow-[0_1px_3px_rgba(0,0,0,0.04)]"
-          title={sidebarCollapsed ? "展开导航" : "收起导航"}
-        >
-          {sidebarCollapsed ? (
-            <PanelLeft className="h-4 w-4" />
-          ) : (
-            <PanelLeftClose className="h-4 w-4" />
-          )}
-        </button>
-      </div>
-
-      {/* 中间：搜索框，⌘K 在内部右侧 */}
-      <div className="flex-1 flex justify-center px-6">
-        <div className="relative w-full max-w-2xl">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
-          <input
-            type="text"
-            placeholder="Find something"
-            className="w-full h-10 pl-9 pr-14 rounded-xl bg-white text-sm placeholder:text-muted-foreground/60 focus:outline-none focus:ring-2 focus:ring-[#7c3aed]/15 shadow-[0_1px_3px_rgba(0,0,0,0.04),0_1px_2px_rgba(0,0,0,0.02)]"
-          />
-          {/* ⌘K 快捷键提示 - 在搜索框内部右侧 */}
-          <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-0.5 px-1.5 py-0.5 rounded-md bg-gray-100 text-[10px] text-muted-foreground font-medium">
-            <span>⌘</span>
-            <span>K</span>
-          </div>
-        </div>
-      </div>
+    <header className="h-11 flex items-center justify-between px-4 bg-white border-b border-border/60 shrink-0">
+      {/* 左侧：侧边栏收起按钮 */}
+      <button
+        onClick={onToggleSidebar}
+        className="h-8 w-8 rounded-md flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+        title={sidebarCollapsed ? "展开导航" : "收起导航"}
+      >
+        {sidebarCollapsed ? (
+          <PanelLeft className="h-4 w-4" />
+        ) : (
+          <PanelLeftClose className="h-4 w-4" />
+        )}
+      </button>
 
       {/* 右侧：帮助 + 通知 + 用户菜单 */}
-      <div className="w-40 shrink-0 flex items-center justify-end gap-2">
-        <button className="h-9 w-9 rounded-xl bg-white flex items-center justify-center text-muted-foreground hover:text-foreground transition-colors shadow-[0_1px_3px_rgba(0,0,0,0.04)]">
+      <div className="flex items-center gap-1">
+        <button className="h-8 w-8 rounded-md flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted transition-colors">
           <HelpCircle className="h-4 w-4" />
         </button>
-        <button className="h-9 w-9 rounded-xl bg-white flex items-center justify-center text-muted-foreground hover:text-foreground transition-colors relative shadow-[0_1px_3px_rgba(0,0,0,0.04)]">
+        <button className="h-8 w-8 rounded-md flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted transition-colors relative">
           <Bell className="h-4 w-4" />
-          <span className="absolute top-2 right-2.5 h-1.5 w-1.5 rounded-full bg-red-500" />
+          <span className="absolute top-1 right-1 h-2 w-2 rounded-full bg-red-500 ring-2 ring-white" />
         </button>
 
         {/* 用户菜单 */}
         <div className="relative" ref={menuRef}>
           <button
             onClick={() => setMenuOpen(!menuOpen)}
-            className="h-9 px-2.5 rounded-xl bg-white flex items-center gap-2 text-muted-foreground hover:text-foreground transition-colors shadow-[0_1px_3px_rgba(0,0,0,0.04)]"
+            className="h-8 pl-2 pr-2.5 rounded-md flex items-center gap-2 text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
             title={user?.username ?? "用户"}
           >
-            <div className="h-5 w-5 rounded-full bg-[#7c3aed]/10 flex items-center justify-center">
-              <User className="h-3 w-3 text-[#7c3aed]" />
+            <div className="h-6 w-6 rounded-full bg-primary/10 flex items-center justify-center">
+              <User className="h-3.5 w-3.5 text-primary" />
             </div>
             <span className="text-xs font-medium max-w-[80px] truncate">
               {user?.username ?? "用户"}
@@ -100,8 +80,8 @@ export function TopBar({ sidebarCollapsed, onToggleSidebar }: TopBarProps) {
 
           {/* 下拉菜单 */}
           {menuOpen && (
-            <div className="absolute right-0 mt-2 w-40 rounded-xl bg-white shadow-[0_4px_12px_rgba(0,0,0,0.08)] border border-gray-100 py-1 z-50">
-              <div className="px-3 py-2 border-b border-gray-50">
+            <div className="absolute right-0 mt-2 w-44 rounded-xl bg-white shadow-lg border border-border/60 py-1 z-50">
+              <div className="px-3 py-2 border-b border-border/40">
                 <p className="text-xs font-medium text-foreground truncate">
                   {user?.username}
                 </p>
@@ -114,9 +94,9 @@ export function TopBar({ sidebarCollapsed, onToggleSidebar }: TopBarProps) {
                   setMenuOpen(false);
                   logout();
                 }}
-                className="w-full flex items-center gap-2 px-3 py-2 text-xs text-destructive hover:bg-red-50 transition-colors"
+                className="w-full flex items-center gap-2 px-3 py-2 text-xs text-destructive hover:bg-destructive/5 transition-colors"
               >
-                <LogOut className="h-3.5 w-3.5" />
+                <LogOut className="h-4 w-4" />
                 退出登录
               </button>
             </div>

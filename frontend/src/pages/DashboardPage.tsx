@@ -5,7 +5,7 @@
  */
 
 import { useState } from "react";
-import { Plus, MoreHorizontal, MessageSquare, Paperclip, ChevronDown, Check } from "lucide-react";
+import { Plus, MoreHorizontal, MessageSquare, Paperclip, Check } from "lucide-react";
 
 // ===================== 类型定义 =====================
 
@@ -406,28 +406,19 @@ export function DashboardPage() {
       {/* 页面标题区 */}
       <div className="flex items-start justify-between">
         <div>
-          <h2 className="text-2xl font-bold text-foreground">May</h2>
-          <p className="text-xs text-muted-foreground mt-0.5">
-            Today is Saturday, Jul 9th, 2023
+          <h1 className="text-xl font-semibold tracking-tight text-foreground">看板</h1>
+          <p className="text-sm text-muted-foreground mt-0.5">
+            任务进度追踪
           </p>
         </div>
 
         <div className="flex items-center gap-3">
-          {/* Board 下拉 */}
-          <div className="flex items-center gap-2">
-            <span className="text-sm font-semibold text-foreground">Board</span>
-            <button className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors">
-              <ChevronDown className="h-3.5 w-3.5" />
-              <span>Daily Tasks</span>
-            </button>
-          </div>
-
           {/* 成员头像组 */}
-          <div className="flex -space-x-2 ml-2">
+          <div className="flex -space-x-2">
             {teamMembers.map((member, i) => (
               <div
                 key={i}
-                className={`h-7 w-7 rounded-full border-2 border-[#f5f5f7] flex items-center justify-center text-[9px] font-medium text-foreground ${member.color}`}
+                className={`h-7 w-7 rounded-full border-2 border-background flex items-center justify-center text-[9px] font-medium text-foreground ${member.color}`}
               >
                 {member.initials}
               </div>
@@ -435,19 +426,19 @@ export function DashboardPage() {
           </div>
 
           {/* Filters 按钮 */}
-          <button className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white text-sm font-medium text-foreground hover:bg-white/80 transition-colors">
+          <button className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-card border border-border/60 text-sm font-medium text-foreground hover:bg-muted transition-colors">
             <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <line x1="4" y1="6" x2="20" y2="6" />
               <line x1="4" y1="12" x2="16" y2="12" />
               <line x1="4" y1="18" x2="12" y2="18" />
             </svg>
-            Filters
+            筛选
           </button>
 
           {/* Create task 按钮 */}
-          <button className="flex items-center gap-1.5 px-4 py-1.5 rounded-xl bg-foreground text-white text-sm font-medium hover:bg-foreground/90 transition-colors">
+          <button className="flex items-center gap-1.5 px-4 py-1.5 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors">
             <Plus className="h-3.5 w-3.5" />
-            Create task
+            新建任务
           </button>
         </div>
       </div>

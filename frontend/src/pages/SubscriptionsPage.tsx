@@ -9,6 +9,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Trash2 } from "lucide-react";
+import { PageHeader } from "@/components/PageHeader";
 import { useSubscriptions, useDeleteSubscription } from "@/hooks/useSubscriptions";
 
 /**
@@ -26,8 +27,7 @@ export function SubscriptionsPage() {
 
   return (
     <div>
-      {/* 页面标题 */}
-      <h2 className="text-2xl font-bold mb-6">订阅管理</h2>
+      <PageHeader title="订阅管理" description="查看和管理所有订阅内容" />
       {/* 订阅卡片网格，响应式布局：1列(小屏) -> 2列(中屏) -> 3列(大屏) */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {/* 遍历订阅列表，渲染每个订阅卡片 */}

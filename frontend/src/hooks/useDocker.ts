@@ -157,3 +157,92 @@ export function useDockerHostInfo() {
     queryFn: () => api.get("/docker/host/info").then((r) => r.data),
   });
 }
+
+/* ===================== 镜像管理 ===================== */
+
+/** 本地镜像信息 */
+export interface ImageInfo {
+  id: string;
+  tags: string[];
+  size: number;
+  created: string;
+  containers: number;
+}
+
+/** Docker Hub 搜索结果 */
+export interface ImageSearchResult {
+  name: string;
+  description: string;
+  star_count: number;
+  official: boolean;
+}
+
+/**
+ * 查询本地镜像列表
+ *
+ * @returns useQuery 对象，data 类型为 ImageInfo 数组
+ */
+export function useImages() {
+  return useQuery<ImageInfo[]>({
+    queryKey: ["docker", "images"],
+    queryFn: () => api.get("/docker/images").then((r) => r.data),
+    refetchInterval: 30000,
+  });
+}
+
+/**
+ * 删除本地镜像（mutation）
+ *
+ * @returns useMutation 对象
+ */
+export function useRemoveImage() {
+  const qc = useQueryClient();
+  const toast = useToast();
+  return useMutation({
+    mutationFn: ({ id, force }: { id: string; force?: boolean }) =>
+      api.delete(`/docker/images/${id}`, { params: { force } }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["docker", "images"] });
+      toast.success("镜像已删除");
+    },
+    onError: (error: any) => {
+      toast.error(error.displayMessage || "删除失败");
+    },
+  });
+}
+
+/**
+ * 从 Docker Hub 搜索镜像
+ *
+ * @param q 搜索关键词
+ * @returns useQuery 对象，data 类型为 ImageSearchResult 数组
+ */
+export function useSearchImages(q: string) {
+  return useQuery<ImageSearchResult[]>({
+    queryKey: ["docker", "images", "search", q],
+    queryFn: () =>
+      api.get("/docker/images/search", { params: { q } }).then((r) => r.data),
+    enabled: !!q.trim(),
+    staleTime: 60_000,
+  });
+}
+
+/**
+ * 拉取镜像（mutation）
+ *
+ * @returns useMutation 对象
+ */
+export function usePullImage() {
+  const qc = useQueryClient();
+  const toast = useToast();
+  return useMutation({
+    mutationFn: (image: string) => api.post("/docker/images/pull", { image }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["docker", "images"] });
+      toast.success("镜像拉取成功");
+    },
+    onError: (error: any) => {
+      toast.error(error.displayMessage || "拉取失败");
+    },
+  });
+}

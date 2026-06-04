@@ -91,6 +91,50 @@ class NetworkInfo(BaseModel):
     scope: str
 
 
+class ImageInfo(BaseModel):
+    """本地 Docker 镜像信息。
+
+    Attributes:
+        id: 镜像短 ID（12 位）
+        tags: 镜像标签列表（如 ["nginx:latest", "nginx:alpine"]）
+        size: 镜像大小（字节）
+        created: 创建时间（ISO 8601 格式）
+        containers: 使用该镜像的容器数量（-1 表示未知）
+    """
+
+    id: str
+    tags: list[str]
+    size: int
+    created: str
+    containers: int
+
+
+class ImageSearchResult(BaseModel):
+    """Docker Hub 镜像搜索结果。
+
+    Attributes:
+        name: 镜像完整名称（如 "library/nginx"）
+        description: 镜像描述
+        star_count: Star 数量
+        official: 是否为官方镜像
+    """
+
+    name: str
+    description: str
+    star_count: int
+    official: bool
+
+
+class ImagePullRequest(BaseModel):
+    """镜像拉取请求。
+
+    Attributes:
+        image: 要拉取的镜像名称（含标签，如 "nginx:latest"）
+    """
+
+    image: str
+
+
 class HostInfo(BaseModel):
     """Docker 宿主机综合信息。
 

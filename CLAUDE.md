@@ -12,7 +12,7 @@ NasDeck — 内容订阅聚合平台，追踪多种内容源（Jellyfin/Komga/Mo
 
 ```bash
 # 使用虚拟环境中的 Python（系统 python 指向 Windows Store 占位程序）
-PYTHONPATH=./app backend/.venv/Scripts/python.exe -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+PYTHONPATH=./app backend/.venv/Scripts/python.exe -m uvicorn app.main:app --reload --host 0.0.0.0 --port 5001
 
 # 运行全部测试
 PYTHONPATH=./app backend/.venv/Scripts/python.exe -m pytest
@@ -38,7 +38,7 @@ npm run lint         # ESLint 检查
 ### Docker
 
 ```bash
-docker-compose up --build   # 构建并启动前后端容器（后端 :8000，前端 :3000）
+docker-compose up --build   # 构建并启动前后端容器（后端 :5001，前端 :5000）
 ```
 
 ## 架构
@@ -134,7 +134,7 @@ Subscription 1--* UpdateLog（级联删除）
 - **认证**：JWT Bearer token，`register` 端点默认赋予 `admin` 角色
 - **CORS**：开发环境 `allow_origins=["*"]`
 - **路径别名**：前端 `@/` 映射到 `src/`
-- **Vite 代理**：开发时 `/api` 代理到 `http://localhost:8000`
+- **Vite 代理**：开发时 `/api` 代理到 `http://localhost:5001`
 - **React Query**：hooks 中 mutation 的 `onSuccess` 自动调用 `invalidateQueries` 刷新缓存
 - **Docker 管理**：可选功能，后端通过 `docker_manager.available` 检测可用性，不可用时安全降级
 - **Toast 通知**：前端使用自定义 `ToastProvider`（`components/ui/toast.tsx`），通过 `useToast()` 调用

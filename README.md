@@ -47,10 +47,10 @@ python -m venv .venv
 .venv\Scripts\pip install -r requirements.txt
 
 # 启动服务
-PYTHONPATH=./app .venv\Scripts\python.exe -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+PYTHONPATH=./app .venv\Scripts\python.exe -m uvicorn app.main:app --reload --host 0.0.0.0 --port 5001
 ```
 
-后端默认运行在 `http://localhost:8000`，API 文档见 `http://localhost:8000/docs`。
+后端默认运行在 `http://localhost:5001`，API 文档见 `http://localhost:5001/docs`。
 
 ### 3. 前端启动
 
@@ -60,7 +60,7 @@ npm install
 npm run dev
 ```
 
-前端默认运行在 `http://localhost:5173`，开发时代理 `/api` 到 `localhost:8000`。
+前端默认运行在 `http://localhost:5000`，开发时代理 `/api` 到 `localhost:5001`。
 
 ### 4. Docker 一键启动
 
@@ -68,8 +68,8 @@ npm run dev
 docker-compose up --build
 ```
 
-- 后端：`http://localhost:8000`
-- 前端：`http://localhost:3000`
+- 后端：`http://localhost:5001`
+- 前端：`http://localhost:5000`
 
 ## 开发命令
 

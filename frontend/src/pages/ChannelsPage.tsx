@@ -16,6 +16,7 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Trash2, Plus, Send } from "lucide-react";
+import { PageHeader } from "@/components/PageHeader";
 import {
   useNotifiers,
   useChannels,
@@ -95,15 +96,13 @@ export function ChannelsPage() {
 
   return (
     <div>
-      {/* 页面头部：标题 + 添加渠道按钮 */}
-      <div className="flex items-center justify-between mb-6">
-        <h2 className="text-2xl font-bold">通知渠道</h2>
+      <PageHeader title="通知渠道" description="配置和管理通知发送渠道">
         {/* 切换添加渠道表单的显示状态 */}
         <Button onClick={() => setShowForm(!showForm)}>
           <Plus className="h-4 w-4 mr-2" />
           添加渠道
         </Button>
-      </div>
+      </PageHeader>
 
       {/* 添加渠道的内联表单，仅在 showForm 为 true 时显示 */}
       {showForm && (

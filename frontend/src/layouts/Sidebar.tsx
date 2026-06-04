@@ -8,7 +8,7 @@
  * - 系统设置（底部独立项）
  */
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Link, useLocation } from "react-router-dom";
 import {
   LayoutDashboard,
@@ -85,8 +85,8 @@ function NavItem({
         collapsed ? "justify-center px-2 py-2.5" : "gap-3 px-3 py-2"
       } ${
         active
-          ? "bg-[#f5f5f5] text-foreground font-medium"
-          : "text-muted-foreground hover:bg-[#f5f5f5]/60 hover:text-foreground"
+          ? "bg-primary/5 text-primary font-medium"
+          : "text-muted-foreground hover:bg-muted/60 hover:text-foreground"
       }`}
     >
       <Icon className="h-4 w-4 shrink-0" />
@@ -189,9 +189,10 @@ function NavGroup({
 
 interface SidebarProps {
   collapsed: boolean;
+  onToggle: () => void;
 }
 
-export function Sidebar({ collapsed }: SidebarProps) {
+export function Sidebar({ collapsed, onToggle }: SidebarProps) {
   const location = useLocation();
   const pathname = location.pathname;
 
@@ -199,6 +200,17 @@ export function Sidebar({ collapsed }: SidebarProps) {
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(
     new Set()
   );
+
+  // 侧边栏宽度过渡中，保持收缩布局避免错位
+  const [isResizing, setIsResizing] = useState(false);
+  useEffect(() => {
+    setIsResizing(true);
+    const timer = setTimeout(() => setIsResizing(false), 300);
+    return () => clearTimeout(timer);
+  }, [collapsed]);
+
+  // 过渡期间强制使用收缩布局，等宽度稳定后再切换
+  const effectiveCollapsed = isResizing || collapsed;
 
   const toggleGroup = (title: string) => {
     setCollapsedGroups((prev) => {
@@ -212,25 +224,31 @@ export function Sidebar({ collapsed }: SidebarProps) {
   return (
     <aside
       className={`flex flex-col h-screen bg-white shadow-[1px_0_0_0_rgba(0,0,0,0.04)] transition-all duration-300 ${
-        collapsed ? "w-[60px]" : "w-64"
+        collapsed ? "w-[60px]" : "w-52"
       }`}
     >
       {/* Logo 区域 */}
       <div
-        className={`flex items-center ${
-          collapsed ? "justify-center p-4" : "p-6 gap-2.5"
+        className={`relative flex items-center justify-center shrink-0 ${
+          collapsed
+            ? "flex-col h-[60px] gap-1.5"
+            : "h-11"
         }`}
       >
-        <LogoIcon size={collapsed ? 24 : 28} />
-        {!collapsed && (
-          <span className="text-lg font-bold text-foreground tracking-tight">
-            NasDeck
-          </span>
-        )}
+        <div className={`flex items-center px-3 ${collapsed ? "" : "gap-2.5"}`}>
+          <LogoIcon size={collapsed ? 24 : 28} />
+          {!collapsed && (
+            <span className="text-lg font-bold text-foreground tracking-tight">
+              NasDeck
+            </span>
+          )}
+        </div>
+        {/* 分割线 - 与 TopBar border-b 平行，左右保留边距 */}
+        <div className={`absolute bottom-0 h-px bg-border/60 ${collapsed ? "left-2 right-2" : "left-4 right-4"}`} />
       </div>
 
       {/* 导航列表 */}
-      <nav className="flex-1 px-3 overflow-y-auto scrollbar-hidden">
+      <nav className="flex-1 px-3 pt-2 overflow-y-auto scrollbar-hidden">
         {/* 顶部独立项 */}
         <div className="space-y-0.5">
           {topItems.map((item) => (
@@ -242,7 +260,7 @@ export function Sidebar({ collapsed }: SidebarProps) {
                   ? pathname === "/"
                   : pathname === item.path
               }
-              collapsed={collapsed}
+              collapsed={effectiveCollapsed}
             />
           ))}
         </div>
@@ -254,7 +272,7 @@ export function Sidebar({ collapsed }: SidebarProps) {
           pathname={pathname}
           collapsed={collapsedGroups.has("AUTOMATION")}
           onToggle={() => toggleGroup("AUTOMATION")}
-          sidebarCollapsed={collapsed}
+          sidebarCollapsed={effectiveCollapsed}
         />
 
         {/* Docker 分组 */}
@@ -264,7 +282,7 @@ export function Sidebar({ collapsed }: SidebarProps) {
           pathname={pathname}
           collapsed={false}
           onToggle={() => {}}
-          sidebarCollapsed={collapsed}
+          sidebarCollapsed={effectiveCollapsed}
           collapsible={false}
           uppercaseTitle={false}
         />
@@ -276,7 +294,7 @@ export function Sidebar({ collapsed }: SidebarProps) {
               key={item.path}
               item={item}
               active={pathname === item.path}
-              collapsed={collapsed}
+              collapsed={effectiveCollapsed}
             />
           ))}
         </div>
