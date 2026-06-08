@@ -4,7 +4,6 @@
 本模块定义了插件系统的核心抽象接口和通用数据结构：
 - Source: 数据源（如媒体库、书库等）的数据模型
 - Item: 数据项（如电影、剧集、漫画系列等）的数据模型
-- Update: 更新信息的数据模型
 - BasePlugin: 插件抽象基类，所有插件必须继承此类并实现其抽象方法
 
 所有具体插件（Jellyfin、Komga、MoviePilot 等）均基于此模块的接口进行开发。
@@ -54,35 +53,17 @@ class Item:
     meta: dict = field(default_factory=dict)
 
 
-@dataclass
-class Update:
-    """
-    更新信息数据类。
-
-    表示一个订阅项的更新通知，例如新剧集上线、新漫画发布等。
-    由插件的 check_updates 方法生成，用于通知用户。
-
-    Attributes:
-        subscription_id: 关联的订阅记录 ID，用于定位对应的订阅
-        title: 更新标题，简述更新内容
-        content: 更新详情，提供更多关于本次更新的描述信息
-    """
-    subscription_id: int
-    title: str
-    content: str
-
-
 class BasePlugin(ABC):
     """
     插件抽象基类。
 
-    所有插件必须继承此类并实现其定义的四个抽象方法。
+    所有插件必须继承此类并实现其定义的抽象方法。
     每个插件对应一个外部媒体服务的集成，负责与该服务的 API 交互。
 
     子类必须定义以下类属性：
         name: 插件的内部标识名（小写，用于程序内部引用）
         display_name: 插件的显示名称（用于前端展示）
-        version: 插件版本号（遵循语义化版本规范）
+        version: 插件版本号
         description: 插件的简短描述
         config_schema: 插件配置的 JSON Schema 定义，用于验证和生成配置表单
 
@@ -90,7 +71,6 @@ class BasePlugin(ABC):
         test_connection: 测试与外部服务的连接是否正常
         get_sources: 获取外部服务中可用的数据源列表
         get_items: 获取指定数据源中的数据项列表
-        check_updates: 检查订阅项是否有新的更新
     """
     # 插件内部标识名（小写字母）
     name: str
@@ -149,22 +129,5 @@ class BasePlugin(ABC):
 
         Returns:
             list[Item]: 数据项列表，连接失败时返回空列表
-        """
-        ...
-
-    @abstractmethod
-    async def check_updates(self, config: dict, subscriptions: list) -> list[Update]:
-        """
-        检查订阅项是否有新的更新。
-
-        遍历给定的订阅列表，逐一检查每个订阅项在外部服务中是否有新内容。
-        例如检查剧集是否有新集数、漫画系列是否有新单行本等。
-
-        Args:
-            config: 插件配置字典，包含连接所需的信息
-            subscriptions: 订阅记录列表，每条记录包含 id、item_id 等字段
-
-        Returns:
-            list[Update]: 更新信息列表，包含所有检测到的新更新
         """
         ...

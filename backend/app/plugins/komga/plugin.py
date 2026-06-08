@@ -6,7 +6,6 @@ Komga 漫画服务器插件。
 - 连接测试：验证服务器地址和用户名/密码是否有效
 - 获取数据源：拉取 Komga 中的书库列表
 - 获取数据项：拉取指定书库中的漫画系列列表
-- 检查更新：检测已订阅系列是否有新书发布
 
 认证方式：使用 HTTP Basic Auth，通过用户名和密码进行身份验证。
 
@@ -16,7 +15,7 @@ Komga API 文档参考：https://komga.org/guides/rest.html
 import httpx
 
 # 导入插件基类和数据模型
-from app.plugins.base import BasePlugin, Source, Item, Update
+from app.plugins.base import BasePlugin, Source, Item
 
 
 class KomgaPlugin(BasePlugin):
@@ -166,47 +165,3 @@ class KomgaPlugin(BasePlugin):
             # 请求异常时返回空列表
             return []
 
-    async def check_updates(self, config: dict, subscriptions: list) -> list[Update]:
-        """
-        检查已订阅系列是否有新书发布。
-
-        遍历所有订阅记录，查询每个订阅系列的最新一本书的信息。
-        如果存在书籍数据，则生成一条更新通知，包含书名和编号。
-
-        Args:
-            config: 插件配置字典，需包含 'url'、'username' 和 'password'
-            subscriptions: 订阅记录列表，每条记录需包含 'id' 和 'item_id' 字段
-
-        Returns:
-            list[Update]: 更新信息列表，包含所有检测到的新书更新
-        """
-        updates = []
-        try:
-            async with httpx.AsyncClient() as client:
-                for sub in subscriptions:
-                    # 请求该系列下的书籍列表，按编号倒序，仅取最新 1 本
-                    resp = await client.get(
-                        f"{config['url']}/api/v1/series/{sub['item_id']}/books",
-                        auth=self._auth(config),
-                        params={
-                            "sort": "number,desc",  # 按编号倒序排列
-                            "size": 1,              # 仅获取最新 1 本
-                        },
-                        timeout=10,
-                    )
-                    if resp.status_code == 200:
-                        books = resp.json().get("content", [])
-                        if books:
-                            # 取最新一本书的信息
-                            latest = books[0]
-                            # 生成更新通知，包含书名和编号
-                            updates.append(Update(
-                                subscription_id=sub["id"],
-                                title=f"New book: {latest['metadata']['title']}",
-                                # 显示书籍编号（如第几卷/期）
-                                content=f"Number: {latest.get('number', '?')}",
-                            ))
-        except Exception:
-            # 发生异常时静默忽略，返回已收集到的更新
-            pass
-        return updates

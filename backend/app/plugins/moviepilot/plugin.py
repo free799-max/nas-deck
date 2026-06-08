@@ -6,7 +6,6 @@ MoviePilot 媒体自动化插件。
 - 连接测试：验证服务器地址和 API Key 是否有效
 - 获取数据源：返回预定义的订阅和下载中两个数据源
 - 获取数据项：拉取 MoviePilot 中的订阅列表
-- 检查更新：通过下载历史检测已订阅内容是否有新的下载记录
 
 认证方式：使用 Bearer Token，通过 Authorization 请求头传递 API Key。
 
@@ -16,7 +15,7 @@ MoviePilot 项目地址：https://github.com/jxxghp/MoviePilot
 import httpx
 
 # 导入插件基类和数据模型
-from app.plugins.base import BasePlugin, Source, Item, Update
+from app.plugins.base import BasePlugin, Source, Item
 
 
 class MoviePilotPlugin(BasePlugin):
@@ -153,49 +152,3 @@ class MoviePilotPlugin(BasePlugin):
             pass
         return []
 
-    async def check_updates(self, config: dict, subscriptions: list) -> list[Update]:
-        """
-        检查已订阅内容是否有新的下载记录。
-
-        请求下载历史接口（/api/v1/history），获取最近 20 条下载记录，
-        然后通过 TMDB ID 或标题与订阅记录进行匹配。
-        如果匹配成功，则生成一条更新通知。
-
-        Args:
-            config: 插件配置字典，需包含 'url' 和 'api_key'
-            subscriptions: 订阅记录列表，每条记录需包含 'id'、'item_id' 和 'item_title' 字段
-
-        Returns:
-            list[Update]: 更新信息列表，包含所有匹配到的新下载记录
-        """
-        updates = []
-        try:
-            async with httpx.AsyncClient() as client:
-                # 请求下载历史，获取最近 20 条记录
-                resp = await client.get(
-                    f"{config['url']}/api/v1/history",
-                    headers=self._headers(config),
-                    params={"page": 1, "count": 20},  # 第 1 页，每页 20 条
-                    timeout=10,
-                )
-                if resp.status_code == 200:
-                    # 遍历下载历史记录
-                    for item in resp.json().get("list", []):
-                        # 与每条订阅记录进行匹配
-                        for sub in subscriptions:
-                            # 通过 TMDB ID 或标题进行匹配
-                            if (
-                                str(item.get("tmdbid")) == sub["item_id"]
-                                or item.get("title") == sub.get("item_title")
-                            ):
-                                # 匹配成功，生成下载完成通知
-                                updates.append(Update(
-                                    subscription_id=sub["id"],
-                                    title=f"{item.get('title', 'Unknown')} downloaded",
-                                    # 下载描述信息
-                                    content=item.get("desc", ""),
-                                ))
-        except Exception:
-            # 发生异常时静默忽略，返回已收集到的更新
-            pass
-        return updates

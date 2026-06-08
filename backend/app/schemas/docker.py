@@ -8,11 +8,14 @@
 - DockerStatsInfo: Docker 统计信息
 - NetworkInfo: Docker 网络信息
 - HostInfo: 宿主机综合信息
+- MirrorConfig: 镜像查询配置
+- BatchImageDeleteRequest: 批量删除镜像请求
 """
 
+from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_serializer
 
 
 class ContainerInfo(BaseModel):
@@ -33,7 +36,7 @@ class ContainerInfo(BaseModel):
     name: str  # 容器名称
     status: str  # 运行状态
     health: str  # 健康检查状态
-    image: str  # 使用的镜像名称
+    image: str  # 使用的镜像
 
 
 class ContainerAction(BaseModel):
@@ -133,6 +136,91 @@ class ImagePullRequest(BaseModel):
     """
 
     image: str
+
+
+class RegistryCreate(BaseModel):
+    """创建镜像搜索接口配置请求。
+
+    Attributes:
+        name: 配置名称
+        search_api_url: 镜像搜索 API 主地址
+        mirror_url: 镜像搜索 API 镜像地址（可选）
+        enable_mirror: 是否启用镜像地址作为 fallback
+        username: 认证用户名（可选）
+        password: 认证密码（可选）
+    """
+
+    name: str
+    search_api_url: str
+    mirror_url: str | None = None
+    enable_mirror: bool = False
+    username: str | None = None
+    password: str | None = None
+
+
+class RegistryUpdate(BaseModel):
+    """更新镜像搜索接口配置请求。
+
+    Attributes:
+        name: 配置名称
+        search_api_url: 镜像搜索 API 主地址
+        mirror_url: 镜像搜索 API 镜像地址（可选）
+        enable_mirror: 是否启用镜像地址作为 fallback
+        username: 认证用户名（可选）
+        password: 认证密码（可选）
+    """
+
+    name: str | None = None
+    search_api_url: str | None = None
+    mirror_url: str | None = None
+    enable_mirror: bool | None = None
+    username: str | None = None
+    password: str | None = None
+
+
+class RegistryOut(BaseModel):
+    """镜像搜索接口配置响应。
+
+    Attributes:
+        id: 配置记录 ID
+        name: 配置名称
+        search_api_url: 镜像搜索 API 主地址
+        mirror_url: 镜像搜索 API 镜像地址
+        enable_mirror: 是否启用镜像地址
+        username: 认证用户名
+        is_default: 是否设为默认
+        created_at: 创建时间
+        updated_at: 更新时间
+    """
+
+    id: int
+    name: str
+    search_api_url: str
+    mirror_url: str | None = None
+    enable_mirror: bool = False
+    username: str | None = None
+    is_default: bool = False
+    created_at: datetime
+    updated_at: datetime
+
+    @field_serializer("created_at", "updated_at")
+    def serialize_datetime(self, value: datetime) -> str:
+        return value.isoformat() if value else ""
+
+    class Config:
+        from_attributes = True
+
+
+class BatchImageDeleteRequest(BaseModel):
+    """批量删除镜像请求。
+
+    Attributes:
+        ids: 要删除的镜像 ID 列表
+        force: 是否强制删除
+    """
+
+    ids: list[str]
+    force: bool = False
 
 
 class HostInfo(BaseModel):

@@ -16,10 +16,8 @@ from app.core.custom_route import CustomAPIRoute
 
 from app.config import settings
 from app.database import init_db
-from app.core.scheduler import setup_scheduler, scheduler
 from app.api.auth import router as auth_router
 from app.api.plugins import router as plugins_router
-from app.api.subscriptions import router as subscriptions_router
 # trigger-reload: docker_manager fixed
 
 
@@ -33,14 +31,7 @@ async def lifespan(app: FastAPI):
     from app.core.plugin_loader import plugin_loader
     plugin_loader.discover()
 
-    # 启动定时调度器（订阅更新检查）
-    setup_scheduler()
-
     yield
-
-    # 关闭时停止调度器
-    if scheduler.running:
-        scheduler.shutdown()
 
 
 # 创建 FastAPI 应用实例
@@ -83,23 +74,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 导入通知相关模块
-from app.api.notifications import router as notifications_router
-from app.core.notification_engine import notification_engine
-from app.core.notifiers.telegram import TelegramNotifier
-from app.core.notifiers.dingtalk import DingTalkNotifier
-from app.core.notifiers.wechat_work import WeChatWorkNotifier
-
 # 注册所有 API 路由
 app.include_router(auth_router)
 app.include_router(plugins_router)
-app.include_router(subscriptions_router)
-app.include_router(notifications_router)
-
-# 注册通知渠道实现
-notification_engine.register(TelegramNotifier)
-notification_engine.register(DingTalkNotifier)
-notification_engine.register(WeChatWorkNotifier)
 
 # Docker 管理路由（依赖可选的 Docker 环境）
 from app.api.docker import router as docker_router

@@ -19,9 +19,10 @@ from app.database import get_db
 from app.models.user import User
 from app.schemas.user import UserCreate, UserLogin, UserResponse, TokenResponse
 from app.core.security import hash_password, verify_password, create_access_token, get_current_user
+from app.core.custom_route import CustomAPIRoute
 
 # 创建认证路由器，路径前缀为 /api/auth，标签为 auth
-router = APIRouter(prefix="/api/auth", tags=["auth"])
+router = APIRouter(prefix="/api/auth", tags=["auth"], route_class=CustomAPIRoute)
 
 
 @router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)

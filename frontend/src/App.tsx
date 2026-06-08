@@ -127,18 +127,6 @@ export default function App() {
                 path="/plugins"
                 element={<Navigate to="/services" replace />}
               />
-              <Route
-                path="/subscriptions"
-                element={<Navigate to="/services" replace />}
-              />
-              <Route
-                path="/notifications"
-                element={<Navigate to="/settings" replace />}
-              />
-              <Route
-                path="/channels"
-                element={<Navigate to="/settings" replace />}
-              />
             </Route>
           </Routes>
         </BrowserRouter>

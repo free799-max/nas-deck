@@ -30,12 +30,19 @@ class CustomAPIRoute(APIRoute):
                 return response
 
             # 跳过已经是 StandardResponse 格式的响应
-            if (
-                isinstance(response, JSONResponse)
-                and hasattr(response, "body")
-                and b'"success"' in response.body
-            ):
-                return response
+            if isinstance(response, JSONResponse) and hasattr(response, "body"):
+                try:
+                    body_data = json.loads(response.body)
+                    if (
+                        isinstance(body_data, dict)
+                        and "success" in body_data
+                        and "data" in body_data
+                        and "message" in body_data
+                        and isinstance(body_data["success"], bool)
+                    ):
+                        return response
+                except (json.JSONDecodeError, TypeError):
+                    pass
 
             # 包装 JSON 成功响应
             if isinstance(response, JSONResponse):

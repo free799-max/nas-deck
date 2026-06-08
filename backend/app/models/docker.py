@@ -1,5 +1,4 @@
-"""
-Docker 容器模型模块。
+"""Docker 容器模型模块。
 
 定义 Docker 容器的 ORM 模型，用于跟踪插件实例对应的 Docker 容器状态。
 每个插件实例最多关联一个 Docker 容器（一对一关系）。
@@ -11,6 +10,41 @@ from sqlalchemy import String, ForeignKey, DateTime, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
+
+
+class DockerMirrorConfig(Base):
+    """Docker 镜像搜索接口配置模型。
+
+    支持配置多条镜像搜索接口，其中一条可设为默认使用。
+    当主地址不可用且启用了镜像地址时，自动 fallback 到镜像地址。
+
+    Attributes:
+        id: 配置记录唯一标识，主键自增
+        name: 配置名称（如 "Docker Hub 官方"）
+        search_api_url: 镜像搜索 API 主地址
+        mirror_url: 镜像搜索 API 镜像地址（可选）
+        enable_mirror: 是否启用镜像地址作为 fallback
+        username: 认证用户名（可选）
+        password: 认证密码（可选）
+        is_default: 是否设为当前默认使用的配置
+        created_at: 创建时间
+        updated_at: 更新时间
+    """
+
+    __tablename__ = "docker_mirror_configs"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    search_api_url: Mapped[str] = mapped_column(String(500), nullable=False)
+    mirror_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    enable_mirror: Mapped[bool] = mapped_column(default=False)
+    username: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    password: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    is_default: Mapped[bool] = mapped_column(default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=func.now(), onupdate=func.now()
+    )
 
 
 class DockerContainer(Base):

@@ -160,6 +160,45 @@ export function useDockerHostInfo() {
 
 /* ===================== 镜像管理 ===================== */
 
+/** 镜像搜索接口配置 */
+export interface Registry {
+  id: number;
+  name: string;
+  search_api_url: string;
+  mirror_url: string | null;
+  enable_mirror: boolean;
+  username: string | null;
+  is_default: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+/** 创建镜像搜索接口配置请求 */
+export interface RegistryCreate {
+  name: string;
+  search_api_url: string;
+  mirror_url?: string | null;
+  enable_mirror?: boolean;
+  username?: string | null;
+  password?: string | null;
+}
+
+/** 更新镜像搜索接口配置请求 */
+export interface RegistryUpdate {
+  name?: string;
+  search_api_url?: string;
+  mirror_url?: string | null;
+  enable_mirror?: boolean;
+  username?: string | null;
+  password?: string | null;
+}
+
+/** 批量删除镜像请求 */
+export interface BatchImageDeleteRequest {
+  ids: string[];
+  force?: boolean;
+}
+
 /** 本地镜像信息 */
 export interface ImageInfo {
   id: string;
@@ -243,6 +282,128 @@ export function usePullImage() {
     },
     onError: (error: any) => {
       toast.error(error.displayMessage || "拉取失败");
+    },
+  });
+}
+
+/**
+ * 查询镜像搜索接口配置列表
+ *
+ * @returns useQuery 对象，data 类型为 Registry 数组
+ */
+export function useRegistries() {
+  return useQuery<Registry[]>({
+    queryKey: ["docker", "registries"],
+    queryFn: () => api.get("/docker/registries").then((r) => r.data),
+  });
+}
+
+/**
+ * 创建镜像搜索接口配置（mutation）
+ *
+ * @returns useMutation 对象
+ */
+export function useCreateRegistry() {
+  const qc = useQueryClient();
+  const toast = useToast();
+  return useMutation({
+    mutationFn: (data: RegistryCreate) => api.post("/docker/registries", data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["docker", "registries"] });
+      toast.success("配置已创建");
+    },
+    onError: (error: any) => {
+      toast.error(error.displayMessage || "创建失败");
+    },
+  });
+}
+
+/**
+ * 更新镜像搜索接口配置（mutation）
+ *
+ * @returns useMutation 对象
+ */
+export function useUpdateRegistry() {
+  const qc = useQueryClient();
+  const toast = useToast();
+  return useMutation({
+    mutationFn: ({ id, data }: { id: number; data: RegistryUpdate }) =>
+      api.put(`/docker/registries/${id}`, data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["docker", "registries"] });
+      toast.success("配置已更新");
+    },
+    onError: (error: any) => {
+      toast.error(error.displayMessage || "更新失败");
+    },
+  });
+}
+
+/**
+ * 删除镜像搜索接口配置（mutation）
+ *
+ * @returns useMutation 对象
+ */
+export function useDeleteRegistry() {
+  const qc = useQueryClient();
+  const toast = useToast();
+  return useMutation({
+    mutationFn: (id: number) => api.delete(`/docker/registries/${id}`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["docker", "registries"] });
+      toast.success("配置已删除");
+    },
+    onError: (error: any) => {
+      toast.error(error.displayMessage || "删除失败");
+    },
+  });
+}
+
+/**
+ * 设置默认镜像搜索接口配置（mutation）
+ *
+ * @returns useMutation 对象
+ */
+export function useSetDefaultRegistry() {
+  const qc = useQueryClient();
+  const toast = useToast();
+  return useMutation({
+    mutationFn: (id: number) =>
+      api.post(`/docker/registries/${id}/set-default`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["docker", "registries"] });
+      toast.success("默认配置已切换");
+    },
+    onError: (error: any) => {
+      toast.error(error.displayMessage || "切换失败");
+    },
+  });
+}
+
+/**
+ * 批量删除本地镜像（mutation）
+ *
+ * @returns useMutation 对象，传入参数为 BatchImageDeleteRequest
+ */
+export function useBatchRemoveImages() {
+  const qc = useQueryClient();
+  const toast = useToast();
+  return useMutation({
+    mutationFn: (data: BatchImageDeleteRequest) =>
+      api.post("/docker/images/batch-delete", data),
+    onSuccess: (res: any) => {
+      qc.invalidateQueries({ queryKey: ["docker", "images"] });
+      const deleted = res.data?.deleted?.length || 0;
+      const failed = res.data?.failed?.length || 0;
+      if (deleted > 0) {
+        toast.success(`已删除 ${deleted} 个镜像`);
+      }
+      if (failed > 0) {
+        toast.error(`${failed} 个镜像删除失败`);
+      }
+    },
+    onError: (error: any) => {
+      toast.error(error.displayMessage || "批量删除失败");
     },
   });
 }

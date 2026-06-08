@@ -23,9 +23,10 @@ from app.models.plugin import PluginInstance
 from app.schemas.plugin import PluginInstanceCreate, PluginInstanceResponse, PluginInfo
 from app.core.security import get_current_user
 from app.core.plugin_loader import plugin_loader
+from app.core.custom_route import CustomAPIRoute
 
 # 创建插件管理路由器，路径前缀为 /api/plugins，标签为 plugins
-router = APIRouter(prefix="/api/plugins", tags=["plugins"])
+router = APIRouter(prefix="/api/plugins", tags=["plugins"], route_class=CustomAPIRoute)
 
 
 @router.get("/available", response_model=list[PluginInfo])

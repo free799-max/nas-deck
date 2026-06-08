@@ -6,7 +6,6 @@ Jellyfin 媒体服务器插件。
 - 连接测试：验证服务器地址和 API Key 是否有效
 - 获取数据源：拉取 Jellyfin 中的媒体库列表
 - 获取数据项：拉取指定媒体库中的媒体条目（电影、剧集等）
-- 检查更新：检测已订阅剧集是否有新集数上线
 
 认证方式：使用 API Key，通过 X-Emby-Token 请求头传递。
 
@@ -16,7 +15,7 @@ Jellyfin API 文档参考：https://jellyfin.org/docs/general/networking/api
 import httpx
 
 # 导入插件基类和数据模型
-from app.plugins.base import BasePlugin, Source, Item, Update
+from app.plugins.base import BasePlugin, Source, Item
 
 
 class JellyfinPlugin(BasePlugin):
@@ -175,58 +174,3 @@ class JellyfinPlugin(BasePlugin):
             # 请求异常时返回空列表
             return []
 
-    async def check_updates(self, config: dict, subscriptions: list) -> list[Update]:
-        """
-        检查已订阅剧集是否有新的集数更新。
-
-        遍历所有订阅记录，对于剧集类型（Series）的订阅，
-        查询其最新一集的信息。如果存在剧集数据，则生成一条更新通知，
-        包含剧集名称和最新集的季号与集号。
-
-        Args:
-            config: 插件配置字典，需包含 'url' 和 'api_key'
-            subscriptions: 订阅记录列表，每条记录需包含 'id' 和 'item_id' 字段
-
-        Returns:
-            list[Update]: 更新信息列表，包含所有检测到的新集数更新
-        """
-        updates = []
-        async with httpx.AsyncClient() as client:
-            for sub in subscriptions:
-                # 首先获取订阅项的详细信息，判断其类型
-                resp = await client.get(
-                    f"{config['url']}/Items/{sub['item_id']}",
-                    headers=self._headers(config),
-                    params={"Fields": "DateLastMediaAdded"},  # 请求包含最后添加媒体日期字段
-                    timeout=10,
-                )
-                if resp.status_code != 200:
-                    continue
-                data = resp.json()
-
-                # 仅处理剧集类型（Series）的订阅
-                if data.get("Type") == "Series":
-                    # 请求该剧集的集数列表，按创建时间倒序，仅取最新 1 集
-                    episodes_resp = await client.get(
-                        f"{config['url']}/Shows/{sub['item_id']}/Episodes",
-                        headers=self._headers(config),
-                        params={
-                            "SortBy": "DateCreated",        # 按创建时间排序
-                            "SortOrder": "Descending",      # 倒序（最新在前）
-                            "Limit": 1,                     # 仅获取最新 1 集
-                        },
-                        timeout=10,
-                    )
-                    if episodes_resp.status_code == 200:
-                        episodes = episodes_resp.json().get("Items", [])
-                        if episodes:
-                            # 取最新一集的信息
-                            latest = episodes[0]
-                            # 生成更新通知，包含剧集名和最新集名
-                            updates.append(Update(
-                                subscription_id=sub["id"],
-                                title=f"{data['Name']} - {latest['Name']}",
-                                # 格式化显示季号和集号，如 S01E05
-                                content=f"S{latest.get('ParentIndexNumber', '?')}E{latest.get('IndexNumber', '?')}",
-                            ))
-        return updates

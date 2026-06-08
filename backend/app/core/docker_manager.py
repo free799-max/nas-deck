@@ -265,13 +265,55 @@ class DockerManager:
             raise RuntimeError("Docker not available")
         self._client.images.remove(image_id, force=force)
 
-    def search_images(self, query: str) -> list[dict]:
-        """从 Docker Hub 搜索镜像。
+    def remove_images(self, image_ids: list[str], force: bool = False) -> dict:
+        """批量删除镜像。
 
-        通过 Docker Hub v2 API 搜索公开镜像仓库。
+        Args:
+            image_ids: 镜像 ID 列表。
+            force: 是否强制删除。
+
+        Returns:
+            dict: 包含 deleted 和 failed 两个列表的结果字典。
+
+        Raises:
+            RuntimeError: Docker 不可用时抛出。
+        """
+        if not self._client:
+            raise RuntimeError("Docker not available")
+        deleted = []
+        failed = []
+        for image_id in image_ids:
+            try:
+                self._client.images.remove(image_id, force=force)
+                deleted.append(image_id)
+            except docker.errors.ImageNotFound:
+                failed.append({"id": image_id, "reason": "镜像不存在"})
+            except docker.errors.APIError as e:
+                failed.append({"id": image_id, "reason": str(e)})
+        return {"deleted": deleted, "failed": failed}
+
+    def search_images(
+        self,
+        query: str,
+        api_url: str | None = None,
+        mirror_url: str | None = None,
+        username: str | None = None,
+        password: str | None = None,
+    ) -> list[dict]:
+        """搜索镜像。
+
+        当提供 api_url 时，调用自定义镜像搜索 API；否则通过 Docker Hub v2 API 搜索。
+        支持 Basic Auth 认证，主地址失败时可 fallback 到镜像地址。
+
+        第三方 API 调用格式: {api_url}?search={query}
+        Docker Hub 格式: {api_url}?q={query}&page_size=20
 
         Args:
             query: 搜索关键词。
+            api_url: 自定义镜像搜索 API 主地址，为 None 时使用 Docker Hub。
+            mirror_url: 镜像搜索 API 镜像地址，主地址失败时作为 fallback。
+            username: 认证用户名。
+            password: 认证密码。
 
         Returns:
             list[dict]: 搜索结果列表，包含 name、description、star_count、official。
@@ -282,26 +324,74 @@ class DockerManager:
         if not query.strip():
             return []
 
+        auth = (username, password) if username and password else None
+
+        def _do_search(url: str, is_docker_hub: bool = False) -> list[dict] | None:
+            """执行单次搜索请求，返回结果或 None（表示失败）。"""
+            try:
+                resp = httpx.get(url, timeout=10, auth=auth)
+                resp.raise_for_status()
+                data = resp.json()
+                if is_docker_hub:
+                    results = data.get("results", [])
+                    return [
+                        {
+                            "name": r.get("repo_name", ""),
+                            "description": r.get("short_description", ""),
+                            "star_count": r.get("star_count", 0),
+                            "official": r.get("is_official", False),
+                        }
+                        for r in results
+                    ]
+                # 适配两种常见返回格式: 直接列表 或 嵌套在 results 中
+                results = data if isinstance(data, list) else data.get("results", [])
+                return [
+                    {
+                        "name": r.get("name", ""),
+                        "description": r.get("description", ""),
+                        "star_count": r.get("star_count", 0),
+                        "official": r.get("official", False),
+                    }
+                    for r in results
+                ]
+            except Exception:
+                return None
+
+        def _is_docker_hub_format(url: str) -> bool:
+            """判断 URL 是否为 Docker Hub v2 搜索 API 格式。"""
+            return url.rstrip("/").endswith("/v2/search/repositories") or "hub.docker.com" in url
+
+        if api_url:
+            # 优先使用主地址（Docker Hub 官方 API 格式）
+            if _is_docker_hub_format(api_url):
+                url = api_url.rstrip("/") + "?q=" + urllib.parse.quote(query.strip()) + "&page_size=20"
+                results = _do_search(url, is_docker_hub=True)
+            else:
+                # 第三方 API 格式
+                url = api_url.rstrip("/") + "?search=" + urllib.parse.quote(query.strip())
+                results = _do_search(url)
+            if results is not None:
+                return results
+            # 主地址失败，尝试镜像地址
+            if mirror_url:
+                if _is_docker_hub_format(mirror_url):
+                    url = mirror_url.rstrip("/") + "?q=" + urllib.parse.quote(query.strip()) + "&page_size=20"
+                    results = _do_search(url, is_docker_hub=True)
+                else:
+                    url = mirror_url.rstrip("/") + "?search=" + urllib.parse.quote(query.strip())
+                    results = _do_search(url)
+                if results is not None:
+                    return results
+            return []
+
+        # 默认使用 Docker Hub v2 API
         url = (
             "https://hub.docker.com/v2/search/repositories?q="
             + urllib.parse.quote(query)
             + "&page_size=20"
         )
-        try:
-            resp = httpx.get(url, timeout=10)
-            resp.raise_for_status()
-            results = resp.json().get("results", [])
-            return [
-                {
-                    "name": r.get("repo_name", ""),
-                    "description": r.get("short_description", ""),
-                    "star_count": r.get("star_count", 0),
-                    "official": r.get("is_official", False),
-                }
-                for r in results
-            ]
-        except Exception:
-            return []
+        results = _do_search(url, is_docker_hub=True)
+        return results if results is not None else []
 
     def pull_image(self, image: str):
         """拉取指定镜像。
