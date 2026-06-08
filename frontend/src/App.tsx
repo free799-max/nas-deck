@@ -8,12 +8,12 @@ import { AuthProvider } from "./contexts/AuthContext";
 import { ToastProvider } from "./components/ui/toast";
 import { useAuth } from "./hooks/useAuth";
 import { AppLayout } from "./layouts/AppLayout";
-import { LoginPage } from "./pages/LoginPage";
-import { DashboardPage } from "./pages/DashboardPage";
-import { PluginsPage } from "./pages/PluginsPage";
-import { DockerPage } from "./pages/DockerPage";
-import { DockerHostPage } from "./pages/DockerHostPage";
-import { DockerImagesPage } from "./pages/DockerImagesPage";
+import { LoginPage } from "./pages/auth/LoginPage";
+import { DashboardPage } from "./pages/dashboard/DashboardPage";
+import { PluginsPage } from "./pages/services/PluginsPage";
+import { DockerPage } from "./pages/docker/containers/DockerPage";
+import { DockerHostPage } from "./pages/docker/host/DockerHostPage";
+import { DockerImagesPage } from "./pages/docker/images/DockerImagesPage";
 
 const queryClient = new QueryClient();
 

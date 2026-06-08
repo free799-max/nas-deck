@@ -15,7 +15,8 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, field_serializer
+import json
+from pydantic import BaseModel, field_serializer, field_validator
 
 
 class ContainerInfo(BaseModel):
@@ -144,18 +145,22 @@ class RegistryCreate(BaseModel):
     Attributes:
         name: 配置名称
         search_api_url: 镜像搜索 API 主地址
-        mirror_url: 镜像搜索 API 镜像地址（可选）
+        mirror_url: 镜像搜索 API 镜像地址（可选，兼容旧字段）
+        mirror_urls: 镜像地址列表（可选）
         enable_mirror: 是否启用镜像地址作为 fallback
         username: 认证用户名（可选）
         password: 认证密码（可选）
+        trust_ssl_self_signed: 是否信任 SSL 自我签署证书
     """
 
     name: str
     search_api_url: str
     mirror_url: str | None = None
+    mirror_urls: list[str] | None = None
     enable_mirror: bool = False
     username: str | None = None
     password: str | None = None
+    trust_ssl_self_signed: bool = False
 
 
 class RegistryUpdate(BaseModel):
@@ -164,18 +169,22 @@ class RegistryUpdate(BaseModel):
     Attributes:
         name: 配置名称
         search_api_url: 镜像搜索 API 主地址
-        mirror_url: 镜像搜索 API 镜像地址（可选）
+        mirror_url: 镜像搜索 API 镜像地址（可选，兼容旧字段）
+        mirror_urls: 镜像地址列表（可选）
         enable_mirror: 是否启用镜像地址作为 fallback
         username: 认证用户名（可选）
         password: 认证密码（可选）
+        trust_ssl_self_signed: 是否信任 SSL 自我签署证书
     """
 
     name: str | None = None
     search_api_url: str | None = None
     mirror_url: str | None = None
+    mirror_urls: list[str] | None = None
     enable_mirror: bool | None = None
     username: str | None = None
     password: str | None = None
+    trust_ssl_self_signed: bool | None = None
 
 
 class RegistryOut(BaseModel):
@@ -185,9 +194,11 @@ class RegistryOut(BaseModel):
         id: 配置记录 ID
         name: 配置名称
         search_api_url: 镜像搜索 API 主地址
-        mirror_url: 镜像搜索 API 镜像地址
+        mirror_url: 镜像搜索 API 镜像地址（兼容旧字段）
+        mirror_urls: 镜像地址列表
         enable_mirror: 是否启用镜像地址
         username: 认证用户名
+        trust_ssl_self_signed: 是否信任 SSL 自我签署证书
         is_default: 是否设为默认
         created_at: 创建时间
         updated_at: 更新时间
@@ -197,11 +208,23 @@ class RegistryOut(BaseModel):
     name: str
     search_api_url: str
     mirror_url: str | None = None
+    mirror_urls: list[str] | None = None
     enable_mirror: bool = False
     username: str | None = None
+    trust_ssl_self_signed: bool = False
     is_default: bool = False
     created_at: datetime
     updated_at: datetime
+
+    @field_validator("mirror_urls", mode="before")
+    @classmethod
+    def parse_mirror_urls(cls, v):
+        if isinstance(v, str):
+            try:
+                return json.loads(v)
+            except (json.JSONDecodeError, TypeError):
+                return None
+        return v
 
     @field_serializer("created_at", "updated_at")
     def serialize_datetime(self, value: datetime) -> str:

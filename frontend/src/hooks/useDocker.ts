@@ -166,8 +166,10 @@ export interface Registry {
   name: string;
   search_api_url: string;
   mirror_url: string | null;
+  mirror_urls: string[] | null;
   enable_mirror: boolean;
   username: string | null;
+  trust_ssl_self_signed: boolean;
   is_default: boolean;
   created_at: string;
   updated_at: string;
@@ -178,9 +180,11 @@ export interface RegistryCreate {
   name: string;
   search_api_url: string;
   mirror_url?: string | null;
+  mirror_urls?: string[] | null;
   enable_mirror?: boolean;
   username?: string | null;
   password?: string | null;
+  trust_ssl_self_signed?: boolean;
 }
 
 /** 更新镜像搜索接口配置请求 */
@@ -188,9 +192,11 @@ export interface RegistryUpdate {
   name?: string;
   search_api_url?: string;
   mirror_url?: string | null;
+  mirror_urls?: string[] | null;
   enable_mirror?: boolean;
   username?: string | null;
   password?: string | null;
+  trust_ssl_self_signed?: boolean;
 }
 
 /** 批量删除镜像请求 */

@@ -21,6 +21,8 @@ import {
 } from "@/components/ui/table";
 import { useDockerHostInfo, useDockerStatus } from "@/hooks/useDocker";
 import { PageHeader } from "@/components/PageHeader";
+import { formatBytes } from "@/lib/utils";
+import { InfoRow } from "../shared/InfoRow";
 import {
   Monitor,
   Cpu,
@@ -34,34 +36,6 @@ import {
   Network,
   Server,
 } from "lucide-react";
-
-/**
- * 将字节数格式化为人类可读字符串
- *
- * @param bytes - 字节数
- * @returns 格式化后的字符串，如 "16.0 GB"
- */
-function formatBytes(bytes: number): string {
-  if (bytes === 0) return "0 B";
-  const units = ["B", "KB", "MB", "GB", "TB"];
-  const i = Math.floor(Math.log(bytes) / Math.log(1024));
-  const value = bytes / Math.pow(1024, i);
-  return `${value.toFixed(1)} ${units[i]}`;
-}
-
-/**
- * 信息行组件
- *
- * 用于展示标签-值对，垂直排列。
- */
-function InfoRow({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex justify-between items-center py-1.5">
-      <span className="text-sm text-muted-foreground">{label}</span>
-      <span className="text-sm font-medium">{value}</span>
-    </div>
-  );
-}
 
 /**
  * Docker 宿主机信息页面组件

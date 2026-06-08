@@ -14,28 +14,7 @@ import { Badge } from "@/components/ui/badge";
 import { PageHeader } from "@/components/PageHeader";
 import { Play, Square, RotateCcw } from "lucide-react";
 import { useContainers, useContainerAction, useDockerStatus } from "@/hooks/useDocker";
-
-/**
- * 容器状态指示点组件
- *
- * 根据容器运行状态显示不同颜色的圆点：
- * - running（运行中）：绿色
- * - exited（已停止）：红色
- * - 其他状态：黄色
- *
- * @param props.status - 容器状态字符串，如 "running"、"exited" 等
- */
-function StatusDot({ status }: { status: string }) {
-  // 根据状态选择对应的颜色样式
-  const color =
-    status === "running"
-      ? "bg-green-500"
-      : status === "exited"
-      ? "bg-red-500"
-      : "bg-yellow-500";
-  // 渲染一个圆形状态指示点
-  return <span className={`inline-block w-2 h-2 rounded-full ${color} mr-2`} />;
-}
+import { StatusDot } from "../shared/StatusDot";
 
 /**
  * Docker 容器管理页面组件

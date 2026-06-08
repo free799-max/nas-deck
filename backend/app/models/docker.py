@@ -6,7 +6,7 @@
 
 from datetime import datetime
 
-from sqlalchemy import String, ForeignKey, DateTime, func
+from sqlalchemy import String, Text, ForeignKey, DateTime, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -37,9 +37,11 @@ class DockerMirrorConfig(Base):
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     search_api_url: Mapped[str] = mapped_column(String(500), nullable=False)
     mirror_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    mirror_urls: Mapped[str | None] = mapped_column(Text, nullable=True)
     enable_mirror: Mapped[bool] = mapped_column(default=False)
     username: Mapped[str | None] = mapped_column(String(100), nullable=True)
     password: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    trust_ssl_self_signed: Mapped[bool] = mapped_column(default=False)
     is_default: Mapped[bool] = mapped_column(default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
