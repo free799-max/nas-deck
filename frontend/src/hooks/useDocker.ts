@@ -205,13 +205,44 @@ export interface BatchImageDeleteRequest {
   force?: boolean;
 }
 
-/** 本地镜像信息 */
+/** 本地镜像信息（扁平化，每行对应一个 tag） */
 export interface ImageInfo {
   id: string;
-  tags: string[];
+  image_id: string;
+  name: string;
+  tag: string;
+  full_tag: string;
   size: number;
   created: string;
   containers: number;
+}
+
+/** 镜像完整元数据 */
+export interface ImageDetail {
+  id: string;
+  name: string;
+  tag: string;
+  full_tag: string;
+  size: number;
+  created: string;
+  architecture: string;
+  os: string;
+  cmd: string[] | null;
+  entrypoint: string[] | null;
+  env: string[] | null;
+  exposed_ports: string[] | null;
+  volumes: string[] | null;
+  working_dir: string | null;
+  user: string | null;
+  labels: Record<string, string> | null;
+  layers: string[] | null;
+  history: string[] | null;
+}
+
+/** 移除未使用镜像结果 */
+export interface ImagePruneResult {
+  deleted: string[];
+  space_reclaimed: number;
 }
 
 /** Docker Hub 搜索结果 */
@@ -219,7 +250,17 @@ export interface ImageSearchResult {
   name: string;
   description: string;
   star_count: number;
+  pull_count: number;
   official: boolean;
+  is_automated: boolean;
+}
+
+/** 镜像搜索分页结果 */
+export interface ImageSearchPage {
+  total: number;
+  page: number;
+  page_size: number;
+  results: ImageSearchResult[];
 }
 
 /**
@@ -246,7 +287,10 @@ export function useRemoveImage() {
   return useMutation({
     mutationFn: ({ id, force }: { id: string; force?: boolean }) =>
       api.delete(`/docker/images/${id}`, { params: { force } }),
-    onSuccess: () => {
+    onSuccess: (_, { id }) => {
+      qc.setQueryData<ImageInfo[]>(["docker", "images"], (old) =>
+        old?.filter((img) => img.image_id !== id) ?? []
+      );
       qc.invalidateQueries({ queryKey: ["docker", "images"] });
       toast.success("镜像已删除");
     },
@@ -260,15 +304,19 @@ export function useRemoveImage() {
  * 从 Docker Hub 搜索镜像
  *
  * @param q 搜索关键词
- * @returns useQuery 对象，data 类型为 ImageSearchResult 数组
+ * @param page 页码，从 1 开始
+ * @returns useQuery 对象，data 类型为 ImageSearchPage
  */
-export function useSearchImages(q: string) {
-  return useQuery<ImageSearchResult[]>({
-    queryKey: ["docker", "images", "search", q],
+export function useSearchImages(q: string, page: number = 1) {
+  return useQuery<ImageSearchPage>({
+    queryKey: ["docker", "images", "search", q, page],
     queryFn: () =>
-      api.get("/docker/images/search", { params: { q } }).then((r) => r.data),
+      api
+        .get("/docker/images/search", { params: { q, page } })
+        .then((r) => r.data),
     enabled: !!q.trim(),
     staleTime: 60_000,
+    placeholderData: (previousData) => previousData,
   });
 }
 
@@ -398,11 +446,14 @@ export function useBatchRemoveImages() {
     mutationFn: (data: BatchImageDeleteRequest) =>
       api.post("/docker/images/batch-delete", data),
     onSuccess: (res: any) => {
+      const deletedIds: string[] = res.data?.deleted || [];
+      qc.setQueryData<ImageInfo[]>(["docker", "images"], (old) =>
+        old?.filter((img) => !deletedIds.includes(img.image_id)) ?? []
+      );
       qc.invalidateQueries({ queryKey: ["docker", "images"] });
-      const deleted = res.data?.deleted?.length || 0;
       const failed = res.data?.failed?.length || 0;
-      if (deleted > 0) {
-        toast.success(`已删除 ${deleted} 个镜像`);
+      if (deletedIds.length > 0) {
+        toast.success(`已删除 ${deletedIds.length} 个镜像`);
       }
       if (failed > 0) {
         toast.error(`${failed} 个镜像删除失败`);
@@ -410,6 +461,50 @@ export function useBatchRemoveImages() {
     },
     onError: (error: any) => {
       toast.error(error.displayMessage || "批量删除失败");
+    },
+  });
+}
+
+/**
+ * 查询镜像完整元数据
+ *
+ * @param image_id 镜像完整 ID
+ * @returns useQuery 对象，data 类型为 ImageDetail
+ */
+export function useImageDetail(image_id: string | null) {
+  return useQuery<ImageDetail>({
+    queryKey: ["docker", "images", "detail", image_id],
+    queryFn: () =>
+      api.get(`/docker/images/${image_id}/detail`).then((r) => r.data),
+    enabled: !!image_id,
+  });
+}
+
+/**
+ * 移除未使用镜像（mutation）
+ *
+ * @returns useMutation 对象
+ */
+export function usePruneImages() {
+  const qc = useQueryClient();
+  const toast = useToast();
+  return useMutation({
+    mutationFn: () => api.post("/docker/images/prune"),
+    onSuccess: (res: any) => {
+      const deletedIds: string[] = res.data?.deleted || [];
+      qc.setQueryData<ImageInfo[]>(["docker", "images"], (old) =>
+        old?.filter((img) => !deletedIds.includes(img.image_id)) ?? []
+      );
+      qc.invalidateQueries({ queryKey: ["docker", "images"] });
+      const space = res.data?.space_reclaimed || 0;
+      if (deletedIds.length > 0) {
+        toast.success(`已清理 ${deletedIds.length} 个未使用镜像，释放 ${formatBytes(space)}`);
+      } else {
+        toast.success("没有可清理的未使用镜像");
+      }
+    },
+    onError: (error: any) => {
+      toast.error(error.displayMessage || "清理失败");
     },
   });
 }

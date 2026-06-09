@@ -20,3 +20,11 @@ export function formatDate(iso: string): string {
   const d = new Date(iso);
   return isNaN(d.getTime()) ? iso : d.toLocaleString("zh-CN");
 }
+
+/** 大数字转人类可读（K/M/B） */
+export function formatCount(count: number): string {
+  if (count >= 1_000_000_000) return `${(count / 1_000_000_000).toFixed(1)}B`;
+  if (count >= 1_000_000) return `${(count / 1_000_000).toFixed(1)}M`;
+  if (count >= 1_000) return `${(count / 1_000).toFixed(1)}K`;
+  return String(count);
+}

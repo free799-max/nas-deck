@@ -221,10 +221,11 @@ class DockerManager:
             return None
 
     def list_images(self) -> list[dict]:
-        """获取本地镜像列表。
+        """获取本地镜像列表（扁平化，每行对应一个 tag）。
 
         Returns:
-            list[dict]: 格式化后的镜像信息列表，包含 id、tags、size、created、containers。
+            list[dict]: 格式化后的镜像信息列表，每行包含 id、image_id、name、tag、
+                        full_tag、size、created、containers。
                         Docker 不可用时返回空列表。
         """
         if not self._client:
@@ -240,14 +241,128 @@ class DockerManager:
         result = []
         for img in images:
             attrs = img.attrs
-            result.append({
-                "id": img.id.split(":")[-1][:12] if ":" in img.id else img.id[:12],
-                "tags": attrs.get("RepoTags") or ["<none>:<none>"],
+            repo_tags = attrs.get("RepoTags") or []
+            if not repo_tags:
+                repo_tags = ["<none>:<none>"]
+
+            full_id = img.id
+            short_id = full_id.split(":")[-1][:12] if ":" in full_id else full_id[:12]
+            container_count = image_usage.get(full_id, 0)
+
+            for tag_str in repo_tags:
+                # 按最后一个 ":" 分割为 name 和 tag
+                if ":" in tag_str:
+                    name, tag = tag_str.rsplit(":", 1)
+                else:
+                    name, tag = tag_str, "<none>"
+                result.append({
+                    "id": short_id,
+                    "image_id": full_id,
+                    "name": name,
+                    "tag": tag,
+                    "full_tag": tag_str,
+                    "size": attrs.get("Size", 0),
+                    "created": attrs.get("Created", ""),
+                    "containers": container_count,
+                })
+        return result
+
+    def get_image_detail(self, image_id: str) -> dict | None:
+        """获取镜像完整元数据。
+
+        Args:
+            image_id: 镜像完整 ID（sha256:...）或短 ID。
+
+        Returns:
+            dict | None: 镜像元数据字典，镜像不存在或 Docker 不可用时返回 None。
+        """
+        if not self._client:
+            return None
+        try:
+            image = self._client.images.get(image_id)
+            attrs = image.attrs
+            config = attrs.get("Config", {}) or {}
+            rootfs = attrs.get("RootFS", {}) or {}
+            history = attrs.get("History", []) or []
+
+            # 提取暴露端口
+            exposed_ports = []
+            ports = config.get("ExposedPorts", {})
+            if ports:
+                exposed_ports = list(ports.keys())
+
+            # 提取卷
+            volumes = []
+            vols = config.get("Volumes", {})
+            if vols:
+                volumes = list(vols.keys())
+
+            # 提取构建历史命令
+            history_cmds = []
+            for h in history:
+                created_by = h.get("CreatedBy", "")
+                if created_by:
+                    history_cmds.append(created_by)
+
+            # 提取层
+            layers = rootfs.get("Layers", []) or []
+
+            # 名称和标签取第一个 RepoTag
+            repo_tags = attrs.get("RepoTags") or ["<none>:<none>"]
+            first_tag = repo_tags[0]
+            if ":" in first_tag:
+                name, tag = first_tag.rsplit(":", 1)
+            else:
+                name, tag = first_tag, "<none>"
+
+            return {
+                "id": attrs.get("Id", ""),
+                "name": name,
+                "tag": tag,
+                "full_tag": first_tag,
                 "size": attrs.get("Size", 0),
                 "created": attrs.get("Created", ""),
-                "containers": image_usage.get(img.id, 0),
-            })
-        return result
+                "architecture": attrs.get("Architecture", ""),
+                "os": attrs.get("Os", ""),
+                "cmd": config.get("Cmd"),
+                "entrypoint": config.get("Entrypoint"),
+                "env": config.get("Env"),
+                "exposed_ports": exposed_ports or None,
+                "volumes": volumes or None,
+                "working_dir": config.get("WorkingDir") or None,
+                "user": config.get("User") or None,
+                "labels": config.get("Labels") or None,
+                "layers": layers or None,
+                "history": history_cmds or None,
+            }
+        except docker.errors.ImageNotFound:
+            return None
+        except Exception:
+            return None
+
+    def prune_unused_images(self) -> dict:
+        """移除所有未使用的镜像（包括有标签但无容器引用的镜像）。
+
+        Returns:
+            dict: 包含 deleted（被删除的镜像/标签描述列表）和
+                  space_reclaimed（释放空间字节数）的字典。
+
+        Raises:
+            RuntimeError: Docker 不可用时抛出。
+        """
+        if not self._client:
+            raise RuntimeError("Docker not available")
+        result = self._client.images.prune(filters={"dangling": False})
+        deleted = []
+        for item in result.get("ImagesDeleted", []):
+            if "Untagged" in item:
+                deleted.append(f"取消标签: {item['Untagged']}")
+            elif "Deleted" in item:
+                deleted.append(f"删除层: {item['Deleted']}")
+        return {
+            "deleted": deleted,
+            "space_reclaimed": result.get("SpaceReclaimed", 0),
+        }
 
     def remove_image(self, image_id: str, force: bool = False):
         """删除指定镜像。
@@ -295,103 +410,149 @@ class DockerManager:
     def search_images(
         self,
         query: str,
+        page: int = 1,
         api_url: str | None = None,
         mirror_url: str | None = None,
         username: str | None = None,
         password: str | None = None,
-    ) -> list[dict]:
+    ) -> dict:
         """搜索镜像。
 
         当提供 api_url 时，调用自定义镜像搜索 API；否则通过 Docker Hub v2 API 搜索。
         支持 Basic Auth 认证，主地址失败时可 fallback 到镜像地址。
 
         第三方 API 调用格式: {api_url}?search={query}
-        Docker Hub 格式: {api_url}?q={query}&page_size=20
+        Docker Hub 格式: {api_url}?query={query}&page_size=20&page={page}
 
         Args:
             query: 搜索关键词。
+            page: 页码，从 1 开始。
             api_url: 自定义镜像搜索 API 主地址，为 None 时使用 Docker Hub。
             mirror_url: 镜像搜索 API 镜像地址，主地址失败时作为 fallback。
             username: 认证用户名。
             password: 认证密码。
 
         Returns:
-            list[dict]: 搜索结果列表，包含 name、description、star_count、official。
+            dict: 分页结果，包含 total、page、page_size、results。
         """
         import httpx
         import urllib.parse
 
         if not query.strip():
-            return []
+            return {"total": 0, "page": page, "page_size": 20, "results": []}
 
         auth = (username, password) if username and password else None
+        page_size = 20
 
-        def _do_search(url: str, is_docker_hub: bool = False) -> list[dict] | None:
-            """执行单次搜索请求，返回结果或 None（表示失败）。"""
+        def _parse_item(r: dict, field_map: dict[str, str]) -> dict:
+            """解析单条搜索结果，通过字段映射适配不同 API 格式。"""
+            def _get(key: str, default=None):
+                # 优先使用映射后的字段名，回退到通用字段名
+                mapped = field_map.get(key, key)
+                return r.get(mapped, r.get(key, default))
+
+            return {
+                "name": _get("name", ""),
+                "description": _get("description", ""),
+                "star_count": _get("star_count", 0),
+                "pull_count": _get("pull_count", 0),
+                "official": _get("official", False),
+                "is_automated": _get("is_automated", False),
+            }
+
+        def _do_search(url: str, is_docker_hub: bool = False) -> dict | None:
+            """执行单次搜索请求，返回分页结果或 None（表示失败）。"""
             try:
                 resp = httpx.get(url, timeout=10, auth=auth)
                 resp.raise_for_status()
                 data = resp.json()
                 if is_docker_hub:
                     results = data.get("results", [])
-                    return [
-                        {
-                            "name": r.get("repo_name", ""),
-                            "description": r.get("short_description", ""),
-                            "star_count": r.get("star_count", 0),
-                            "official": r.get("is_official", False),
-                        }
-                        for r in results
-                    ]
-                # 适配两种常见返回格式: 直接列表 或 嵌套在 results 中
-                results = data if isinstance(data, list) else data.get("results", [])
-                return [
-                    {
-                        "name": r.get("name", ""),
-                        "description": r.get("description", ""),
-                        "star_count": r.get("star_count", 0),
-                        "official": r.get("official", False),
+                    return {
+                        "total": data.get("count", len(results)),
+                        "page": page,
+                        "page_size": page_size,
+                        "results": [_parse_item(r, {"name": "repo_name", "description": "short_description", "official": "is_official"}) for r in results],
                     }
-                    for r in results
-                ]
+                # 适配两种常见返回格式: 直接列表 或 嵌套在 results 中
+                if isinstance(data, list):
+                    return {
+                        "total": len(data),
+                        "page": page,
+                        "page_size": page_size,
+                        "results": [_parse_item(r, {}) for r in data],
+                    }
+                results = data.get("results", [])
+                return {
+                    "total": data.get("count", data.get("total", len(results))),
+                    "page": data.get("page", page),
+                    "page_size": data.get("page_size", page_size),
+                    "results": [_parse_item(r, {}) for r in results],
+                }
             except Exception:
                 return None
 
-        def _is_docker_hub_format(url: str) -> bool:
-            """判断 URL 是否为 Docker Hub v2 搜索 API 格式。"""
-            return url.rstrip("/").endswith("/v2/search/repositories") or "hub.docker.com" in url
+        def _build_search_url(base_url: str, is_docker_hub: bool) -> str:
+            """构造搜索 URL。"""
+            base = base_url.rstrip("/")
+            if is_docker_hub:
+                # 若 base_url 已包含完整 API 路径则直接复用，否则追加
+                if not base.lower().endswith("/v2/search/repositories"):
+                    base += "/v2/search/repositories"
+                return (
+                    base
+                    + "?query="
+                    + urllib.parse.quote(query.strip())
+                    + f"&page_size={page_size}"
+                    + f"&page={page}"
+                )
+            return base + "?search=" + urllib.parse.quote(query.strip())
 
-        if api_url:
-            # 优先使用主地址（Docker Hub 官方 API 格式）
-            if _is_docker_hub_format(api_url):
-                url = api_url.rstrip("/") + "?q=" + urllib.parse.quote(query.strip()) + "&page_size=20"
-                results = _do_search(url, is_docker_hub=True)
-            else:
-                # 第三方 API 格式
-                url = api_url.rstrip("/") + "?search=" + urllib.parse.quote(query.strip())
-                results = _do_search(url)
-            if results is not None:
-                return results
+        def _is_docker_hub_format(url: str) -> bool:
+            """判断 URL 是否为 Docker Hub 格式（域名或完整 API 路径）。"""
+            url_lower = url.lower().rstrip("/")
+            return (
+                url_lower == "https://hub.docker.com"
+                or url_lower == "https://registry.hub.docker.com"
+                or url_lower.endswith("/v2/search/repositories")
+                or url_lower.startswith("https://hub.docker.com")
+                or url_lower.startswith("https://registry.hub.docker.com")
+            )
+
+        def _resolve_api_url(config_url: str | None) -> str | None:
+            """将简化的 Docker Hub URL 解析为完整 API 地址。"""
+            if not config_url:
+                return None
+            url = config_url.strip()
+            if url.rstrip("/").lower() in ("https://hub.docker.com", "https://registry.hub.docker.com"):
+                return "https://hub.docker.com/v2/search/repositories"
+            return url
+
+        resolved_api = _resolve_api_url(api_url)
+        resolved_mirror = _resolve_api_url(mirror_url)
+
+        if resolved_api:
+            is_hub = _is_docker_hub_format(resolved_api)
+            url = _build_search_url(resolved_api, is_hub)
+            result = _do_search(url, is_docker_hub=is_hub)
+            if result is not None:
+                return result
             # 主地址失败，尝试镜像地址
-            if mirror_url:
-                if _is_docker_hub_format(mirror_url):
-                    url = mirror_url.rstrip("/") + "?q=" + urllib.parse.quote(query.strip()) + "&page_size=20"
-                    results = _do_search(url, is_docker_hub=True)
-                else:
-                    url = mirror_url.rstrip("/") + "?search=" + urllib.parse.quote(query.strip())
-                    results = _do_search(url)
-                if results is not None:
-                    return results
-            return []
+            if resolved_mirror:
+                is_hub = _is_docker_hub_format(resolved_mirror)
+                url = _build_search_url(resolved_mirror, is_hub)
+                result = _do_search(url, is_docker_hub=is_hub)
+                if result is not None:
+                    return result
+            return {"total": 0, "page": page, "page_size": page_size, "results": []}
 
         # 默认使用 Docker Hub v2 API
-        url = (
-            "https://hub.docker.com/v2/search/repositories?q="
-            + urllib.parse.quote(query)
-            + "&page_size=20"
-        )
-        results = _do_search(url, is_docker_hub=True)
-        return results if results is not None else []
+        default_url = "https://hub.docker.com/v2/search/repositories"
+        url = _build_search_url(default_url, is_docker_hub=True)
+        result = _do_search(url, is_docker_hub=True)
+        return result if result is not None else {
+            "total": 0, "page": page, "page_size": page_size, "results": []
+        }
 
     def pull_image(self, image: str):
         """拉取指定镜像。

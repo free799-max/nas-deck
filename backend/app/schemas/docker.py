@@ -96,21 +96,83 @@ class NetworkInfo(BaseModel):
 
 
 class ImageInfo(BaseModel):
-    """本地 Docker 镜像信息。
+    """本地 Docker 镜像信息（扁平化，每行对应一个 tag）。
 
     Attributes:
-        id: 镜像短 ID（12 位）
-        tags: 镜像标签列表（如 ["nginx:latest", "nginx:alpine"]）
+        id: 镜像短 ID（12 位，展示用）
+        image_id: 镜像完整 ID（sha256:...，删除操作使用）
+        name: Repository 名称（如 "nginx"）
+        tag: Tag（如 "latest"）
+        full_tag: 完整标签（如 "nginx:latest"）
         size: 镜像大小（字节）
         created: 创建时间（ISO 8601 格式）
-        containers: 使用该镜像的容器数量（-1 表示未知）
+        containers: 使用该镜像的容器数量
     """
 
     id: str
-    tags: list[str]
+    image_id: str
+    name: str
+    tag: str
+    full_tag: str
     size: int
     created: str
     containers: int
+
+
+class ImageDetail(BaseModel):
+    """Docker 镜像完整元数据。
+
+    Attributes:
+        id: 镜像完整 ID
+        name: Repository 名称
+        tag: Tag
+        full_tag: 完整标签
+        size: 镜像大小（字节）
+        created: 创建时间
+        architecture: 架构（如 "amd64"）
+        os: 操作系统（如 "linux"）
+        cmd: 默认命令
+        entrypoint: 入口点
+        env: 环境变量列表
+        exposed_ports: 暴露端口列表
+        volumes: 卷列表
+        working_dir: 工作目录
+        user: 运行用户
+        labels: 标签键值对
+        layers: 镜像层 sha256 列表
+        history: 构建历史命令列表
+    """
+
+    id: str
+    name: str
+    tag: str
+    full_tag: str
+    size: int
+    created: str
+    architecture: str
+    os: str
+    cmd: list[str] | None = None
+    entrypoint: list[str] | None = None
+    env: list[str] | None = None
+    exposed_ports: list[str] | None = None
+    volumes: list[str] | None = None
+    working_dir: str | None = None
+    user: str | None = None
+    labels: dict[str, str] | None = None
+    layers: list[str] | None = None
+    history: list[str] | None = None
+
+
+class ImagePruneResult(BaseModel):
+    """移除未使用镜像的结果。
+
+    Attributes:
+        deleted: 被删除的镜像/标签描述列表
+        space_reclaimed: 释放空间（字节）
+    """
+
+    deleted: list[str]
+    space_reclaimed: int
 
 
 class ImageSearchResult(BaseModel):
@@ -120,13 +182,17 @@ class ImageSearchResult(BaseModel):
         name: 镜像完整名称（如 "library/nginx"）
         description: 镜像描述
         star_count: Star 数量
+        pull_count: 拉取次数
         official: 是否为官方镜像
+        is_automated: 是否为自动构建镜像
     """
 
     name: str
     description: str
     star_count: int
+    pull_count: int
     official: bool
+    is_automated: bool
 
 
 class ImagePullRequest(BaseModel):

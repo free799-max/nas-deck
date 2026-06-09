@@ -22,7 +22,7 @@ from app.models.user import User
 from app.models.docker import DockerMirrorConfig
 from app.schemas.docker import (
     ContainerInfo, ContainerAction, HostInfo,
-    ImageInfo, ImageSearchResult, ImagePullRequest,
+    ImageInfo, ImageDetail, ImagePruneResult, ImageSearchResult, ImagePullRequest,
     RegistryCreate, RegistryUpdate, RegistryOut,
     BatchImageDeleteRequest,
 )
@@ -175,7 +175,7 @@ async def get_host_info(current_user: User = Depends(get_current_user)):
 
 @router.get("/images", response_model=list[ImageInfo])
 async def list_images(current_user: User = Depends(get_current_user)):
-    """获取本地镜像列表。
+    """获取本地镜像列表（扁平化，每行对应一个 tag）。
 
     Args:
         current_user: 当前登录用户
@@ -210,9 +210,62 @@ async def remove_image(
         raise APIException(f"删除镜像失败: {e}", 500)
 
 
-@router.get("/images/search", response_model=list[ImageSearchResult])
+@router.get("/images/{image_id}/detail", response_model=ImageDetail)
+async def get_image_detail(
+    image_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    """获取镜像完整元数据。
+
+    Args:
+        image_id: 镜像完整 ID（sha256:...）或短 ID。
+        current_user: 当前登录用户
+
+    Returns:
+        ImageDetail: 镜像元数据
+
+    Raises:
+        APIException: 镜像不存在时返回 404
+        APIException: Docker 不可用时返回 503
+    """
+    if not docker_manager.available:
+        raise APIException("Docker 不可用", 503)
+    detail = docker_manager.get_image_detail(image_id)
+    if not detail:
+        raise APIException("镜像不存在", 404)
+    return detail
+
+
+@router.post("/images/prune", response_model=ImagePruneResult)
+async def prune_images(current_user: User = Depends(get_current_user)):
+    """移除所有未使用的镜像。
+
+    移除所有未被容器引用的镜像，包括有标签但无容器使用的镜像。
+
+    Args:
+        current_user: 当前登录用户
+
+    Returns:
+        ImagePruneResult: 被删除的镜像列表和释放空间
+
+    Raises:
+        APIException: Docker 不可用时返回 503
+        APIException: 执行失败时返回 500
+    """
+    if not docker_manager.available:
+        raise APIException("Docker 不可用", 503)
+    try:
+        return docker_manager.prune_unused_images()
+    except RuntimeError:
+        raise APIException("Docker 不可用", 503)
+    except Exception as e:
+        raise APIException(f"移除未使用镜像失败: {e}", 500)
+
+
+@router.get("/images/search")
 async def search_images(
     q: str,
+    page: int = 1,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -222,11 +275,12 @@ async def search_images(
 
     Args:
         q: 搜索关键词
+        page: 页码，从 1 开始
         db: 数据库会话
         current_user: 当前登录用户
 
     Returns:
-        list[ImageSearchResult]: 搜索结果列表
+        dict: 包含 total、page、page_size、results 的分页结果
     """
     result = await db.execute(
         select(DockerMirrorConfig).where(DockerMirrorConfig.is_default == True)
@@ -235,13 +289,14 @@ async def search_images(
     if config:
         return docker_manager.search_images(
             q,
+            page=page,
             api_url=config.search_api_url,
             mirror_url=config.mirror_url if config.enable_mirror else None,
             username=config.username,
             password=config.password,
         )
     # 无默认配置时使用 Docker Hub 官方 API
-    return docker_manager.search_images(q)
+    return docker_manager.search_images(q, page=page)
 
 
 @router.post("/images/pull", status_code=status.HTTP_204_NO_CONTENT)
