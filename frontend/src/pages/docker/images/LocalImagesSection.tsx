@@ -4,7 +4,7 @@
  * 表格展示本地镜像列表（名称/标签分开），支持搜索、Shift 多选、详情、删除、移除未使用镜像。
  */
 
-import { useState, useMemo, useRef } from "react";
+import { useState, useMemo } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -28,6 +28,7 @@ import {
   useImages,
   useBatchRemoveImages,
   usePruneImages,
+  type ImageInfo,
 } from "@/hooks/useDocker";
 import { ImageDetailDialog } from "./ImageDetailDialog";
 import { formatBytes, formatDate } from "@/lib/utils";
@@ -52,6 +53,9 @@ export function LocalImagesSection() {
   const [lastSelectedIndex, setLastSelectedIndex] = useState<number | null>(
     null
   );
+
+  /** 生成行唯一选择键（同一 image_id 可能对应多个 tag） */
+  const getSelectionKey = (img: ImageInfo) => `${img.image_id}:${img.tag}`;
   const [showBatchDeleteDialog, setShowBatchDeleteDialog] = useState(false);
   const [showPruneDialog, setShowPruneDialog] = useState(false);
   const [detailImageId, setDetailImageId] = useState<string | null>(null);
@@ -71,15 +75,15 @@ export function LocalImagesSection() {
 
   // 判断选中项中是否有正在使用的镜像
   const hasRunningSelected = useMemo(() => {
-    for (const id of selectedIds) {
-      const img = images.find((i) => i.image_id === id);
+    for (const key of selectedIds) {
+      const img = filteredImages.find((i) => getSelectionKey(i) === key);
       if (img && img.containers > 0) return true;
     }
     return false;
-  }, [selectedIds, images]);
+  }, [selectedIds, filteredImages]);
 
   // 行选择逻辑
-  const toggleSelect = (imageId: string, index: number, shiftKey: boolean) => {
+  const toggleSelect = (key: string, index: number, shiftKey: boolean) => {
     if (shiftKey && lastSelectedIndex !== null) {
       // Shift 多选：选中区间
       const start = Math.min(lastSelectedIndex, index);
@@ -87,17 +91,17 @@ export function LocalImagesSection() {
       const next = new Set(selectedIds);
       for (let i = start; i <= end; i++) {
         if (i < filteredImages.length) {
-          next.add(filteredImages[i].image_id);
+          next.add(getSelectionKey(filteredImages[i]));
         }
       }
       setSelectedIds(next);
     } else {
       // 单选切换
       const next = new Set(selectedIds);
-      if (next.has(imageId)) {
-        next.delete(imageId);
+      if (next.has(key)) {
+        next.delete(key);
       } else {
-        next.add(imageId);
+        next.add(key);
       }
       setSelectedIds(next);
       setLastSelectedIndex(index);
@@ -110,8 +114,12 @@ export function LocalImagesSection() {
   };
 
   const confirmBatchDelete = () => {
+    const selectedImages = filteredImages.filter((img) =>
+      selectedIds.has(getSelectionKey(img))
+    );
+    const tagsToDelete = selectedImages.map((img) => img.full_tag);
     batchRemoveImages.mutate(
-      { ids: Array.from(selectedIds), force: false },
+      { ids: tagsToDelete, force: false },
       {
         onSettled: () => {
           setShowBatchDeleteDialog(false);
@@ -248,12 +256,13 @@ export function LocalImagesSection() {
               {searchQuery ? "未找到匹配的镜像" : "暂无本地镜像"}
             </p>
           ) : (
-            <div className="border rounded-xl overflow-hidden">
+            <div className="border rounded-xl overflow-hidden px-3">
               <Table>
                 <TableHeader>
                   <TableRow>
                     <TableHead>名称</TableHead>
                     <TableHead>标签</TableHead>
+                    <TableHead>ID</TableHead>
                     <TableHead>大小</TableHead>
                     <TableHead>创建时间</TableHead>
                     <TableHead>容器</TableHead>
@@ -265,11 +274,11 @@ export function LocalImagesSection() {
                     <TableRow
                       key={img.image_id + ":" + img.tag}
                       data-state={
-                        selectedIds.has(img.image_id)
+                        selectedIds.has(getSelectionKey(img))
                           ? "selected"
                           : undefined
                       }
-                      className={`cursor-pointer transition-colors ${selectedIds.has(img.image_id) ? "bg-muted" : "hover:bg-muted/40"}`}
+                      className={`cursor-pointer transition-colors ${selectedIds.has(getSelectionKey(img)) ? "bg-muted" : "hover:bg-muted/40"}`}
                       onMouseDown={(e) => {
                         // Shift 多选时阻止浏览器默认选中文本
                         if (e.shiftKey) {
@@ -283,7 +292,7 @@ export function LocalImagesSection() {
                           return;
                         }
                         toggleSelect(
-                          img.image_id,
+                          getSelectionKey(img),
                           index,
                           e.shiftKey
                         );
@@ -296,6 +305,9 @@ export function LocalImagesSection() {
                         <Badge variant="outline" className="text-xs">
                           {img.tag}
                         </Badge>
+                      </TableCell>
+                      <TableCell className="font-mono text-xs">
+                        {img.id}
                       </TableCell>
                       <TableCell className="text-sm">
                         {formatBytes(img.size)}

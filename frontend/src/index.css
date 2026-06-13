@@ -85,6 +85,10 @@
     /* 弥散阴影系统 */
     --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.04), 0 1px 2px rgba(0, 0, 0, 0.02);
     --shadow-elevated: 0 4px 12px rgba(0, 0, 0, 0.05), 0 1px 3px rgba(0, 0, 0, 0.03);
+
+    /* 滚动条系统 */
+    --scrollbar-thumb: oklch(0.556 0 0 / 0.25);
+    --scrollbar-thumb-hover: oklch(0.556 0 0 / 0.4);
 }
 
 .dark {
@@ -119,6 +123,10 @@
     --sidebar-accent-foreground: oklch(0.985 0 0);
     --sidebar-border: oklch(1 0 0 / 10%);
     --sidebar-ring: oklch(0.556 0 0);
+
+    /* 滚动条系统 */
+    --scrollbar-thumb: oklch(0.708 0 0 / 0.25);
+    --scrollbar-thumb-hover: oklch(0.708 0 0 / 0.4);
 }
 
 @layer base {
@@ -130,7 +138,35 @@
     }
   html {
     @apply font-sans;
+    scrollbar-width: thin;
+    scrollbar-color: var(--scrollbar-thumb) transparent;
     }
+
+  /* 全局滚动条：细、半透明、风格一致 */
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: var(--scrollbar-thumb);
+    border-radius: 9999px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--scrollbar-thumb-hover);
+  }
+
+  .dark html {
+    scrollbar-color: var(--scrollbar-thumb) transparent;
+  }
+  .dark ::-webkit-scrollbar-thumb {
+    background: var(--scrollbar-thumb);
+  }
+  .dark ::-webkit-scrollbar-thumb:hover {
+    background: var(--scrollbar-thumb-hover);
+  }
 }
 
 @layer utilities {
@@ -140,5 +176,33 @@
   }
   .scrollbar-hidden::-webkit-scrollbar {
     display: none;
+  }
+
+  .scrollbar-thin {
+    scrollbar-width: thin;
+    scrollbar-color: var(--scrollbar-thumb) transparent;
+  }
+  .dark .scrollbar-thin {
+    scrollbar-color: var(--scrollbar-thumb) transparent;
+  }
+  .scrollbar-thin::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  .scrollbar-thin::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    background: var(--scrollbar-thumb);
+    border-radius: 9999px;
+  }
+  .scrollbar-thin::-webkit-scrollbar-thumb:hover {
+    background: var(--scrollbar-thumb-hover);
+  }
+  .dark .scrollbar-thin::-webkit-scrollbar-thumb {
+    background: var(--scrollbar-thumb);
+  }
+  .dark .scrollbar-thin::-webkit-scrollbar-thumb:hover {
+    background: var(--scrollbar-thumb-hover);
   }
 }

@@ -15,7 +15,14 @@ import { DockerPage } from "./pages/docker/containers/DockerPage";
 import { DockerHostPage } from "./pages/docker/host/DockerHostPage";
 import { DockerImagesPage } from "./pages/docker/images/DockerImagesPage";
 
-const queryClient = new QueryClient();
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      refetchOnWindowFocus: false,
+      refetchOnReconnect: true,
+    },
+  },
+});
 
 /**
  * 鉴权路由守卫

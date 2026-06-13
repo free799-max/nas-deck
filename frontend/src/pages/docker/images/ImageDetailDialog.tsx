@@ -1,7 +1,8 @@
 /**
- * 镜像详情弹窗组件
+ * 镜像详情弹窗组件（方案 1：单栏垂直滚动）
  *
- * Tab 切换展示镜像元数据：基本信息、配置、层。
+ * 将 Image details、Dockerfile details、Image layers 三个区块
+ * 按顺序垂直展示在一个弹窗面板内，无 Tab 切换。
  */
 
 import { useState } from "react";
@@ -11,26 +12,30 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Badge } from "@/components/ui/badge";
+import {
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
 import { useImageDetail, type ImageDetail } from "@/hooks/useDocker";
 import { formatBytes, formatDate } from "@/lib/utils";
-import {
-  Loader2,
-  Copy,
-  Check,
-  Layers,
-  Settings,
-  Info,
-} from "lucide-react";
+import { Loader2, Copy, Check } from "lucide-react";
 
 interface ImageDetailDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   imageId: string | null;
 }
-
-type TabKey = "info" | "config" | "layers";
 
 function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
@@ -43,7 +48,7 @@ function CopyButton({ text }: { text: string }) {
     <Button
       size="icon"
       variant="ghost"
-      className="h-6 w-6 ml-1"
+      className="h-6 w-6 ml-1.5 shrink-0"
       onClick={handleCopy}
     >
       {copied ? (
@@ -55,191 +60,175 @@ function CopyButton({ text }: { text: string }) {
   );
 }
 
-function InfoRow({ label, value }: { label: string; value: React.ReactNode }) {
-  return (
-    <div className="flex justify-between py-1.5 border-b last:border-0">
-      <span className="text-sm text-muted-foreground shrink-0">{label}</span>
-      <span className="text-sm text-right break-all">{value}</span>
-    </div>
-  );
-}
-
-function TabButton({
-  active,
+function InfoRow({
   label,
-  icon: Icon,
-  onClick,
+  value,
 }: {
-  active: boolean;
   label: string;
-  icon: React.ElementType;
-  onClick: () => void;
+  value: React.ReactNode;
 }) {
   return (
-    <button
-      onClick={onClick}
-      className={`flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-md transition-colors ${
-        active
-          ? "bg-primary text-primary-foreground"
-          : "text-muted-foreground hover:text-foreground hover:bg-muted"
-      }`}
-    >
-      <Icon className="h-3.5 w-3.5" />
-      {label}
-    </button>
-  );
-}
-
-function InfoTab({ detail }: { detail: ImageDetail }) {
-  return (
-    <div className="space-y-1">
-      <InfoRow
-        label="完整 ID"
-        value={
-          <span className="font-mono text-xs flex items-center justify-end">
-            {detail.id}
-            <CopyButton text={detail.id} />
-          </span>
-        }
-      />
-      <InfoRow label="名称" value={detail.name} />
-      <InfoRow
-        label="标签"
-        value={<Badge variant="outline">{detail.tag}</Badge>}
-      />
-      <InfoRow label="完整标签" value={detail.full_tag} />
-      <InfoRow label="大小" value={formatBytes(detail.size)} />
-      <InfoRow label="创建时间" value={formatDate(detail.created)} />
-      <InfoRow label="架构" value={detail.architecture} />
-      <InfoRow label="操作系统" value={detail.os} />
+    <div className="grid grid-cols-[9rem_1fr] gap-4 py-2.5 border-b last:border-0 border-border/50 items-start">
+      <span className="text-sm text-muted-foreground text-left">
+        {label}
+      </span>
+      <span className="text-sm text-left break-all">{value}</span>
     </div>
   );
 }
 
-function ConfigTab({ detail }: { detail: ImageDetail }) {
+function CodeBlock({ children }: { children: React.ReactNode }) {
   return (
-    <div className="space-y-3">
-      {detail.cmd && (
-        <div>
-          <span className="text-xs text-muted-foreground block mb-1">命令 (Cmd)</span>
-          <code className="text-xs bg-muted px-2 py-1 rounded block break-all">
-            {JSON.stringify(detail.cmd)}
-          </code>
-        </div>
-      )}
-      {detail.entrypoint && (
-        <div>
-          <span className="text-xs text-muted-foreground block mb-1">入口点 (Entrypoint)</span>
-          <code className="text-xs bg-muted px-2 py-1 rounded block break-all">
-            {JSON.stringify(detail.entrypoint)}
-          </code>
-        </div>
-      )}
-      {detail.env && detail.env.length > 0 && (
-        <div>
-          <span className="text-xs text-muted-foreground block mb-1">环境变量</span>
-          <div className="space-y-1">
-            {detail.env.map((e) => (
-              <code
-                key={e}
-                className="text-xs bg-muted px-2 py-1 rounded block break-all"
-              >
-                {e}
-              </code>
-            ))}
+    <code className="text-xs block break-all font-mono text-left">
+      {children}
+    </code>
+  );
+}
+
+function formatCommand(args: string[]): string {
+  return args
+    .map((arg) => (arg.includes(" ") ? `"${arg}"` : arg))
+    .join(" ");
+}
+
+function EnvList({ env }: { env: string[] }) {
+  return (
+    <div className="space-y-1.5 w-full">
+      {env.map((item, index) => {
+        const eqIndex = item.indexOf("=");
+        const key = eqIndex >= 0 ? item.slice(0, eqIndex) : item;
+        const value = eqIndex >= 0 ? item.slice(eqIndex + 1) : "";
+        return (
+          <div
+            key={`${key}-${index}`}
+            className="grid grid-cols-[9rem_1fr] gap-4 text-xs items-start"
+          >
+            <span className="text-muted-foreground font-medium text-left">
+              {key}
+            </span>
+            <span className="break-all text-left font-mono">
+              {value}
+            </span>
           </div>
-        </div>
-      )}
-      {detail.exposed_ports && detail.exposed_ports.length > 0 && (
-        <div>
-          <span className="text-xs text-muted-foreground block mb-1">暴露端口</span>
-          <div className="flex flex-wrap gap-1">
-            {detail.exposed_ports.map((p) => (
-              <Badge key={p} variant="outline" className="text-xs">
-                {p}
-              </Badge>
-            ))}
-          </div>
-        </div>
-      )}
-      {detail.volumes && detail.volumes.length > 0 && (
-        <div>
-          <span className="text-xs text-muted-foreground block mb-1">卷</span>
-          <div className="space-y-1">
-            {detail.volumes.map((v) => (
-              <code
-                key={v}
-                className="text-xs bg-muted px-2 py-1 rounded block break-all"
-              >
-                {v}
-              </code>
-            ))}
-          </div>
-        </div>
-      )}
-      {detail.working_dir && (
-        <InfoRow label="工作目录" value={detail.working_dir} />
-      )}
-      {detail.user && <InfoRow label="运行用户" value={detail.user} />}
-      {detail.labels && Object.keys(detail.labels).length > 0 && (
-        <div>
-          <span className="text-xs text-muted-foreground block mb-1">标签 (Labels)</span>
-          <div className="space-y-1">
-            {Object.entries(detail.labels).map(([k, v]) => (
-              <div
-                key={k}
-                className="flex justify-between text-xs bg-muted px-2 py-1 rounded"
-              >
-                <span className="text-muted-foreground shrink-0 mr-2">{k}</span>
-                <span className="break-all text-right">{v}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
+        );
+      })}
     </div>
   );
 }
 
-function LayersTab({ detail }: { detail: ImageDetail }) {
+function ImageDetailsCard({ detail }: { detail: ImageDetail }) {
   return (
-    <div className="space-y-3">
-      {detail.history && detail.history.length > 0 && (
-        <div>
-          <span className="text-xs text-muted-foreground block mb-2">
-            构建历史 ({detail.history.length} 条)
-          </span>
-          <div className="space-y-1 max-h-40 overflow-y-auto">
-            {detail.history.map((h, i) => (
-              <div
-                key={i}
-                className="text-xs bg-muted px-2 py-1.5 rounded break-all"
-              >
-                {h}
-              </div>
-            ))}
+    <Card>
+      <CardHeader className="pb-2">
+        <CardTitle className="text-sm font-semibold">镜像信息</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-1">
+        <InfoRow
+          label="ID"
+          value={
+            <span className="font-mono text-xs flex items-center justify-start">
+              {detail.id}
+              <CopyButton text={detail.id} />
+            </span>
+          }
+        />
+        {detail.parent && (
+          <InfoRow
+            label="Parent"
+            value={<span className="font-mono text-xs">{detail.parent}</span>}
+          />
+        )}
+        <InfoRow label="Size" value={formatBytes(detail.size)} />
+        <InfoRow label="Created" value={formatDate(detail.created)} />
+        {detail.build && <InfoRow label="Build" value={detail.build} />}
+      </CardContent>
+    </Card>
+  );
+}
+
+function DockerfileDetailsCard({ detail }: { detail: ImageDetail }) {
+  const hasContent =
+    detail.cmd ||
+    detail.entrypoint ||
+    (detail.env && detail.env.length > 0);
+  if (!hasContent) return null;
+
+  return (
+    <Card className="mt-4">
+      <CardHeader className="pb-2">
+        <CardTitle className="text-sm font-semibold">
+          Dockerfile 详情
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {detail.cmd && (
+          <InfoRow
+            label="CMD"
+            value={<CodeBlock>{formatCommand(detail.cmd)}</CodeBlock>}
+          />
+        )}
+        {detail.entrypoint && (
+          <InfoRow
+            label="ENTRYPOINT"
+            value={<CodeBlock>{formatCommand(detail.entrypoint)}</CodeBlock>}
+          />
+        )}
+        {detail.env && detail.env.length > 0 && (
+          <InfoRow label="ENV" value={<EnvList env={detail.env} />} />
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function ImageLayersCard({ detail }: { detail: ImageDetail }) {
+  const layers = detail.layers_table;
+
+  return (
+    <Card className="mt-4">
+      <CardHeader className="pb-2">
+        <CardTitle className="text-sm font-semibold">镜像层</CardTitle>
+      </CardHeader>
+      <CardContent>
+        {!layers || layers.length === 0 ? (
+          <p className="text-sm text-muted-foreground text-center py-6">
+            无层信息
+          </p>
+        ) : (
+          <div className="border rounded-lg overflow-hidden">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="w-14 text-xs">Order</TableHead>
+                  <TableHead className="w-20 text-xs">Size</TableHead>
+                  <TableHead className="text-xs">Layer</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {layers.map((layer) => (
+                  <TableRow key={layer.order}>
+                    <TableCell className="text-xs text-muted-foreground">
+                      {layer.order}
+                    </TableCell>
+                    <TableCell className="text-xs whitespace-nowrap">
+                      {formatBytes(layer.size)}
+                    </TableCell>
+                    <TableCell className="text-xs font-mono max-w-0">
+                      <span
+                        className="block truncate"
+                        title={layer.layer}
+                      >
+                        {layer.layer}
+                      </span>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
           </div>
-        </div>
-      )}
-      {detail.layers && detail.layers.length > 0 && (
-        <div>
-          <span className="text-xs text-muted-foreground block mb-2">
-            镜像层 ({detail.layers.length} 层)
-          </span>
-          <div className="space-y-1 max-h-48 overflow-y-auto">
-            {detail.layers.map((layer, i) => (
-              <div
-                key={i}
-                className="flex items-center justify-between text-xs bg-muted px-2 py-1.5 rounded"
-              >
-                <span className="font-mono break-all mr-2">{layer}</span>
-                <CopyButton text={layer} />
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-    </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 
@@ -248,51 +237,34 @@ export function ImageDetailDialog({
   onOpenChange,
   imageId,
 }: ImageDetailDialogProps) {
-  const [tab, setTab] = useState<TabKey>("info");
   const { data: detail, isLoading } = useImageDetail(imageId);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-lg max-h-[80vh] overflow-hidden flex flex-col">
-        <DialogHeader>
-          <DialogTitle className="text-base">镜像详情</DialogTitle>
+      <DialogContent className="sm:max-w-5xl max-h-[85vh] overflow-hidden flex flex-col p-0">
+        <DialogHeader className="px-6 pt-5 pb-2 border-b shrink-0">
+          <DialogTitle className="text-lg font-semibold">
+            镜像详情
+          </DialogTitle>
         </DialogHeader>
 
-        {isLoading ? (
-          <div className="flex justify-center py-12">
-            <Loader2 className="h-6 w-6 animate-spin text-primary" />
-          </div>
-        ) : !detail ? (
-          <p className="text-muted-foreground text-center py-12">无法加载镜像详情</p>
-        ) : (
-          <>
-            <div className="flex gap-1 mb-4 shrink-0">
-              <TabButton
-                active={tab === "info"}
-                label="基本信息"
-                icon={Info}
-                onClick={() => setTab("info")}
-              />
-              <TabButton
-                active={tab === "config"}
-                label="配置"
-                icon={Settings}
-                onClick={() => setTab("config")}
-              />
-              <TabButton
-                active={tab === "layers"}
-                label="层"
-                icon={Layers}
-                onClick={() => setTab("layers")}
-              />
+        <div className="overflow-y-auto px-6 py-3">
+          {isLoading ? (
+            <div className="flex justify-center py-12">
+              <Loader2 className="h-6 w-6 animate-spin text-primary" />
             </div>
-            <div className="overflow-y-auto pr-1">
-              {tab === "info" && <InfoTab detail={detail} />}
-              {tab === "config" && <ConfigTab detail={detail} />}
-              {tab === "layers" && <LayersTab detail={detail} />}
-            </div>
-          </>
-        )}
+          ) : !detail ? (
+            <p className="text-muted-foreground text-center py-12">
+              Unable to load image details
+            </p>
+          ) : (
+            <>
+              <ImageDetailsCard detail={detail} />
+              <DockerfileDetailsCard detail={detail} />
+              <ImageLayersCard detail={detail} />
+            </>
+          )}
+        </div>
       </DialogContent>
     </Dialog>
   );

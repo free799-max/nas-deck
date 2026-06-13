@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 
 import bcrypt as _bcrypt
 from jose import JWTError, jwt
-from fastapi import Depends, status
+from fastapi import Depends, Query, status
 
 from app.core.exceptions import APIException
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -20,6 +20,8 @@ from app.database import get_db
 
 # HTTP Bearer 令牌提取器
 security = HTTPBearer()
+# 可选的 Bearer 提取器（无 Header 时返回 None，不自动抛 403）
+security_optional = HTTPBearer(auto_error=False)
 
 
 def hash_password(password: str) -> str:
@@ -72,6 +74,43 @@ async def get_current_user(
         raise APIException("认证失败", 401)
 
     # 查询用户是否存在
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if user is None:
+        raise APIException("认证失败", 401)
+    return user
+
+
+async def get_current_user_sse(
+    credentials: HTTPAuthorizationCredentials | None = Depends(security_optional),
+    token: str | None = Query(None),
+    db: AsyncSession = Depends(get_db),
+):
+    """FastAPI 依赖注入（SSE 专用）：从请求头或 URL 参数中提取并验证 JWT。
+
+    EventSource 不支持自定义请求头，因此支持通过 `?token=` 查询参数传递令牌。
+    验证失败时抛出 401 异常。
+    """
+    from app.models.user import User
+
+    jwt_token = None
+    if credentials is not None:
+        jwt_token = credentials.credentials
+    elif token:
+        jwt_token = token
+
+    if not jwt_token:
+        raise APIException("认证失败", 401)
+
+    try:
+        payload = jwt.decode(jwt_token, settings.SECRET_KEY, algorithms=["HS256"])
+        sub = payload.get("sub")
+        if sub is None:
+            raise APIException("认证失败", 401)
+        user_id = int(sub)
+    except (JWTError, ValueError, TypeError):
+        raise APIException("认证失败", 401)
+
     result = await db.execute(select(User).where(User.id == user_id))
     user = result.scalar_one_or_none()
     if user is None:

@@ -14,11 +14,37 @@ export function formatBytes(bytes: number): string {
   return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i];
 }
 
-/** ISO 日期转本地短格式 */
+/** ISO 日期转 yyyy-MM-dd HH:mm:ss 格式 */
 export function formatDate(iso: string): string {
   if (!iso) return "-";
   const d = new Date(iso);
-  return isNaN(d.getTime()) ? iso : d.toLocaleString("zh-CN");
+  if (isNaN(d.getTime())) return iso;
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return (
+    `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ` +
+    `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+  );
+}
+
+/** ISO 日期转相对时间（如 2 天前） */
+export function formatRelativeTime(iso: string): string {
+  if (!iso) return "-";
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return iso;
+  const now = new Date();
+  const diffMs = now.getTime() - d.getTime();
+  const seconds = Math.floor(diffMs / 1000);
+  if (seconds < 60) return "刚刚";
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes} 分钟前`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} 小时前`;
+  const days = Math.floor(hours / 24);
+  if (days < 30) return `${days} 天前`;
+  const months = Math.floor(days / 30);
+  if (months < 12) return `${months} 个月前`;
+  const years = Math.floor(months / 12);
+  return `${years} 年前`;
 }
 
 /** 大数字转人类可读（K/M/B） */

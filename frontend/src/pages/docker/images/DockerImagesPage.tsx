@@ -34,7 +34,7 @@ export function DockerImagesPage() {
 
   return (
     <div className="space-y-6">
-      {/* 上区域：搜索 */}
+      {/* 上区域：搜索（进度条已集成到搜索区域右侧） */}
       <ImageSearchSection
         defaultRegistry={defaultRegistry}
         onOpenConfig={() => setShowConfigDialog(true)}

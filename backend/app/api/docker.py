@@ -11,7 +11,13 @@ Docker 容器管理 API 模块
 所有端点挂载在 /api/docker 路径下，需要用户已登录。
 """
 
+import asyncio
+import json
+import threading
+import queue
+
 from fastapi import APIRouter, Depends, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -22,12 +28,13 @@ from app.models.user import User
 from app.models.docker import DockerMirrorConfig
 from app.schemas.docker import (
     ContainerInfo, ContainerAction, HostInfo,
-    ImageInfo, ImageDetail, ImagePruneResult, ImageSearchResult, ImagePullRequest,
+    ImageInfo, ImageDetail, ImagePruneResult, ImageSearchResult,
+    ImagePullRequest, ImageTag, PullTaskResponse, PullTaskStatus,
     RegistryCreate, RegistryUpdate, RegistryOut,
     BatchImageDeleteRequest,
 )
-from app.core.security import get_current_user
-from app.core.docker_manager import docker_manager
+from app.core.security import get_current_user, get_current_user_sse
+from app.core.docker_manager import docker_manager, task_manager
 from app.core.custom_route import CustomAPIRoute
 from app.database import get_db
 
@@ -281,48 +288,191 @@ async def search_images(
 
     Returns:
         dict: 包含 total、page、page_size、results 的分页结果
+
+    Raises:
+        APIException: 当所有镜像搜索源均不可用或解析失败时抛出
     """
-    result = await db.execute(
-        select(DockerMirrorConfig).where(DockerMirrorConfig.is_default == True)
-    )
-    config = result.scalar_one_or_none()
-    if config:
-        return docker_manager.search_images(
-            q,
-            page=page,
-            api_url=config.search_api_url,
-            mirror_url=config.mirror_url if config.enable_mirror else None,
-            username=config.username,
-            password=config.password,
+    try:
+        result = await db.execute(
+            select(DockerMirrorConfig).where(DockerMirrorConfig.is_default == True)
         )
-    # 无默认配置时使用 Docker Hub 官方 API
-    return docker_manager.search_images(q, page=page)
+        config = result.scalar_one_or_none()
+        if config:
+            return docker_manager.search_images(
+                q,
+                page=page,
+                api_url=config.search_api_url,
+                mirror_url=config.mirror_url if config.enable_mirror else None,
+                username=config.username,
+                password=config.password,
+            )
+        # 无默认配置时使用 Docker Hub 官方 API
+        return docker_manager.search_images(q, page=page)
+    except RuntimeError as e:
+        raise APIException(str(e), 503) from e
+    except Exception as e:
+        raise APIException(f"镜像搜索失败: {e}", 500) from e
 
 
-@router.post("/images/pull", status_code=status.HTTP_204_NO_CONTENT)
+@router.get("/images/tags", response_model=list[ImageTag])
+async def get_image_tags(
+    image: str,
+    current_user: User = Depends(get_current_user),
+):
+    """获取指定镜像的可用标签列表。
+
+    通过 Docker Hub API 查询镜像的所有可用 tags。
+
+    Args:
+        image: 镜像名称（不含标签，如 "nginx"）
+        current_user: 当前登录用户
+
+    Returns:
+        list[ImageTag]: 标签列表
+    """
+    tags = docker_manager.get_image_tags(image)
+    return tags
+
+
+@router.post("/images/pull", response_model=PullTaskResponse)
 async def pull_image(
     data: ImagePullRequest,
     current_user: User = Depends(get_current_user),
 ):
-    """拉取指定镜像。
+    """启动镜像拉取任务。
+
+    在后台线程中流式拉取镜像，返回任务 ID 用于后续进度查询。
 
     Args:
-        data: 拉取请求，包含镜像名称
+        data: 拉取请求，包含镜像名称（含标签）
         current_user: 当前登录用户
 
+    Returns:
+        PullTaskResponse: 包含 task_id 和初始状态
+
     Raises:
-        APIException: 拉取失败
+        APIException: Docker 不可用时返回 503
     """
     if not docker_manager.available:
         raise APIException("Docker 不可用", 503)
+
     try:
-        docker_manager.pull_image(data.image)
-    except docker.errors.ImageNotFound:
-        raise APIException("镜像不存在", 404)
-    except docker.errors.APIError as e:
-        raise APIException(f"拉取镜像失败: {e}", 500)
-    except Exception as e:
-        raise APIException(f"拉取镜像失败: {e}", 500)
+        task_id = task_manager.create_task(data.image)
+    except RuntimeError as e:
+        raise APIException(str(e), 429)
+
+    # 在后台线程中执行拉取
+    thread = threading.Thread(
+        target=docker_manager.pull_image_async,
+        args=(data.image, task_id, task_manager),
+        daemon=True,
+    )
+    thread.start()
+
+    return {
+        "task_id": task_id,
+        "image": data.image,
+        "status": "pulling",
+    }
+
+
+@router.get("/images/pull/{task_id}/events")
+async def pull_image_events(
+    task_id: str,
+    current_user: User = Depends(get_current_user_sse),
+):
+    """获取镜像拉取任务的实时进度（SSE）。
+
+    建立 SSE 连接，先推送已缓存的进度，然后实时推送新进度。
+    页面切换后重新连接可恢复进度。
+
+    Args:
+        task_id: 任务唯一标识
+        current_user: 当前登录用户
+
+    Returns:
+        StreamingResponse: SSE 流
+
+    Raises:
+        APIException: 任务不存在时返回 404
+    """
+    task = task_manager.get_task(task_id)
+    if not task:
+        raise APIException("任务不存在", 404)
+
+    async def event_generator():
+        """SSE 事件生成器。"""
+        # 先发送已缓存的当前进度（已完成/失败时嵌入状态）
+        _initial = task["progress"].copy()
+        if task["status"] in ("completed", "failed"):
+            _initial["_task_status"] = task["status"]
+            if task.get("error"):
+                _initial["_error"] = task["error"]
+        yield f"data: {json.dumps(_initial, ensure_ascii=False)}\n\n"
+
+        # 注册监听器队列接收实时更新
+        q = task_manager.register_listener(task_id)
+        try:
+            while True:
+                # 非阻塞取队列，超时 1 秒检查任务状态
+                try:
+                    progress = q.get(timeout=1)
+                    yield f"data: {json.dumps(progress, ensure_ascii=False)}\n\n"
+                except queue.Empty:
+                    pass
+
+                # 检查任务是否已完成或失败
+                current_task = task_manager.get_task(task_id)
+                if not current_task:
+                    break
+                if current_task["status"] in ("completed", "failed"):
+                    # 发送最终状态后关闭（嵌入状态便于前端同步）
+                    _final = current_task["progress"].copy()
+                    _final["_task_status"] = current_task["status"]
+                    if current_task.get("error"):
+                        _final["_error"] = current_task["error"]
+                    yield f"data: {json.dumps(_final, ensure_ascii=False)}\n\n"
+                    break
+
+                # 让出控制权，避免阻塞
+                await asyncio.sleep(0.1)
+        finally:
+            task_manager.unregister_listener(task_id, q)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@router.get("/images/pull/{task_id}/status", response_model=PullTaskStatus)
+async def pull_image_status(
+    task_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    """获取镜像拉取任务的当前状态。
+
+    用于页面切换后恢复进度（不通过 SSE 时也可轮询）。
+
+    Args:
+        task_id: 任务唯一标识
+        current_user: 当前登录用户
+
+    Returns:
+        PullTaskStatus: 任务完整状态
+
+    Raises:
+        APIException: 任务不存在时返回 404
+    """
+    task = task_manager.get_task(task_id)
+    if not task:
+        raise APIException("任务不存在", 404)
+    return task
 
 
 # ===================== 镜像搜索接口配置（Registry） =====================

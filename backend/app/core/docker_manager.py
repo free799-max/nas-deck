@@ -11,10 +11,21 @@ Docker 客户端管理器模块。
 本模块在导入时会创建一个全局单例 docker_manager，供其他模块直接使用。
 """
 
+import json
+import logging
 import os
+import queue
 import shutil
+import threading
+import time
+import uuid
+from datetime import datetime, timedelta
 
 import docker
+import httpx
+
+# 模块级日志器
+logger = logging.getLogger(__name__)
 
 
 class DockerManager:
@@ -315,6 +326,31 @@ class DockerManager:
             else:
                 name, tag = first_tag, "<none>"
 
+            # 父镜像与 Docker 版本
+            parent = attrs.get("Parent") or None
+            docker_version = attrs.get("DockerVersion") or None
+            architecture = attrs.get("Architecture", "")
+            os_value = attrs.get("Os", "")
+            build = None
+            if docker_version and os_value and architecture:
+                build = f"Docker {docker_version} on {os_value}, {architecture}"
+
+            # 通过 image.history() 获取带 size 的层信息
+            layers_table = []
+            try:
+                for i, layer in enumerate(image.history()):
+                    created_by = (layer.get("CreatedBy", "") or "").strip()
+                    if not created_by:
+                        continue
+                    layers_table.append({
+                        "order": i,
+                        "size": layer.get("Size", 0) or 0,
+                        "layer": created_by,
+                    })
+            except Exception:
+                # 部分镜像格式可能不支持 history()，安全降级
+                layers_table = []
+
             return {
                 "id": attrs.get("Id", ""),
                 "name": name,
@@ -322,8 +358,8 @@ class DockerManager:
                 "full_tag": first_tag,
                 "size": attrs.get("Size", 0),
                 "created": attrs.get("Created", ""),
-                "architecture": attrs.get("Architecture", ""),
-                "os": attrs.get("Os", ""),
+                "architecture": architecture,
+                "os": os_value,
                 "cmd": config.get("Cmd"),
                 "entrypoint": config.get("Entrypoint"),
                 "env": config.get("Env"),
@@ -334,6 +370,10 @@ class DockerManager:
                 "labels": config.get("Labels") or None,
                 "layers": layers or None,
                 "history": history_cmds or None,
+                "parent": parent,
+                "docker_version": docker_version,
+                "build": build,
+                "layers_table": layers_table or None,
             }
         except docker.errors.ImageNotFound:
             return None
@@ -344,7 +384,7 @@ class DockerManager:
         """移除所有未使用的镜像（包括有标签但无容器引用的镜像）。
 
         Returns:
-            dict: 包含 deleted（被删除的镜像/标签描述列表）和
+            dict: 包含 deleted（被删除的镜像标签列表）和
                   space_reclaimed（释放空间字节数）的字典。
 
         Raises:
@@ -353,14 +393,15 @@ class DockerManager:
         if not self._client:
             raise RuntimeError("Docker not available")
         result = self._client.images.prune(filters={"dangling": False})
-        deleted = []
-        for item in result.get("ImagesDeleted", []):
-            if "Untagged" in item:
-                deleted.append(f"取消标签: {item['Untagged']}")
-            elif "Deleted" in item:
-                deleted.append(f"删除层: {item['Deleted']}")
+        # Docker 返回的 ImagesDeleted 同时包含"Untagged"（镜像标签）和"Deleted"（层摘要）。
+        # 用户感知的"镜像数量"应以标签为准，层摘要不计入镜像数。
+        deleted_tags = [
+            item["Untagged"]
+            for item in result.get("ImagesDeleted", [])
+            if "Untagged" in item
+        ]
         return {
-            "deleted": deleted,
+            "deleted": deleted_tags,
             "space_reclaimed": result.get("SpaceReclaimed", 0),
         }
 
@@ -460,9 +501,10 @@ class DockerManager:
                 "is_automated": _get("is_automated", False),
             }
 
-        def _do_search(url: str, is_docker_hub: bool = False) -> dict | None:
-            """执行单次搜索请求，返回分页结果或 None（表示失败）。"""
+        def _do_search(url: str, is_docker_hub: bool = False) -> dict:
+            """执行单次搜索请求，返回分页结果；失败时抛出异常并记录日志。"""
             try:
+                logger.info("镜像搜索请求: %s", url)
                 resp = httpx.get(url, timeout=10, auth=auth)
                 resp.raise_for_status()
                 data = resp.json()
@@ -489,8 +531,18 @@ class DockerManager:
                     "page_size": data.get("page_size", page_size),
                     "results": [_parse_item(r, {}) for r in results],
                 }
-            except Exception:
-                return None
+            except httpx.HTTPStatusError as e:
+                msg = f"镜像搜索接口返回错误: {e.response.status_code} {e.response.reason_phrase} ({url})"
+                logger.error(msg)
+                raise RuntimeError(msg) from e
+            except httpx.RequestError as e:
+                msg = f"镜像搜索接口请求失败: {e.__class__.__name__}: {e} ({url})"
+                logger.error(msg)
+                raise RuntimeError(msg) from e
+            except Exception as e:
+                msg = f"镜像搜索接口解析失败: {e.__class__.__name__}: {e} ({url})"
+                logger.error(msg)
+                raise RuntimeError(msg) from e
 
         def _build_search_url(base_url: str, is_docker_hub: bool) -> str:
             """构造搜索 URL。"""
@@ -530,29 +582,32 @@ class DockerManager:
 
         resolved_api = _resolve_api_url(api_url)
         resolved_mirror = _resolve_api_url(mirror_url)
+        errors: list[str] = []
 
         if resolved_api:
             is_hub = _is_docker_hub_format(resolved_api)
             url = _build_search_url(resolved_api, is_hub)
-            result = _do_search(url, is_docker_hub=is_hub)
-            if result is not None:
-                return result
+            try:
+                return _do_search(url, is_docker_hub=is_hub)
+            except RuntimeError as e:
+                errors.append(str(e))
             # 主地址失败，尝试镜像地址
             if resolved_mirror:
                 is_hub = _is_docker_hub_format(resolved_mirror)
                 url = _build_search_url(resolved_mirror, is_hub)
-                result = _do_search(url, is_docker_hub=is_hub)
-                if result is not None:
-                    return result
-            return {"total": 0, "page": page, "page_size": page_size, "results": []}
+                try:
+                    return _do_search(url, is_docker_hub=is_hub)
+                except RuntimeError as e:
+                    errors.append(str(e))
+            raise RuntimeError("镜像搜索全部失败: " + "; ".join(errors))
 
         # 默认使用 Docker Hub v2 API
         default_url = "https://hub.docker.com/v2/search/repositories"
         url = _build_search_url(default_url, is_docker_hub=True)
-        result = _do_search(url, is_docker_hub=True)
-        return result if result is not None else {
-            "total": 0, "page": page, "page_size": page_size, "results": []
-        }
+        try:
+            return _do_search(url, is_docker_hub=True)
+        except RuntimeError as e:
+            raise RuntimeError("镜像搜索失败: " + str(e)) from e
 
     def pull_image(self, image: str):
         """拉取指定镜像。
@@ -568,6 +623,250 @@ class DockerManager:
         if not self._client:
             raise RuntimeError("Docker not available")
         self._client.images.pull(image)
+
+    def get_image_tags(self, image: str) -> list[dict]:
+        """获取指定镜像的可用标签列表。
+
+        通过 Docker Hub API 查询镜像的所有可用 tags。
+        对于非 library/ 前缀的官方镜像，自动添加 library/ 前缀。
+
+        Args:
+            image: 镜像名称（不含标签，如 "nginx"）。
+
+        Returns:
+            list[dict]: 标签信息列表，每个元素包含 name、last_updated、size、digest。
+                        查询失败时返回空列表。
+        """
+        # 构造 Docker Hub API 路径
+        repo = image.strip()
+        if "/" not in repo:
+            repo = f"library/{repo}"
+
+        url = f"https://hub.docker.com/v2/repositories/{repo}/tags/?page_size=100"
+        try:
+            resp = httpx.get(url, timeout=15)
+            resp.raise_for_status()
+            data = resp.json()
+            results = data.get("results", [])
+            tags = []
+            for r in results:
+                tags.append({
+                    "name": r.get("name", ""),
+                    "last_updated": r.get("last_updated", ""),
+                    "size": r.get("full_size", 0),
+                    "digest": r.get("digest", ""),
+                })
+            return tags
+        except Exception:
+            return []
+
+    def pull_image_async(self, image: str, task_id: str, task_manager):
+        """在后台线程中流式拉取指定镜像，并报告进度。
+
+        解析 Docker SDK 流式输出，计算下载速度、中文状态映射、
+        每层独立进度和总体进度汇总。
+
+        Args:
+            image: 镜像名称（含标签，如 "nginx:latest"）。
+            task_id: 任务唯一标识。
+            task_manager: ImagePullTaskManager 实例，用于更新进度状态。
+
+        Raises:
+            RuntimeError: Docker 不可用时抛出。
+        """
+        if not self._client:
+            task_manager.fail_task(task_id, "Docker not available")
+            raise RuntimeError("Docker not available")
+
+        # 中文状态映射表
+        STATUS_MAP = {
+            "Pulling from": "拉取中",
+            "Pulling fs layer": "准备下载",
+            "Waiting": "等待中",
+            "Downloading": "下载中",
+            "Download complete": "下载完成",
+            "Verifying Checksum": "验证中",
+            "Pull complete": "已完成",
+            "Already exists": "已存在",
+            "Layer already exists": "已存在",
+            "Extracting": "解压中",
+            "Pulling manifest": "获取清单",
+        }
+
+        def _format_bytes(b: int) -> str:
+            if b == 0:
+                return "0 B"
+            k = 1024
+            sizes = ["B", "KB", "MB", "GB", "TB"]
+            i = min(len(sizes) - 1, int(__import__("math").log(b) / __import__("math").log(k)))
+            return f"{b / (k ** i):.1f} {sizes[i]}"
+
+        def _map_status(status: str) -> str:
+            for key, value in STATUS_MAP.items():
+                if key in status:
+                    return value
+            return status
+
+        try:
+            stream = self._client.api.pull(image, stream=True, decode=True)
+            layers = {}  # layer_id -> { status, current, total, last_current, last_time, speed }
+            last_progress_time = time.time()
+            last_overall_percentage = 0  # 单调递增保护：记录上次报告的总百分比
+
+            for line in stream:
+                if not line:
+                    continue
+
+                status = line.get("status", "")
+                layer_id = line.get("id", "")
+                progress_detail = line.get("progressDetail", {}) or {}
+                current = progress_detail.get("current", 0) or 0
+                total = progress_detail.get("total", 0) or 0
+
+                now = time.time()
+
+                if layer_id:
+                    if layer_id not in layers:
+                        layers[layer_id] = {
+                            "status": status,
+                            "current": current,
+                            "total": total,
+                            "last_current": current,
+                            "last_time": now,
+                            "speed": 0,
+                        }
+                    else:
+                        old = layers[layer_id]
+                        # 计算该层下载速度
+                        time_delta = now - old["last_time"]
+                        if time_delta >= 0.5 and current > old["last_current"]:
+                            speed = int((current - old["last_current"]) / time_delta)
+                            old["speed"] = speed
+                            old["last_current"] = current
+                            old["last_time"] = now
+                        old["status"] = status
+                        old["current"] = current
+                        if total > 0:
+                            old["total"] = total
+
+                # 构建每层进度详情
+                layer_progress_list = []
+                total_size = 0
+                downloaded_size = 0
+                total_speed = 0
+                downloading_count = 0
+                completed_layers = 0
+
+                for lid, ldata in layers.items():
+                    l_total = ldata.get("total", 0)
+                    l_current = ldata.get("current", 0)
+                    l_status = ldata.get("status", "")
+                    l_speed = ldata.get("speed", 0)
+
+                    # 该层百分比：已完成/已存在/下载完成的层固定为 100%
+                    completed_statuses = (
+                        "Pull complete",
+                        "Already exists",
+                        "Layer already exists",
+                        "Download complete",
+                    )
+                    l_percentage = 0
+                    if l_status in completed_statuses:
+                        l_percentage = 100
+                    elif l_total > 0 and l_current > 0:
+                        l_percentage = int((l_current / l_total) * 100)
+
+                    # 进度文字
+                    if l_status in completed_statuses:
+                        progress_text = "已完成"
+                    elif l_total > 0:
+                        progress_text = f"{_format_bytes(l_current)} / {_format_bytes(l_total)}"
+                    else:
+                        progress_text = "--"
+
+                    layer_progress_list.append({
+                        "id": lid,
+                        "status": l_status,
+                        "status_text": _map_status(l_status),
+                        "current": l_current,
+                        "total": l_total,
+                        "progress_text": progress_text,
+                        "percentage": l_percentage,
+                        "speed": l_speed,
+                    })
+
+                    if l_status in (
+                        "Pull complete",
+                        "Already exists",
+                        "Layer already exists",
+                        "Download complete",
+                    ) or l_percentage == 100:
+                        completed_layers += 1
+
+                    if l_total > 0:
+                        total_size += l_total
+                        downloaded_size += min(l_current, l_total)
+
+                    if l_speed > 0:
+                        total_speed += l_speed
+                        downloading_count += 1
+
+                # 总体百分比：优先按字节加权，更准确；无字节信息时回退到层平均
+                total_layers = len(layers)
+                byte_percentage = 0
+                if total_size > 0:
+                    byte_percentage = int((downloaded_size / total_size) * 100)
+
+                layer_average_percentage = 0
+                if total_layers > 0:
+                    layer_percentage_sum = sum(
+                        layer["percentage"] for layer in layer_progress_list
+                    )
+                    layer_average_percentage = int(layer_percentage_sum / total_layers)
+
+                # 取字节加权和层平均的较大值，避免已完成层无字节信息时进度被 0 字节卡住
+                calculated_percentage = max(byte_percentage, layer_average_percentage)
+
+                # 单调递增保护：新层动态发现时可能导致计算值下降，显示进度不允许回退
+                percentage = max(calculated_percentage, last_overall_percentage)
+                last_overall_percentage = percentage
+
+                # 整体状态文字
+                if downloading_count > 0:
+                    overall_status = f"下载中 {downloading_count} 个层"
+                elif completed_layers < total_layers:
+                    overall_status = "准备下载"
+                else:
+                    overall_status = "处理中"
+
+                size_text = f"{_format_bytes(downloaded_size)} / {_format_bytes(total_size)}" if total_size > 0 else "--"
+
+                progress = {
+                    "total_layers": total_layers,
+                    "completed_layers": completed_layers,
+                    "current_layer": layer_id,
+                    "percentage": min(percentage, 99),
+                    "status": overall_status,
+                    "speed": total_speed,
+                    "total_size": total_size,
+                    "downloaded_size": downloaded_size,
+                    "size_text": size_text,
+                    "layers": layer_progress_list,
+                }
+
+                # 节流：每 0.3 秒更新一次，避免过于频繁的 SSE 推送
+                if now - last_progress_time >= 0.3:
+                    task_manager.update_progress(task_id, progress)
+                    last_progress_time = now
+
+            # 拉取完成，推送最终 100% 状态
+            task_manager.complete_task(task_id)
+        except docker.errors.ImageNotFound:
+            task_manager.fail_task(task_id, "镜像不存在")
+        except docker.errors.APIError as e:
+            task_manager.fail_task(task_id, f"拉取镜像失败: {e}")
+        except Exception as e:
+            task_manager.fail_task(task_id, f"拉取镜像失败: {e}")
 
     def _format_container(self, container) -> dict:
         """将 Docker 容器对象格式化为字典。
@@ -595,5 +894,300 @@ class DockerManager:
         }
 
 
+class ImagePullTaskManager:
+    """镜像拉取任务管理器。
+
+    管理后台拉取任务的进度状态，支持 SSE 推送和页面切换恢复。
+    任务状态存储在内存中，完成后保留 5 分钟（TTL），最大保留 50 个任务。
+
+    Attributes:
+        _tasks: 任务状态字典，key 为 task_id。
+        _listeners: 每个任务的监听器队列字典，用于 SSE 推送新进度。
+        _lock: 线程锁，保护 _tasks 和 _listeners。
+    """
+
+    def __init__(self, max_tasks: int = 50, ttl_seconds: int = 300, max_concurrent: int = 3, task_timeout_seconds: int = 600):
+        """初始化任务管理器。
+
+        Args:
+            max_tasks: 最大保留任务数，超过时清理最早完成的任务。
+            ttl_seconds: 已完成任务的保留时间（秒）。
+            max_concurrent: 最大并发拉取任务数。
+            task_timeout_seconds: pulling 状态任务超时时间（秒），超过自动标记失败。
+        """
+        self._tasks: dict[str, dict] = {}
+        self._listeners: dict[str, list[queue.Queue]] = {}
+        self._lock = threading.Lock()
+        self._max_tasks = max_tasks
+        self._ttl_seconds = ttl_seconds
+        self._max_concurrent = max_concurrent
+        self._task_timeout_seconds = task_timeout_seconds
+
+    def get_running_count(self) -> int:
+        """获取当前正在运行的任务数。"""
+        with self._lock:
+            return sum(
+                1 for t in self._tasks.values()
+                if t.get("status") == "pulling"
+            )
+
+    def can_start_new_task(self) -> bool:
+        """检查是否可以启动新任务（未超过并发限制）。"""
+        with self._lock:
+            running = sum(
+                1 for t in self._tasks.values()
+                if t.get("status") == "pulling"
+            )
+            return running < self._max_concurrent
+
+    def create_task(self, image: str) -> str:
+        """创建新任务并返回 task_id。
+
+        Args:
+            image: 要拉取的镜像名称（含标签）。
+
+        Returns:
+            str: 任务唯一标识（UUID）。
+
+        Raises:
+            RuntimeError: 当并发任务数超过限制时抛出。
+        """
+        with self._lock:
+            running = sum(
+                1 for t in self._tasks.values()
+                if t.get("status") == "pulling"
+            )
+            if running >= self._max_concurrent:
+                raise RuntimeError(
+                    f"并发拉取任务数已达上限（{self._max_concurrent}个），"
+                    f"请等待现有任务完成后再试"
+                )
+
+        task_id = str(uuid.uuid4())
+        with self._lock:
+            self._cleanup_expired()
+            self._tasks[task_id] = {
+                "task_id": task_id,
+                "image": image,
+                "status": "pulling",
+                "progress": {
+                    "total_layers": 0,
+                    "completed_layers": 0,
+                    "current_layer": "",
+                    "percentage": 0,
+                    "status": "准备拉取",
+                    "speed": 0,
+                    "total_size": 0,
+                    "downloaded_size": 0,
+                    "size_text": "--",
+                    "layers": [],
+                },
+                "error": None,
+                "created_at": datetime.now().isoformat(),
+                "updated_at": datetime.now().isoformat(),
+                "completed_at": None,
+            }
+            self._listeners[task_id] = []
+        return task_id
+
+    def update_progress(self, task_id: str, progress: dict):
+        """更新任务进度并通知所有监听器。
+
+        Args:
+            task_id: 任务 ID。
+            progress: 进度信息字典。
+        """
+        with self._lock:
+            if task_id not in self._tasks:
+                return
+            self._tasks[task_id]["progress"] = progress
+            self._tasks[task_id]["updated_at"] = datetime.now().isoformat()
+            # 通知所有 SSE 监听器
+            for q in self._listeners.get(task_id, []):
+                try:
+                    q.put_nowait(progress)
+                except queue.Full:
+                    pass
+
+    def complete_task(self, task_id: str):
+        """标记任务为已完成。
+
+        Args:
+            task_id: 任务 ID。
+        """
+        with self._lock:
+            if task_id not in self._tasks:
+                return
+            self._tasks[task_id]["status"] = "completed"
+            progress = self._tasks[task_id]["progress"]
+            progress["percentage"] = 100
+            progress["status"] = "拉取完成"
+            progress["speed"] = 0
+            # 更新所有层状态为已完成，并同步层计数
+            layers = progress.get("layers", [])
+            for layer in layers:
+                layer["status"] = "Pull complete"
+                layer["status_text"] = "已完成"
+                layer["percentage"] = 100
+                layer["speed"] = 0
+            progress["completed_layers"] = len(layers)
+            progress["total_layers"] = len(layers)
+            progress["size_text"] = "--"
+            self._tasks[task_id]["completed_at"] = datetime.now().isoformat()
+            self._tasks[task_id]["updated_at"] = datetime.now().isoformat()
+            # 通知所有 SSE 监听器，嵌入状态以便前端同步
+            _notify_progress = self._tasks[task_id]["progress"].copy()
+            _notify_progress["_task_status"] = "completed"
+            for q in self._listeners.get(task_id, []):
+                try:
+                    q.put_nowait(_notify_progress)
+                except queue.Full:
+                    pass
+
+    def fail_task(self, task_id: str, error: str):
+        """标记任务为失败。
+
+        Args:
+            task_id: 任务 ID。
+            error: 错误信息。
+        """
+        with self._lock:
+            if task_id not in self._tasks:
+                return
+            self._tasks[task_id]["status"] = "failed"
+            self._tasks[task_id]["error"] = error
+            self._tasks[task_id]["completed_at"] = datetime.now().isoformat()
+            self._tasks[task_id]["updated_at"] = datetime.now().isoformat()
+            # 通知所有 SSE 监听器，嵌入状态以便前端同步
+            _notify_progress = self._tasks[task_id]["progress"].copy()
+            _notify_progress["_task_status"] = "failed"
+            _notify_progress["_error"] = error
+            for q in self._listeners.get(task_id, []):
+                try:
+                    q.put_nowait(_notify_progress)
+                except queue.Full:
+                    pass
+
+    def _check_task_timeout(self, task: dict) -> bool:
+        """检查任务是否已超时，超时时自动标记为失败。
+
+        已超时并已通知的任务不会重复通知监听器。
+
+        Args:
+            task: 任务状态字典。
+
+        Returns:
+            bool: 是否已超时并被标记失败。
+        """
+        if task.get("status") != "pulling":
+            return False
+        # 已标记超时且已通知，避免重复推送
+        if task.get("_timeout_notified"):
+            return True
+        updated_at = task.get("updated_at")
+        if not updated_at:
+            return False
+        try:
+            updated_dt = datetime.fromisoformat(updated_at)
+            if (datetime.now() - updated_dt).total_seconds() > self._task_timeout_seconds:
+                task["status"] = "failed"
+                task["error"] = "拉取超时，请检查网络或镜像源配置"
+                task["completed_at"] = datetime.now().isoformat()
+                task["updated_at"] = datetime.now().isoformat()
+                task["_timeout_notified"] = True
+                # 通知所有监听器
+                for q in self._listeners.get(task["task_id"], []):
+                    try:
+                        q.put_nowait(task["progress"])
+                    except queue.Full:
+                        pass
+                return True
+        except Exception:
+            pass
+        return False
+
+    def get_task(self, task_id: str) -> dict | None:
+        """获取任务状态。
+
+        自动检测 pulling 任务是否超时，超时时标记为失败。
+
+        Args:
+            task_id: 任务 ID。
+
+        Returns:
+            dict | None: 任务状态字典，不存在时返回 None。
+        """
+        with self._lock:
+            task = self._tasks.get(task_id)
+            if task:
+                self._check_task_timeout(task)
+            return task
+
+    def register_listener(self, task_id: str) -> queue.Queue:
+        """注册 SSE 监听器队列。
+
+        Args:
+            task_id: 任务 ID。
+
+        Returns:
+            queue.Queue: 用于接收进度更新的队列。
+        """
+        q = queue.Queue(maxsize=100)
+        with self._lock:
+            if task_id in self._listeners:
+                self._listeners[task_id].append(q)
+        return q
+
+    def unregister_listener(self, task_id: str, q: queue.Queue):
+        """注销 SSE 监听器队列。
+
+        Args:
+            task_id: 任务 ID。
+            q: 要注销的队列。
+        """
+        with self._lock:
+            if task_id in self._listeners:
+                try:
+                    self._listeners[task_id].remove(q)
+                except ValueError:
+                    pass
+
+    def _cleanup_expired(self):
+        """清理过期和超额的任务。"""
+        now = datetime.now()
+        expired = []
+        for tid, task in self._tasks.items():
+            # 检查已完成任务是否超过 TTL
+            completed_at = task.get("completed_at")
+            if completed_at:
+                try:
+                    completed_dt = datetime.fromisoformat(completed_at)
+                    if (now - completed_dt).total_seconds() > self._ttl_seconds:
+                        expired.append(tid)
+                except Exception:
+                    pass
+            # 检查 pulling 任务是否超时
+            elif task.get("status") == "pulling":
+                if self._check_task_timeout(task):
+                    expired.append(tid)
+
+        for tid in expired:
+            self._tasks.pop(tid, None)
+            self._listeners.pop(tid, None)
+
+        # 如果仍然超过最大任务数，清理最早完成的
+        if len(self._tasks) > self._max_tasks:
+            completed_tasks = [
+                (tid, t) for tid, t in self._tasks.items()
+                if t.get("completed_at")
+            ]
+            completed_tasks.sort(key=lambda x: x[1].get("completed_at", ""))
+            to_remove = len(self._tasks) - self._max_tasks
+            for tid, _ in completed_tasks[:to_remove]:
+                self._tasks.pop(tid, None)
+                self._listeners.pop(tid, None)
+
+
 # 全局单例，供其他模块直接导入使用
 docker_manager = DockerManager()
+task_manager = ImagePullTaskManager()

@@ -119,6 +119,20 @@ class ImageInfo(BaseModel):
     containers: int
 
 
+class ImageLayer(BaseModel):
+    """镜像层信息（用于详情弹窗表格展示）。
+
+    Attributes:
+        order: 层序号
+        size: 层大小（字节）
+        layer: 层构建命令或描述
+    """
+
+    order: int
+    size: int
+    layer: str
+
+
 class ImageDetail(BaseModel):
     """Docker 镜像完整元数据。
 
@@ -141,6 +155,10 @@ class ImageDetail(BaseModel):
         labels: 标签键值对
         layers: 镜像层 sha256 列表
         history: 构建历史命令列表
+        parent: 父镜像 ID
+        docker_version: Docker 构建版本
+        build: 组合构建信息（Docker 版本 + OS + 架构）
+        layers_table: 镜像层表格数据（带 size 和命令）
     """
 
     id: str
@@ -161,6 +179,10 @@ class ImageDetail(BaseModel):
     labels: dict[str, str] | None = None
     layers: list[str] | None = None
     history: list[str] | None = None
+    parent: str | None = None
+    docker_version: str | None = None
+    build: str | None = None
+    layers_table: list[ImageLayer] | None = None
 
 
 class ImagePruneResult(BaseModel):
@@ -203,6 +225,112 @@ class ImagePullRequest(BaseModel):
     """
 
     image: str
+
+
+class ImageTag(BaseModel):
+    """镜像标签信息。
+
+    Attributes:
+        name: 标签名称（如 "latest"）
+        last_updated: 最后更新时间
+        size: 镜像大小（字节）
+        digest: 镜像摘要
+    """
+
+    name: str
+    last_updated: str
+    size: int
+    digest: str
+
+
+class PullTaskResponse(BaseModel):
+    """启动拉取任务响应。
+
+    Attributes:
+        task_id: 任务唯一标识
+        image: 要拉取的镜像名称
+        status: 任务状态
+    """
+
+    task_id: str
+    image: str
+    status: str
+
+
+class PullProgressLayer(BaseModel):
+    """单层拉取进度。
+
+    Attributes:
+        id: 层 ID
+        status: 原始状态（如 Pulling、Pull complete）
+        status_text: 中文状态描述
+        current: 已下载字节数
+        total: 总字节数
+        progress_text: 人类可读进度（如 "15MB/30MB"）
+        percentage: 该层进度百分比（0-100）
+        speed: 下载速度（字节/秒），非下载中为 0
+    """
+
+    id: str
+    status: str
+    status_text: str
+    current: int
+    total: int
+    progress_text: str
+    percentage: int
+    speed: int
+
+
+class PullProgressEvent(BaseModel):
+    """拉取进度事件。
+
+    Attributes:
+        total_layers: 总层数
+        completed_layers: 已完成层数
+        current_layer: 当前正在处理的层 ID
+        percentage: 总进度百分比（0-100）
+        status: 当前整体状态描述（中文）
+        speed: 总体下载速度（字节/秒）
+        total_size: 总大小（字节）
+        downloaded_size: 已下载大小（字节）
+        size_text: 人类可读总进度（如 "45MB/70MB"）
+        layers: 各层进度明细
+    """
+
+    total_layers: int
+    completed_layers: int
+    current_layer: str
+    percentage: int
+    status: str
+    speed: int
+    total_size: int
+    downloaded_size: int
+    size_text: str
+    layers: list[PullProgressLayer]
+
+
+class PullTaskStatus(BaseModel):
+    """拉取任务完整状态。
+
+    Attributes:
+        task_id: 任务唯一标识
+        image: 镜像名称
+        status: 任务状态（pulling/completed/failed）
+        progress: 进度信息
+        error: 错误信息（失败时）
+        created_at: 创建时间
+        updated_at: 更新时间
+        completed_at: 完成时间
+    """
+
+    task_id: str
+    image: str
+    status: str
+    progress: PullProgressEvent
+    error: str | None
+    created_at: str
+    updated_at: str
+    completed_at: str | None
 
 
 class RegistryCreate(BaseModel):

@@ -4,18 +4,21 @@
  * 响应式网格展示远程镜像搜索结果，每张卡片包含图标、名称、描述、统计和拉取操作。
  */
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import {
   useSearchImages,
-  usePullImage,
+  usePullImageStream,
   type Registry,
   type ImageSearchResult,
 } from "@/hooks/useDocker";
 import { useToast } from "@/components/ui/toast";
+import { TagSelectDialog } from "./TagSelectDialog";
+import { PullProgressMini } from "./PullProgressMini";
+import { addPullHistoryItem, getPullHistory } from "@/lib/docker-progress";
 import { formatCount } from "@/lib/utils";
 import {
   Search,
@@ -177,14 +180,46 @@ export function ImageSearchSection({
   const [searchInput, setSearchInput] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const [page, setPage] = useState(1);
-  const [pullingName, setPullingName] = useState<string | null>(null);
+
+  // Tag 选择弹窗状态
+  const [showTagDialog, setShowTagDialog] = useState(false);
+  const [selectedImage, setSelectedImage] = useState<string>("");
+
+  // 跟踪活跃拉取任务中的镜像（用于禁用按钮），仅当状态为 pulling 时禁用
+  const [activeImages, setActiveImages] = useState<Set<string>>(() => {
+    return new Set(
+      getPullHistory()
+        .filter((item) => item.status === "pulling")
+        .map((t) => t.image)
+    );
+  });
+
+  // 监听 localStorage 变化更新活跃镜像
+  useEffect(() => {
+    const updateActive = () => {
+      setActiveImages(
+        new Set(
+          getPullHistory()
+            .filter((item) => item.status === "pulling")
+            .map((t) => t.image)
+        )
+      );
+    };
+    window.addEventListener("storage", updateActive);
+    const interval = setInterval(updateActive, 2000);
+    return () => {
+      window.removeEventListener("storage", updateActive);
+      clearInterval(interval);
+    };
+  }, []);
 
   const {
     data,
     isLoading,
     isFetching,
+    refetch,
   } = useSearchImages(searchQuery, page);
-  const pullImage = usePullImage();
+  const pullImageStream = usePullImageStream();
 
   const results = data?.results ?? [];
   const total = data?.total ?? 0;
@@ -195,8 +230,14 @@ export function ImageSearchSection({
       toast.error("请输入搜索关键词");
       return;
     }
+    const trimmed = searchInput.trim();
     setPage(1);
-    setSearchQuery(searchInput.trim());
+    if (trimmed === searchQuery) {
+      // 关键词未变化时强制重新获取，避免 staleTime 导致点击无效
+      refetch();
+    } else {
+      setSearchQuery(trimmed);
+    }
   };
 
   const clearSearch = () => {
@@ -204,10 +245,23 @@ export function ImageSearchSection({
     setSearchQuery("");
   };
 
+  /** 点击下载按钮 — 打开 tag 选择弹窗 */
   const handlePull = (name: string) => {
-    setPullingName(name);
-    pullImage.mutate(name, {
-      onSettled: () => setPullingName(null),
+    setSelectedImage(name);
+    setShowTagDialog(true);
+  };
+
+  /** 确认下载 — 启动后台拉取任务 */
+  const handleConfirmPull = (imageWithTag: string) => {
+    setShowTagDialog(false);
+    pullImageStream.mutate(imageWithTag, {
+      onSuccess: (data) => {
+        toast.success(`已开始拉取 ${imageWithTag}`);
+        // 保存到 localStorage 历史记录，进度面板会自动显示
+        addPullHistoryItem(data.task_id, imageWithTag);
+        // 触发进度面板刷新
+        window.dispatchEvent(new Event("storage"));
+      },
     });
   };
 
@@ -250,6 +304,7 @@ export function ImageSearchSection({
             )}
             <span className="ml-1">搜索</span>
           </Button>
+          <PullProgressMini />
           <div className="flex items-center gap-2 ml-auto">
             {defaultRegistry && (
               <Badge
@@ -286,9 +341,6 @@ export function ImageSearchSection({
                 <p className="text-sm">
                   未找到与 &quot;{searchQuery}&quot; 相关的镜像
                 </p>
-                <p className="text-xs mt-1 opacity-60">
-                  尝试更换关键词或检查 Registry 配置
-                </p>
               </div>
             ) : (
               <div className="relative">
@@ -303,11 +355,20 @@ export function ImageSearchSection({
                     <ImageCard
                       key={r.name}
                       image={r}
-                      pulling={pullingName === r.name}
+                      pulling={activeImages.has(r.name)}
                       onPull={handlePull}
                     />
                   ))}
                 </div>
+
+                {/* Tag 选择弹窗 */}
+                <TagSelectDialog
+                  key={selectedImage}
+                  open={showTagDialog}
+                  imageName={selectedImage}
+                  onClose={() => setShowTagDialog(false)}
+                  onConfirm={handleConfirmPull}
+                />
               </div>
             )}
 
