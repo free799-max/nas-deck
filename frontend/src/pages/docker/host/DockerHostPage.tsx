@@ -1,16 +1,14 @@
 /**
  * Docker 宿主机信息页面组件
  *
- * 展示 Docker 宿主机的综合信息，包括：
- * - 主机概览（主机名、OS、架构、内核版本）
- * - Docker 引擎信息（版本、API 版本、存储驱动、根目录）
- * - 资源概览（CPU 核心数、内存总量、磁盘使用）
- * - Docker 统计（容器总数/运行中/暂停/已停止、镜像数量）
+ * 以紧凑卡片布局展示 Docker 宿主机综合信息，包括：
+ * - 资源概览（CPU、内存、磁盘、容器总数、运行中、暂停、已停止、镜像；右上角 info 图标悬停查看主机/引擎详情）
  * - Docker 网络列表
  *
  * 当 Docker 不可用或未连接时显示提示信息。
  */
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Separator } from "@/components/ui/separator";
 import {
   Table,
   TableBody,
@@ -20,11 +18,8 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { useDockerHostInfo, useDockerStatus } from "@/hooks/useDocker";
-import { PageHeader } from "@/components/PageHeader";
 import { formatBytes } from "@/lib/utils";
-import { InfoRow } from "../shared/InfoRow";
 import {
-  Monitor,
   Cpu,
   MemoryStick,
   HardDrive,
@@ -34,7 +29,8 @@ import {
   Square,
   Image,
   Network,
-  Server,
+  LayoutDashboard,
+  Info,
 } from "lucide-react";
 
 /**
@@ -47,8 +43,7 @@ export function DockerHostPage() {
   // 加载中状态（优先判断，避免闪烁）
   if (isLoading) {
     return (
-      <div>
-        <PageHeader title="Docker 主机" />
+      <div className="space-y-6">
         <p className="text-muted-foreground">加载中...</p>
       </div>
     );
@@ -57,8 +52,7 @@ export function DockerHostPage() {
   // Docker 不可用或未连接时，显示提示信息
   if (dockerStatus && !dockerStatus.available) {
     return (
-      <div>
-        <h2 className="text-2xl font-bold mb-6">Docker 主机</h2>
+      <div className="space-y-6">
         <p className="text-muted-foreground">Docker 不可用或未连接。</p>
       </div>
     );
@@ -66,8 +60,7 @@ export function DockerHostPage() {
 
   if (!hostInfo) {
     return (
-      <div>
-        <h2 className="text-2xl font-bold mb-6">Docker 主机</h2>
+      <div className="space-y-6">
         <p className="text-muted-foreground">无法获取主机信息。</p>
       </div>
     );
@@ -76,175 +69,174 @@ export function DockerHostPage() {
   const { resources, stats, docker_version } = hostInfo;
 
   return (
-    <div>
-      <PageHeader title="Docker 主机" description="查看 Docker 宿主机综合信息" />
-
-      {/* 第一行：主机概览 + Docker 引擎 */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-4">
-        {/* 主机概览 */}
-        <Card className="rounded-xl">
-          <CardHeader className="pb-2">
+    <div className="space-y-6">
+      {/* 资源概览：硬件资源 + Docker 统计整合到一个卡片 */}
+      <Card className="rounded-xl">
+        <CardHeader className="pb-2">
+          <div className="flex items-center justify-between">
             <CardTitle className="text-base flex items-center gap-2">
-              <Monitor className="h-4 w-4 text-muted-foreground" />
-              主机概览
+              <LayoutDashboard className="h-4 w-4 text-muted-foreground" />
+              资源概览
             </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-lg font-semibold mb-3">{hostInfo.hostname}</div>
-            <InfoRow label="操作系统" value={`${hostInfo.os} (${hostInfo.arch})`} />
-            <InfoRow label="内核版本" value={hostInfo.kernel_version} />
-            <InfoRow label="存储驱动" value={hostInfo.storage_driver} />
-          </CardContent>
-        </Card>
-
-        {/* Docker 引擎 */}
-        <Card className="rounded-xl">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-base flex items-center gap-2">
-              <Server className="h-4 w-4 text-muted-foreground" />
-              Docker 引擎
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <InfoRow label="引擎版本" value={docker_version.version} />
-            <InfoRow label="API 版本" value={docker_version.api_version} />
-            <InfoRow label="Go 版本" value={docker_version.go_version} />
-            <InfoRow label="存储驱动" value={hostInfo.storage_driver} />
-            <InfoRow label="根目录" value={hostInfo.docker_root_dir} />
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* 第二行：资源概览（3 列） */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
-        {/* CPU */}
-        <Card className="rounded-xl">
-          <CardContent className="pt-5 pb-4">
-            <div className="flex items-center gap-3 mb-3">
-              <div className="p-2 rounded-lg bg-muted">
-                <Cpu className="h-5 w-5" />
-              </div>
-              <div>
-                <div className="text-sm text-muted-foreground">CPU</div>
-                <div className="text-xl font-bold">{resources.cpu_cores} 核</div>
+            <div className="relative group">
+              <Info className="h-4 w-4 text-muted-foreground cursor-pointer hover:text-foreground transition-colors" />
+              <div className="absolute right-0 top-full mt-2 hidden group-hover:block z-50 w-64 p-3 rounded-lg border bg-popover text-popover-foreground shadow-md text-xs">
+                <div className="space-y-1.5">
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">主机名</span>
+                    <span className="font-medium">{hostInfo.hostname}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">系统</span>
+                    <span className="font-medium">
+                      {hostInfo.os} ({hostInfo.arch})
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Docker</span>
+                    <span className="font-medium">{docker_version.version}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">API</span>
+                    <span className="font-medium">{docker_version.api_version}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">存储驱动</span>
+                    <span className="font-medium">{hostInfo.storage_driver}</span>
+                  </div>
+                  <div className="flex justify-between gap-2">
+                    <span className="text-muted-foreground shrink-0">根目录</span>
+                    <span className="font-medium truncate" title={hostInfo.docker_root_dir}>
+                      {hostInfo.docker_root_dir}
+                    </span>
+                  </div>
+                </div>
               </div>
             </div>
-          </CardContent>
-        </Card>
-
-        {/* 内存 */}
-        <Card className="rounded-xl">
-          <CardContent className="pt-5 pb-4">
-            <div className="flex items-center gap-3 mb-3">
-              <div className="p-2 rounded-lg bg-muted">
-                <MemoryStick className="h-5 w-5" />
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-5">
+          {/* 硬件资源 */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <div className="flex items-center gap-4">
+              <div className="p-3 rounded-xl bg-muted">
+                <Cpu className="h-6 w-6 text-muted-foreground" />
               </div>
               <div>
-                <div className="text-sm text-muted-foreground">内存</div>
-                <div className="text-xl font-bold">
+                <div className="text-sm font-medium text-muted-foreground">
+                  CPU
+                </div>
+                <div className="text-2xl font-bold">{resources.cpu_cores} 核</div>
+              </div>
+            </div>
+            <div className="flex items-center gap-4">
+              <div className="p-3 rounded-xl bg-muted">
+                <MemoryStick className="h-6 w-6 text-muted-foreground" />
+              </div>
+              <div>
+                <div className="text-sm font-medium text-muted-foreground">
+                  内存
+                </div>
+                <div className="text-2xl font-bold">
                   {formatBytes(resources.memory_total)}
                 </div>
               </div>
             </div>
-          </CardContent>
-        </Card>
-
-        {/* 磁盘 */}
-        <Card className="rounded-xl">
-          <CardContent className="pt-5 pb-4">
-            <div className="flex items-center gap-3 mb-3">
-              <div className="p-2 rounded-lg bg-muted">
-                <HardDrive className="h-5 w-5" />
+            <div className="flex items-center gap-4">
+              <div className="p-3 rounded-xl bg-muted">
+                <HardDrive className="h-6 w-6 text-muted-foreground" />
               </div>
-              <div>
-                <div className="text-sm text-muted-foreground">磁盘</div>
-                <div className="text-xl font-bold">
+              <div className="flex-1 min-w-0">
+                <div className="text-sm font-medium text-muted-foreground">
+                  磁盘
+                </div>
+                <div className="text-2xl font-bold">
                   {formatBytes(resources.disk_total)}
                 </div>
+                {resources.disk_total === 0 ? (
+                  <p className="text-xs text-muted-foreground mt-1">
+                    无法获取磁盘信息
+                  </p>
+                ) : (
+                  <>
+                    <div className="flex justify-between text-xs text-muted-foreground mt-1.5">
+                      <span>已用 {formatBytes(resources.disk_used)}</span>
+                      <span>{resources.disk_usage_percent}%</span>
+                    </div>
+                    <div className="h-2 w-full rounded-full bg-muted overflow-hidden mt-1.5">
+                      <div
+                        className="h-full rounded-full bg-primary transition-all"
+                        style={{ width: `${resources.disk_usage_percent}%` }}
+                      />
+                    </div>
+                  </>
+                )}
               </div>
             </div>
-            {/* 磁盘使用进度条 */}
-            <div className="mt-2">
-              {resources.disk_total === 0 ? (
-                <p className="text-xs text-muted-foreground">无法获取磁盘信息</p>
-              ) : (
-                <>
-                  <div className="flex justify-between text-xs text-muted-foreground mb-1">
-                    <span>已用 {formatBytes(resources.disk_used)}</span>
-                    <span>{resources.disk_usage_percent}%</span>
-                  </div>
-                  <div className="h-2 w-full rounded-full bg-muted overflow-hidden">
-                    <div
-                      className="h-full rounded-full bg-primary transition-all"
-                      style={{ width: `${resources.disk_usage_percent}%` }}
-                    />
-                  </div>
-                </>
-              )}
-            </div>
-          </CardContent>
-        </Card>
-      </div>
+          </div>
 
-      {/* 第三行：Docker 统计（5 列小卡片） */}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-4">
-        {/* 容器总数 */}
-        <Card className="rounded-xl">
-          <CardContent className="pt-4 pb-3">
-            <div className="flex items-center gap-2 mb-2">
-              <Box className="h-4 w-4 text-muted-foreground" />
-              <span className="text-xs text-muted-foreground">容器总数</span>
-            </div>
-            <div className="text-2xl font-bold">{stats.containers_total}</div>
-          </CardContent>
-        </Card>
+          <Separator />
 
-        {/* 运行中 */}
-        <Card className="rounded-xl">
-          <CardContent className="pt-4 pb-3">
-            <div className="flex items-center gap-2 mb-2">
-              <Play className="h-4 w-4 text-green-500" />
-              <span className="text-xs text-muted-foreground">运行中</span>
+          {/* Docker 统计 */}
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3">
+            <div className="flex items-center justify-between rounded-xl bg-muted/50 p-3">
+              <div>
+                <div className="text-xs font-medium text-muted-foreground">
+                  容器总数
+                </div>
+                <div className="text-2xl font-bold">{stats.containers_total}</div>
+              </div>
+              <Box className="h-5 w-5 text-muted-foreground/50" />
             </div>
-            <div className="text-2xl font-bold">{stats.containers_running}</div>
-          </CardContent>
-        </Card>
-
-        {/* 暂停 */}
-        <Card className="rounded-xl">
-          <CardContent className="pt-4 pb-3">
-            <div className="flex items-center gap-2 mb-2">
-              <Pause className="h-4 w-4 text-yellow-500" />
-              <span className="text-xs text-muted-foreground">暂停</span>
+            <div className="flex items-center justify-between rounded-xl bg-muted/50 p-3">
+              <div>
+                <div className="text-xs font-medium text-muted-foreground">
+                  运行中
+                </div>
+                <div className="text-2xl font-bold text-green-600">
+                  {stats.containers_running}
+                </div>
+              </div>
+              <Play className="h-5 w-5 text-green-500/60" />
             </div>
-            <div className="text-2xl font-bold">{stats.containers_paused}</div>
-          </CardContent>
-        </Card>
-
-        {/* 已停止 */}
-        <Card className="rounded-xl">
-          <CardContent className="pt-4 pb-3">
-            <div className="flex items-center gap-2 mb-2">
-              <Square className="h-4 w-4 text-red-500" />
-              <span className="text-xs text-muted-foreground">已停止</span>
+            <div className="flex items-center justify-between rounded-xl bg-muted/50 p-3">
+              <div>
+                <div className="text-xs font-medium text-muted-foreground">
+                  暂停
+                </div>
+                <div className="text-2xl font-bold text-yellow-600">
+                  {stats.containers_paused}
+                </div>
+              </div>
+              <Pause className="h-5 w-5 text-yellow-500/60" />
             </div>
-            <div className="text-2xl font-bold">{stats.containers_stopped}</div>
-          </CardContent>
-        </Card>
-
-        {/* 镜像数量 */}
-        <Card className="rounded-xl">
-          <CardContent className="pt-4 pb-3">
-            <div className="flex items-center gap-2 mb-2">
-              <Image className="h-4 w-4 text-blue-500" />
-              <span className="text-xs text-muted-foreground">镜像</span>
+            <div className="flex items-center justify-between rounded-xl bg-muted/50 p-3">
+              <div>
+                <div className="text-xs font-medium text-muted-foreground">
+                  已停止
+                </div>
+                <div className="text-2xl font-bold text-red-600">
+                  {stats.containers_stopped}
+                </div>
+              </div>
+              <Square className="h-5 w-5 text-red-500/60" />
             </div>
-            <div className="text-2xl font-bold">{stats.images}</div>
-          </CardContent>
-        </Card>
-      </div>
+            <div className="flex items-center justify-between rounded-xl bg-muted/50 p-3">
+              <div>
+                <div className="text-xs font-medium text-muted-foreground">
+                  镜像
+                </div>
+                <div className="text-2xl font-bold text-blue-600">
+                  {stats.images}
+                </div>
+              </div>
+              <Image className="h-5 w-5 text-blue-500/60" />
+            </div>
+          </div>
+        </CardContent>
+      </Card>
 
-      {/* 第四行：Docker 网络列表 */}
+      {/* Docker 网络列表 */}
       <Card className="rounded-xl">
         <CardHeader className="pb-2">
           <CardTitle className="text-base flex items-center gap-2">
@@ -268,9 +260,7 @@ export function DockerHostPage() {
               <TableBody>
                 {hostInfo.networks.map((net) => (
                   <TableRow key={net.id}>
-                    <TableCell className="text-sm font-medium">
-                      {net.name}
-                    </TableCell>
+                    <TableCell className="text-sm font-medium">{net.name}</TableCell>
                     <TableCell className="text-sm">{net.driver}</TableCell>
                     <TableCell className="text-sm">{net.scope}</TableCell>
                     <TableCell className="text-sm text-muted-foreground font-mono">
