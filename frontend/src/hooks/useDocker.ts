@@ -12,10 +12,29 @@
 
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState, useEffect, useRef, useCallback } from "react";
+import { Terminal } from "@xterm/xterm";
+import { FitAddon } from "@xterm/addon-fit";
 import api from "@/lib/api";
 import { useToast } from "@/components/ui/toast";
 import { formatBytes } from "@/lib/utils";
 import { updatePullHistoryItem } from "@/lib/docker-progress";
+
+/** API 错误对象 */
+interface ApiError {
+  displayMessage?: string;
+}
+
+/** 批量删除镜像响应 */
+interface BatchDeleteResult {
+  deleted: string[];
+  failed: { id: string; reason: string }[];
+}
+
+/** 清理未使用镜像响应 */
+interface PruneResult {
+  deleted: string[];
+  space_reclaimed: number;
+}
 
 /**
  * 镜像标签信息
@@ -90,12 +109,112 @@ export interface ContainerInfo {
   id: string;
   /** 容器名称 */
   name: string;
-  /** 容器运行状态（如 running、stopped 等） */
+  /** 容器运行状态（如 running、exited 等） */
   status: string;
+  /** 状态中文摘要 */
+  state: string;
   /** 容器健康状态（如 healthy、unhealthy 等） */
   health: string;
   /** 容器使用的镜像名称 */
   image: string;
+  /** 端口映射摘要 */
+  ports: string;
+  /** 容器标签 */
+  labels: Record<string, string>;
+  /** 创建时间 */
+  created: string;
+}
+
+/** 容器端口绑定详情 */
+export interface ContainerPortBinding {
+  container_port: string;
+  host_ip: string;
+  host_port: string;
+}
+
+/** 容器挂载详情 */
+export interface ContainerMount {
+  type: string;
+  source: string;
+  destination: string;
+  mode: string;
+  rw: boolean;
+}
+
+/** 容器网络信息 */
+export interface ContainerNetwork {
+  name: string;
+  ip_address: string;
+  gateway: string;
+  mac_address: string;
+}
+
+/** 容器完整详情 */
+export interface ContainerDetail {
+  id: string;
+  name: string;
+  image: string;
+  status: string;
+  state: string;
+  health: string;
+  command: string[] | null;
+  entrypoint: string[] | null;
+  env: string[] | null;
+  working_dir: string | null;
+  user: string | null;
+  labels: Record<string, string> | null;
+  ports: ContainerPortBinding[];
+  mounts: ContainerMount[];
+  networks: ContainerNetwork[];
+  restart_policy: string;
+  network_mode: string;
+  privileged: boolean;
+  created: string;
+  started_at: string;
+  finished_at: string;
+  exit_code: number;
+  error: string;
+}
+
+/** 容器操作响应 */
+export interface ContainerActionResponse {
+  status: string;
+  error: string;
+}
+
+/** 创建容器请求 */
+export interface ContainerCreateRequest {
+  image: string;
+  name?: string | null;
+  command?: string | null;
+  entrypoint?: string | null;
+  ports?: { container: string; host: string }[];
+  environment?: { key: string; value: string }[];
+  volumes?: { host: string; container: string; mode?: "rw" | "ro" }[];
+  network?: string | null;
+  labels?: { key: string; value: string }[];
+  restart_policy?: "no" | "unless-stopped" | "always" | "on-failure";
+  auto_start?: boolean;
+}
+
+/** 批量容器操作请求 */
+export interface ContainerBatchActionRequest {
+  ids: string[];
+  action: "start" | "stop" | "restart" | "remove";
+}
+
+/** 容器执行命令请求 */
+export interface ContainerExecRequest {
+  command: string;
+  workdir?: string | null;
+  user?: string | null;
+  environment?: { key: string; value: string }[];
+}
+
+/** 容器执行命令响应 */
+export interface ContainerExecResponse {
+  exit_code: number;
+  output: string;
 }
 
 /** Docker 引擎版本信息 */
@@ -175,6 +294,7 @@ export function useContainers() {
   return useQuery<ContainerInfo[]>({
     queryKey: ["docker", "containers"],
     queryFn: () => api.get("/docker/containers").then((r) => r.data),
+    refetchInterval: 10000,
   });
 }
 
@@ -193,16 +313,382 @@ export function useContainerAction() {
   return useMutation({
     // 向容器操作接口发送 POST 请求
     mutationFn: ({ id, action }: { id: string; action: string }) =>
-      api.post(`/docker/containers/${id}/action`, { action }),
-    // 操作成功后，使容器列表缓存失效以触发重新查询
+      api
+        .post<ContainerActionResponse>(`/docker/containers/${id}/action`, { action })
+        .then((r) => r.data),
+    // 操作成功后，使容器列表缓存失效以触发重新查询，并短时轮询确保状态稳定
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["docker", "containers"] });
       toast.success("操作成功");
+
+      // 短时轮询：500ms 间隔，最多 6 次（3 秒），让容器状态尽快同步到最新
+      let count = 0;
+      const maxPolls = 6;
+      const interval = 500;
+      const timer = setInterval(() => {
+        count += 1;
+        qc.refetchQueries({ queryKey: ["docker", "containers"] });
+        if (count >= maxPolls) {
+          clearInterval(timer);
+        }
+      }, interval);
     },
-    onError: (error: any) => {
+    onError: (error: ApiError) => {
       toast.error(error.displayMessage || "操作失败");
     },
   });
+}
+
+/**
+ * 创建容器（mutation）
+ *
+ * @returns useMutation 对象，传入参数为 ContainerCreateRequest
+ */
+export function useCreateContainer() {
+  const qc = useQueryClient();
+  const toast = useToast();
+  return useMutation({
+    mutationFn: (data: ContainerCreateRequest) =>
+      api.post<ContainerInfo>("/docker/containers", data).then((r) => r.data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["docker", "containers"] });
+      toast.success("容器创建成功");
+    },
+    onError: (error: ApiError) => {
+      toast.error(error.displayMessage || "创建容器失败");
+    },
+  });
+}
+
+/**
+ * 批量操作容器（mutation）
+ *
+ * @returns useMutation 对象，传入参数为 ContainerBatchActionRequest
+ */
+export function useBatchContainerAction() {
+  const qc = useQueryClient();
+  const toast = useToast();
+  return useMutation({
+    mutationFn: (data: ContainerBatchActionRequest) =>
+      api.post<{ succeeded: string[]; failed: { id: string; reason: string }[] }>(
+        "/docker/containers/batch-action",
+        data
+      ),
+    onSuccess: (res, variables) => {
+      qc.invalidateQueries({ queryKey: ["docker", "containers"] });
+      const actionMap: Record<string, string> = {
+        start: "启动",
+        stop: "停止",
+        restart: "重启",
+        remove: "删除",
+      };
+      const actionText = actionMap[variables.action] || variables.action;
+      const succeeded = res.data?.succeeded?.length || 0;
+      const failed = res.data?.failed?.length || 0;
+      if (succeeded > 0) {
+        toast.success(`${actionText} ${succeeded} 个容器成功`);
+      }
+      if (failed > 0) {
+        toast.error(`${failed} 个容器${actionText}失败`);
+      }
+    },
+    onError: (error: ApiError) => {
+      toast.error(error.displayMessage || "批量操作失败");
+    },
+  });
+}
+
+/**
+ * 查询容器详情
+ *
+ * @param container_id 容器 ID
+ * @returns useQuery 对象，data 类型为 ContainerDetail
+ */
+export function useContainerDetail(container_id: string | null) {
+  return useQuery<ContainerDetail>({
+    queryKey: ["docker", "containers", "detail", container_id],
+    queryFn: () =>
+      api
+        .get<ContainerDetail>(`/docker/containers/${container_id}/detail`)
+        .then((r) => r.data),
+    enabled: !!container_id,
+  });
+}
+
+/**
+ * 容器日志流元数据
+ *
+ * SSE 建立后首条消息携带的容器实时状态信息。
+ */
+export interface ContainerLogMeta {
+  /** 容器短 ID */
+  container_id: string;
+  /** 容器名称 */
+  name: string;
+  /** Docker 原始状态，如 running / exited */
+  status: string;
+  /** 状态中文摘要 */
+  state: string;
+}
+
+/**
+ * 流式获取容器日志（SSE）
+ *
+ * @param container_id 容器 ID
+ * @param tail 返回最后 N 行日志
+ * @param onError 错误回调，由调用方决定如何展示错误（如 toast 并关闭弹窗）
+ * @returns 日志行数组、连接状态、容器元数据、清空函数
+ */
+export function useContainerLogsStream(
+  container_id: string | null,
+  tail: number = 100,
+  onError?: (message: string) => void
+) {
+  const [logs, setLogs] = useState<string[]>([]);
+  const [connected, setConnected] = useState(false);
+  const [meta, setMeta] = useState<ContainerLogMeta | null>(null);
+  const onErrorRef = useRef(onError);
+
+  // 保持 onError 最新引用，避免其变化导致 SSE 反复重建
+  useEffect(() => {
+    onErrorRef.current = onError;
+  }, [onError]);
+
+  const clearLogs = useCallback(() => setLogs([]), []);
+
+  useEffect(() => {
+    if (!container_id) return;
+
+    const token = localStorage.getItem("token") || "";
+    const es = new EventSource(
+      `/api/docker/containers/${container_id}/logs/stream?tail=${tail}&follow=true&timestamps=true&token=${token}`
+    );
+
+    es.onopen = () => {
+      setConnected(true);
+      setLogs([]);
+      setMeta(null);
+    };
+
+    es.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        if (data.error) {
+          onErrorRef.current?.(data.error);
+          setConnected(false);
+          return;
+        }
+        if (data.meta) {
+          setMeta(data.meta as ContainerLogMeta);
+          return;
+        }
+        if (typeof data.line === "string") {
+          setLogs((prev) => [...prev, data.line]);
+        }
+      } catch {
+        // 忽略解析错误
+      }
+    };
+
+    es.onerror = () => {
+      setConnected(false);
+    };
+
+    return () => {
+      es.close();
+      setLogs([]);
+      setMeta(null);
+    };
+  }, [container_id, tail]);
+
+  return { logs, connected, meta, clearLogs };
+}
+
+/**
+ * 在容器内执行命令（mutation）
+ *
+ * @returns useMutation 对象，传入参数为 { id, data }
+ */
+export function useContainerExec() {
+  const toast = useToast();
+  return useMutation({
+    mutationFn: ({
+      id,
+      data,
+    }: {
+      id: string;
+      data: ContainerExecRequest;
+    }) =>
+      api
+        .post<ContainerExecResponse>(`/docker/containers/${id}/exec`, data)
+        .then((r) => r.data),
+    onSuccess: () => {
+      toast.success("命令执行完成");
+    },
+    onError: (error: ApiError) => {
+      toast.error(error.displayMessage || "执行命令失败");
+    },
+  });
+}
+
+/**
+ * 容器交互式终端 Hook
+ *
+ * 通过 WebSocket 建立类似 `docker exec -it` 的伪终端会话，
+ * 返回 terminal 挂载点与连接状态。
+ *
+ * @param containerId 容器 ID，为 null 时不建立连接
+ * @param options shell、workdir、user 等选项
+ * @returns terminalRef、connected、error、fitTerminal、clearTerminal、reconnect
+ */
+export function useContainerTerminal(
+  containerId: string | null,
+  options: {
+    shell?: string;
+    workdir?: string | null;
+    user?: string | null;
+  } = {}
+) {
+  const { shell = "/bin/sh", workdir, user } = options;
+  const terminalRef = useRef<HTMLDivElement>(null);
+  const terminalInstanceRef = useRef<Terminal | null>(null);
+  const fitAddonRef = useRef<FitAddon | null>(null);
+  const wsRef = useRef<WebSocket | null>(null);
+  const [connected, setConnected] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [connectKey, setConnectKey] = useState(0);
+
+  useEffect(() => {
+    if (!containerId || !terminalRef.current) return;
+
+    const terminal = new Terminal({
+      cursorBlink: true,
+      fontSize: 13,
+      fontFamily:
+        'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace',
+      theme: { background: "#0a0a0a", foreground: "#e5e5e5" },
+      convertEol: true,
+      scrollback: 10000,
+    });
+    const fitAddon = new FitAddon();
+    terminal.loadAddon(fitAddon);
+    terminal.open(terminalRef.current);
+    fitAddon.fit();
+    terminal.focus();
+
+    terminalInstanceRef.current = terminal;
+    fitAddonRef.current = fitAddon;
+
+    const token = localStorage.getItem("token") || "";
+    const params = new URLSearchParams({ token, shell });
+    if (workdir) params.set("workdir", workdir);
+    if (user) params.set("user", user);
+    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+    const ws = new WebSocket(
+      `${protocol}//${window.location.host}/api/docker/containers/${containerId}/exec?${params.toString()}`
+    );
+
+    ws.onopen = () => {
+      setConnected(true);
+      setError(null);
+      terminal.focus();
+      const dims = fitAddon.proposeDimensions();
+      if (dims) {
+        ws.send(
+          JSON.stringify({
+            type: "resize",
+            cols: dims.cols,
+            rows: dims.rows,
+          })
+        );
+      }
+    };
+
+    ws.onmessage = (event) => {
+      terminal.write(event.data);
+    };
+
+    ws.onclose = () => {
+      setConnected(false);
+      terminal.write("\r\n[33m[连接已关闭][0m\r\n");
+    };
+
+    ws.onerror = () => {
+      setError("连接失败");
+      setConnected(false);
+    };
+
+    const disposeOnData = terminal.onData((data) => {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(data);
+      }
+    });
+
+    const handleResize = () => {
+      fitAddon.fit();
+      const dims = fitAddon.proposeDimensions();
+      if (dims && ws.readyState === WebSocket.OPEN) {
+        ws.send(
+          JSON.stringify({
+            type: "resize",
+            cols: dims.cols,
+            rows: dims.rows,
+          })
+        );
+      }
+    };
+    window.addEventListener("resize", handleResize);
+
+    wsRef.current = ws;
+
+    return () => {
+      disposeOnData.dispose();
+      window.removeEventListener("resize", handleResize);
+      ws.close();
+      terminal.dispose();
+      terminalInstanceRef.current = null;
+      fitAddonRef.current = null;
+      wsRef.current = null;
+    };
+  }, [containerId, shell, workdir, user, connectKey]);
+
+  const focusTerminal = useCallback(() => {
+    terminalInstanceRef.current?.focus();
+  }, []);
+
+  const fitTerminal = useCallback(() => {
+    fitAddonRef.current?.fit();
+    const dims = fitAddonRef.current?.proposeDimensions();
+    const ws = wsRef.current;
+    if (dims && ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(
+        JSON.stringify({
+          type: "resize",
+          cols: dims.cols,
+          rows: dims.rows,
+        })
+      );
+    }
+  }, []);
+
+  const clearTerminal = useCallback(() => {
+    terminalInstanceRef.current?.clear();
+  }, []);
+
+  const reconnect = useCallback(() => {
+    wsRef.current?.close();
+    setConnectKey((k) => k + 1);
+  }, []);
+
+  return {
+    terminalRef,
+    connected,
+    error,
+    fitTerminal,
+    focusTerminal,
+    clearTerminal,
+    reconnect,
+  };
 }
 
 /**
@@ -367,7 +853,7 @@ export function useRemoveImage() {
       qc.invalidateQueries({ queryKey: ["docker", "images"], exact: true });
       toast.success("镜像已删除");
     },
-    onError: (error: any) => {
+    onError: (error: ApiError) => {
       toast.error(error.displayMessage || "删除失败");
     },
   });
@@ -407,7 +893,7 @@ export function usePullImage() {
       qc.invalidateQueries({ queryKey: ["docker", "images"], exact: true });
       toast.success("镜像拉取成功");
     },
-    onError: (error: any) => {
+    onError: (error: ApiError) => {
       toast.error(error.displayMessage || "拉取失败");
     },
   });
@@ -439,7 +925,7 @@ export function useCreateRegistry() {
       qc.invalidateQueries({ queryKey: ["docker", "registries"] });
       toast.success("配置已创建");
     },
-    onError: (error: any) => {
+    onError: (error: ApiError) => {
       toast.error(error.displayMessage || "创建失败");
     },
   });
@@ -460,7 +946,7 @@ export function useUpdateRegistry() {
       qc.invalidateQueries({ queryKey: ["docker", "registries"] });
       toast.success("配置已更新");
     },
-    onError: (error: any) => {
+    onError: (error: ApiError) => {
       toast.error(error.displayMessage || "更新失败");
     },
   });
@@ -480,7 +966,7 @@ export function useDeleteRegistry() {
       qc.invalidateQueries({ queryKey: ["docker", "registries"] });
       toast.success("配置已删除");
     },
-    onError: (error: any) => {
+    onError: (error: ApiError) => {
       toast.error(error.displayMessage || "删除失败");
     },
   });
@@ -501,7 +987,7 @@ export function useSetDefaultRegistry() {
       qc.invalidateQueries({ queryKey: ["docker", "registries"] });
       toast.success("默认配置已切换");
     },
-    onError: (error: any) => {
+    onError: (error: ApiError) => {
       toast.error(error.displayMessage || "切换失败");
     },
   });
@@ -518,7 +1004,7 @@ export function useBatchRemoveImages() {
   return useMutation({
     mutationFn: (data: BatchImageDeleteRequest) =>
       api.post("/docker/images/batch-delete", data),
-    onSuccess: (res: any) => {
+    onSuccess: (res: { data?: BatchDeleteResult }) => {
       const deletedTags: string[] = res.data?.deleted || [];
       qc.setQueryData<ImageInfo[]>(["docker", "images"], (old) =>
         old?.filter((img) => !deletedTags.includes(img.full_tag)) ?? []
@@ -532,7 +1018,7 @@ export function useBatchRemoveImages() {
         toast.error(`${failed} 个镜像删除失败`);
       }
     },
-    onError: (error: any) => {
+    onError: (error: ApiError) => {
       toast.error(error.displayMessage || "批量删除失败");
     },
   });
@@ -602,6 +1088,7 @@ export function usePullImageStream() {
  * @returns 每个任务的状态映射 { [taskId]: { progress, status, error, connected } }
  */
 export function useAllPullProgress(taskIds: string[]) {
+  const taskIdsKey = taskIds.join(",");
   const [states, setStates] = useState<
     Record<
       string,
@@ -819,7 +1306,7 @@ export function useAllPullProgress(taskIds: string[]) {
     return () => {
       mountedRef.current = false;
     };
-  }, [taskIds.join(",")]);
+  }, [taskIdsKey, taskIds]);
 
   // 组件卸载时统一清理所有连接
   useEffect(() => {
@@ -857,7 +1344,7 @@ export function useAllPullProgress(taskIds: string[]) {
       }, 10 * 60 * 1000)
     );
     return () => timers.forEach(clearTimeout);
-  }, [taskIds.join(",")]);
+  }, [taskIdsKey, taskIds]);
 
   /** 手动重连（全部或指定任务） */
   const reconnect = useCallback((targetTaskId?: string) => {
@@ -911,7 +1398,7 @@ export function usePruneImages() {
   const toast = useToast();
   return useMutation({
     mutationFn: () => api.post("/docker/images/prune"),
-    onSuccess: (res: any) => {
+    onSuccess: (res: { data?: PruneResult }) => {
       const deletedTags: string[] = res.data?.deleted || [];
       qc.setQueryData<ImageInfo[]>(["docker", "images"], (old) =>
         old?.filter((img) => !deletedTags.includes(img.full_tag)) ?? []
@@ -924,7 +1411,7 @@ export function usePruneImages() {
         toast.success("没有可清理的未使用镜像");
       }
     },
-    onError: (error: any) => {
+    onError: (error: ApiError) => {
       toast.error(error.displayMessage || "清理失败");
     },
   });

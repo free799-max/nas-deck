@@ -19,6 +19,35 @@ import json
 from pydantic import BaseModel, field_serializer, field_validator
 
 
+class PortMapping(BaseModel):
+    """容器端口映射配置。"""
+
+    container: str  # 容器端口，如 "80/tcp"
+    host: str  # 宿主机端口，如 "8080" 或 "127.0.0.1:8080"
+
+
+class EnvVar(BaseModel):
+    """环境变量键值对。"""
+
+    key: str
+    value: str
+
+
+class VolumeMount(BaseModel):
+    """卷挂载配置。"""
+
+    host: str  # 宿主机路径
+    container: str  # 容器内路径
+    mode: Literal["rw", "ro"] = "rw"  # 读写模式
+
+
+class LabelItem(BaseModel):
+    """标签键值对。"""
+
+    key: str
+    value: str
+
+
 class ContainerInfo(BaseModel):
     """
     容器信息响应数据模型。
@@ -29,15 +58,23 @@ class ContainerInfo(BaseModel):
         id: 容器 ID（Docker 引擎中的哈希字符串）
         name: 容器名称
         status: 容器运行状态（如 running、exited 等）
+        state: 容器状态摘要（如运行中、已停止、已暂停）
         health: 容器健康检查状态（如 healthy、unhealthy 等）
         image: 容器所使用的镜像名称
+        ports: 端口映射摘要字符串
+        labels: 容器标签键值对
+        created: 创建时间（ISO 8601 格式）
     """
 
     id: str  # 容器 ID
     name: str  # 容器名称
     status: str  # 运行状态
+    state: str  # 状态摘要
     health: str  # 健康检查状态
     image: str  # 使用的镜像
+    ports: str  # 端口映射摘要
+    labels: dict[str, str]  # 容器标签
+    created: str  # 创建时间
 
 
 class ContainerAction(BaseModel):
@@ -51,6 +88,175 @@ class ContainerAction(BaseModel):
     """
 
     action: Literal["start", "stop", "restart"]  # 操作类型，限定三种取值
+
+
+class ContainerActionResponse(BaseModel):
+    """
+    容器操作响应数据模型。
+
+    Attributes:
+        status: 操作后容器的实际状态
+        error: 容器错误信息（如启动失败原因），无错误时为空字符串
+    """
+
+    status: str
+    error: str = ""
+
+
+class ContainerCreateRequest(BaseModel):
+    """
+    创建容器请求数据模型。
+
+    Attributes:
+        image: 镜像名称（含标签，如 "nginx:latest"）
+        name: 容器名称（可选）
+        command: 启动命令（可选，按 shell 规则拆分）
+        entrypoint: 入口点（可选）
+        ports: 端口映射列表
+        environment: 环境变量列表
+        volumes: 卷挂载列表
+        network: 网络模式/名称（可选）
+        labels: 标签列表
+        restart_policy: 重启策略（no/unless-stopped/always/on-failure）
+        auto_start: 创建后是否自动启动，默认 True
+    """
+
+    image: str
+    name: str | None = None
+    command: str | None = None
+    entrypoint: str | None = None
+    ports: list[PortMapping] | None = None
+    environment: list[EnvVar] | None = None
+    volumes: list[VolumeMount] | None = None
+    network: str | None = None
+    labels: list[LabelItem] | None = None
+    restart_policy: Literal["no", "unless-stopped", "always", "on-failure"] = "no"
+    auto_start: bool = True
+
+
+class ContainerPortBinding(BaseModel):
+    """容器端口绑定详情。"""
+
+    container_port: str
+    host_ip: str
+    host_port: str
+
+
+class ContainerMount(BaseModel):
+    """容器挂载详情。"""
+
+    type: str
+    source: str
+    destination: str
+    mode: str
+    rw: bool
+
+
+class ContainerNetwork(BaseModel):
+    """容器网络信息。"""
+
+    name: str
+    ip_address: str
+    gateway: str
+    mac_address: str
+
+
+class ContainerDetail(BaseModel):
+    """
+    容器详情响应数据模型。
+
+    Attributes:
+        id: 容器短 ID
+        name: 容器名称
+        image: 容器镜像
+        status: 容器运行状态
+        state: 状态摘要
+        health: 健康状态
+        command: 启动命令
+        entrypoint: 入口点
+        env: 环境变量列表
+        working_dir: 工作目录
+        user: 运行用户
+        labels: 标签键值对
+        ports: 端口绑定列表
+        mounts: 挂载列表
+        networks: 网络信息列表
+        restart_policy: 重启策略
+        network_mode: 网络模式
+        privileged: 是否特权容器
+        created: 创建时间
+        started_at: 启动时间
+        finished_at: 停止时间
+        exit_code: 退出码
+        error: 错误信息
+    """
+
+    id: str
+    name: str
+    image: str
+    status: str
+    state: str
+    health: str
+    command: list[str] | None = None
+    entrypoint: list[str] | None = None
+    env: list[str] | None = None
+    working_dir: str | None = None
+    user: str | None = None
+    labels: dict[str, str] | None = None
+    ports: list[ContainerPortBinding]
+    mounts: list[ContainerMount]
+    networks: list[ContainerNetwork]
+    restart_policy: str
+    network_mode: str
+    privileged: bool
+    created: str
+    started_at: str
+    finished_at: str
+    exit_code: int
+    error: str
+
+
+class ContainerBatchActionRequest(BaseModel):
+    """
+    批量容器操作请求数据模型。
+
+    Attributes:
+        ids: 容器 ID 列表
+        action: 要执行的操作（start/stop/restart/remove）
+    """
+
+    ids: list[str]
+    action: Literal["start", "stop", "restart", "remove"]
+
+
+class ContainerExecRequest(BaseModel):
+    """
+    容器内执行命令请求数据模型。
+
+    Attributes:
+        command: 要执行的命令（按 shell 规则拆分）
+        workdir: 工作目录（可选）
+        user: 执行用户（可选）
+        environment: 额外环境变量列表（可选）
+    """
+
+    command: str
+    workdir: str | None = None
+    user: str | None = None
+    environment: list[EnvVar] | None = None
+
+
+class ContainerExecResponse(BaseModel):
+    """
+    容器内执行命令响应数据模型。
+
+    Attributes:
+        exit_code: 命令退出码
+        output: 命令输出（stdout + stderr）
+    """
+
+    exit_code: int
+    output: str
 
 
 class DockerVersionInfo(BaseModel):
@@ -456,3 +662,156 @@ class HostInfo(BaseModel):
     storage_driver: str
     docker_root_dir: str
     networks: list[NetworkInfo]
+
+
+# ===================== Compose 编排 =====================
+
+
+class ComposeProjectCreate(BaseModel):
+    """创建 Compose 项目请求。
+
+    Attributes:
+        project_name: CLI 项目名
+        description: 项目描述
+        content: 初始 docker-compose.yml 内容
+    """
+
+    project_name: str
+    description: str | None = None
+    content: str
+
+
+class ComposeProjectUpdate(BaseModel):
+    """更新 Compose 项目元数据请求。
+
+    Attributes:
+        description: 项目描述
+        is_active: 是否启用
+    """
+
+    description: str | None = None
+    is_active: bool | None = None
+
+
+class ComposeEditRequest(BaseModel):
+    """编辑 Compose 项目并自动部署请求。
+
+    Attributes:
+        content: 更新后的 docker-compose.yml 内容
+        comment: 新版本说明，为空时默认"编辑更新"
+        description: 同时更新的项目描述，为空时保持不变
+    """
+
+    content: str
+    comment: str | None = None
+    description: str | None = None
+
+
+class ComposeVersionOut(BaseModel):
+    """Compose 版本响应。
+
+    Attributes:
+        id: 版本 ID
+        version_number: 版本号
+        content: YAML 内容
+        comment: 版本说明
+        is_current: 是否为当前版本
+        created_by_user_id: 创建用户 ID
+        created_at: 创建时间
+    """
+
+    id: int
+    version_number: int
+    content: str
+    comment: str | None = None
+    is_current: bool
+    created_by_user_id: int | None = None
+    created_at: str
+
+    class Config:
+        from_attributes = True
+
+
+class ComposeVersionCreate(BaseModel):
+    """新增 Compose 版本请求。
+
+    Attributes:
+        content: YAML 内容
+    """
+
+    content: str
+
+
+class ComposeStackStatusOut(BaseModel):
+    """Compose Stack 运行时状态响应。
+
+    Attributes:
+        status: 整体状态
+        service_count: 服务总数
+        running_count: 运行中服务数
+        ports: 端口映射摘要列表
+        last_action: 最后操作
+        last_action_at: 最后操作时间
+        updated_at: 更新时间
+    """
+
+    status: str
+    service_count: int
+    running_count: int
+    ports: list[str]
+    last_action: str | None = None
+    last_action_at: str | None = None
+    updated_at: str
+
+
+class ComposeProjectOut(BaseModel):
+    """Compose 项目响应。
+
+    Attributes:
+        id: 项目 ID
+        project_name: CLI 项目名
+        description: 项目描述
+        is_active: 是否启用
+        current_version: 当前版本信息
+        stack: Stack 状态
+        config_files: compose 文件路径列表
+        working_dir: compose 执行工作目录
+        created_at: 创建时间
+        updated_at: 更新时间
+    """
+
+    id: int
+    project_name: str
+    description: str | None = None
+    is_active: bool
+    current_version: ComposeVersionOut | None = None
+    stack: ComposeStackStatusOut | None = None
+    config_files: list[str] | None = None
+    working_dir: str | None = None
+    created_at: str
+    updated_at: str
+
+    class Config:
+        from_attributes = True
+
+
+class ComposeActionRequest(BaseModel):
+    """Compose 项目操作请求。
+
+    Attributes:
+        action: 操作类型，支持 up / down / restart
+    """
+
+    action: Literal["up", "down", "restart"]
+
+
+class ComposeLogQuery(BaseModel):
+    """Compose 日志查询参数。
+
+    Attributes:
+        tail: 返回最后 N 行
+        services: 指定服务列表，为空表示全部
+    """
+
+    tail: int = 100
+    services: list[str] | None = None

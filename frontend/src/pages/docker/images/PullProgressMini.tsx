@@ -12,7 +12,7 @@
 import { useState, useEffect } from "react";
 import { useAllPullProgress } from "@/hooks/useDocker";
 import { Popover as PopoverPrimitive } from "@base-ui/react/popover";
-import { Popover } from "@/components/ui/popover";
+import { Popover, PopoverTrigger } from "@/components/ui/popover";
 import {
   getPullHistory,
   removePullHistoryItem,
@@ -94,8 +94,8 @@ export function PullProgressMini() {
   }
 
   return (
-    <Popover.Root>
-      <Popover.Trigger className="relative shrink-0">
+    <Popover>
+      <PopoverTrigger className="relative shrink-0">
         <div className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-muted/60 hover:bg-muted transition-colors cursor-pointer">
           <Download className="h-3.5 w-3.5 text-muted-foreground" />
           {/* 迷你进度条 */}
@@ -120,7 +120,7 @@ export function PullProgressMini() {
             </span>
           )}
         </div>
-      </Popover.Trigger>
+      </PopoverTrigger>
 
       <PopoverPrimitive.Portal>
         <PopoverPrimitive.Positioner sideOffset={12} align="center">
@@ -177,6 +177,6 @@ export function PullProgressMini() {
           </PopoverPrimitive.Popup>
         </PopoverPrimitive.Positioner>
       </PopoverPrimitive.Portal>
-    </Popover.Root>
+    </Popover>
   );
 }

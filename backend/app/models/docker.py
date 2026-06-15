@@ -6,10 +6,14 @@
 
 from datetime import datetime
 
-from sqlalchemy import String, Text, ForeignKey, DateTime, func
+from sqlalchemy import String, Text, ForeignKey, DateTime, func, Integer, Boolean
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
+
+
+COMPOSE_PROJECT_LABEL = "nasdeck.compose.project"
+"""Compose 项目标签键，用于标识容器归属。"""
 
 
 class DockerMirrorConfig(Base):
@@ -80,3 +84,124 @@ class DockerContainer(Base):
 
     # 关联的插件实例，uselist=False 表示一对一关系
     instance = relationship("PluginInstance", back_populates="container")
+
+
+class DockerComposeProject(Base):
+    """Docker Compose 项目模型。
+
+    记录 Compose 项目的元数据、当前激活版本与运行时配置文件路径。
+    支持系统创建的项目与从 Docker 自动发现的外部项目统一维护。
+
+    Attributes:
+        id: 项目唯一标识
+        project_name: CLI 项目名（唯一，用于 docker compose -p）
+        description: 项目描述
+        is_active: 是否启用
+        config_files: compose 文件路径列表（JSON 序列化）
+        working_dir: compose 执行工作目录
+        created_at: 创建时间
+        updated_at: 更新时间
+        versions: 关联的版本列表
+        stack: 关联的运行时状态（一对一）
+    """
+
+    __tablename__ = "docker_compose_projects"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_name: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    config_files: Mapped[str | None] = mapped_column(Text, nullable=True)
+    working_dir: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=func.now(), onupdate=func.now()
+    )
+
+    versions: Mapped[list["DockerComposeVersion"]] = relationship(
+        "DockerComposeVersion",
+        back_populates="project",
+        cascade="all, delete-orphan",
+        order_by="DockerComposeVersion.version_number.desc()",
+    )
+    stack: Mapped["DockerComposeStack | None"] = relationship(
+        "DockerComposeStack",
+        back_populates="project",
+        uselist=False,
+        cascade="all, delete-orphan",
+    )
+
+
+class DockerComposeVersion(Base):
+    """Docker Compose 版本模型。
+
+    保存每个 Compose 项目的历史 YAML 版本内容。
+
+    Attributes:
+        id: 版本唯一标识
+        project_id: 所属项目 ID
+        version_number: 版本号（自动递增）
+        content: YAML 内容
+        comment: 版本说明
+        created_by_user_id: 创建用户 ID
+        created_at: 创建时间
+        project: 关联的项目
+    """
+
+    __tablename__ = "docker_compose_versions"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[int] = mapped_column(
+        ForeignKey("docker_compose_projects.id"), nullable=False
+    )
+    version_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    comment: Mapped[str | None] = mapped_column(Text, nullable=True)
+    is_current: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_by_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
+
+    project: Mapped["DockerComposeProject"] = relationship(
+        "DockerComposeProject", back_populates="versions"
+    )
+
+
+class DockerComposeStack(Base):
+    """Docker Compose Stack 运行时状态缓存。
+
+    记录项目的实时状态摘要，避免每次查询都调用 CLI。
+
+    Attributes:
+        id: 状态记录唯一标识
+        project_id: 所属项目 ID
+        status: Stack 整体状态
+        service_count: 服务总数
+        running_count: 运行中服务数
+        ports: 端口映射摘要（JSON）
+        last_action: 最后执行的操作
+        last_action_at: 最后操作时间
+        updated_at: 更新时间
+        project: 关联的项目
+    """
+
+    __tablename__ = "docker_compose_stacks"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[int] = mapped_column(
+        ForeignKey("docker_compose_projects.id"), nullable=False, unique=True
+    )
+    status: Mapped[str] = mapped_column(String(20), default="unknown")
+    service_count: Mapped[int] = mapped_column(Integer, default=0)
+    running_count: Mapped[int] = mapped_column(Integer, default=0)
+    ports: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_action: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    last_action_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=func.now(), onupdate=func.now()
+    )
+
+    project: Mapped["DockerComposeProject"] = relationship(
+        "DockerComposeProject", back_populates="stack"
+    )

@@ -10,13 +10,25 @@
 - PluginInstance: 插件实例模型
 - DockerContainer: Docker 容器模型
 - DockerMirrorConfig: Docker 镜像查询配置模型
+- DockerComposeProject: Docker Compose 项目模型
+- DockerComposeVersion: Docker Compose 版本模型
+- DockerComposeStack: Docker Compose Stack 运行时状态模型
 """
 
 from app.models.user import User
 from app.models.plugin import PluginInstance
-from app.models.docker import DockerContainer, DockerMirrorConfig
+from app.models.docker import (
+    DockerContainer,
+    DockerMirrorConfig,
+    DockerComposeProject,
+    DockerComposeVersion,
+    DockerComposeStack,
+    COMPOSE_PROJECT_LABEL,
+)
 
 # __all__ 显式声明公开导出的模型名称，便于 `from app.models import *` 使用
 __all__ = [
     "User", "PluginInstance", "DockerContainer", "DockerMirrorConfig",
+    "DockerComposeProject", "DockerComposeVersion", "DockerComposeStack",
+    "COMPOSE_PROJECT_LABEL",
 ]

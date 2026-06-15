@@ -5,7 +5,10 @@ Docker 客户端管理器模块。
 - 查询容器列表（支持过滤条件）
 - 获取单个容器详情
 - 对容器执行启动、停止、重启操作
-- 获取容器日志
+- 批量操作容器
+- 创建容器
+- 获取容器日志（含流式）
+- 在容器内执行命令
 - 检测 Docker 服务是否可用及容器健康状态
 
 本模块在导入时会创建一个全局单例 docker_manager，供其他模块直接使用。
@@ -15,6 +18,7 @@ import json
 import logging
 import os
 import queue
+import shlex
 import shutil
 import threading
 import time
@@ -39,8 +43,8 @@ class DockerManager:
         _client: Docker SDK 客户端实例，连接失败时为 None。
     """
 
-    # 允许对容器执行的操作白名单，仅限 start / stop / restart
-    _ALLOWED_ACTIONS = frozenset({"start", "stop", "restart"})
+    # 允许对容器执行的操作白名单，仅限 start / stop / restart / remove
+    _ALLOWED_ACTIONS = frozenset({"start", "stop", "restart", "remove"})
 
     def __init__(self):
         """初始化 Docker 客户端。
@@ -108,16 +112,19 @@ class DockerManager:
             # 容器不存在时返回 None
             return None
 
-    def container_action(self, container_id: str, action: str):
-        """对指定容器执行操作（启动、停止、重启）。
+    def container_action(self, container_id: str, action: str) -> dict:
+        """对指定容器执行操作（启动、停止、重启、删除）。
 
         Args:
             container_id: 目标容器的 ID。
-            action: 要执行的操作名称，必须是 "start"、"stop" 或 "restart" 之一。
+            action: 要执行的操作名称，必须是白名单中的操作。
+
+        Returns:
+            dict: 操作后的容器状态信息，包含 status 和 error 字段。
 
         Raises:
             ValueError: 当 action 不在允许的操作白名单中时抛出。
-            RuntimeError: 当 Docker 服务不可用时抛出。
+            RuntimeError: 当 Docker 服务不可用或等待状态超时/失败时抛出。
             docker.errors.NotFound: 当容器不存在时抛出。
         """
         if action not in self._ALLOWED_ACTIONS:
@@ -128,6 +135,195 @@ class DockerManager:
         # 获取容器对象并动态调用对应的操作方法
         container = self._client.containers.get(container_id)
         getattr(container, action)()
+
+        # 启动/重启需要确认容器真正进入目标状态
+        if action in {"start", "restart"}:
+            return self._wait_for_status(container, "running", timeout=10)
+
+        # remove 操作后容器已不存在，直接返回无需 reload
+        if action == "remove":
+            return {"status": "removed", "error": ""}
+
+        # stop 等其他操作立即返回当前状态
+        container.reload()
+        state = container.attrs.get("State", {}) or {}
+        return {
+            "status": state.get("Status", container.status),
+            "error": state.get("Error", ""),
+        }
+
+    def _wait_for_status(
+        self,
+        container,
+        target_status: str,
+        timeout: float = 10.0,
+        interval: float = 0.3,
+        error_statuses: set[str] | None = None,
+    ) -> dict:
+        """等待容器达到目标状态。
+
+        通过周期性 reload 容器属性检查 State.Status，直到达到目标状态、
+        进入错误状态或超时。
+
+        Args:
+            container: Docker SDK 容器对象。
+            target_status: 目标状态，例如 "running"。
+            timeout: 最长等待时间（秒）。
+            interval: 检查间隔（秒）。
+            error_statuses: 视为失败的中间状态集合，默认包含 "dead"。
+
+        Returns:
+            dict: 最终状态字典，包含 status 和 error 字段。
+
+        Raises:
+            RuntimeError: 超时或进入错误状态时抛出，附带容器错误信息。
+        """
+        error_statuses = error_statuses or {"dead"}
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            container.reload()
+            state = container.attrs.get("State", {}) or {}
+            status = state.get("Status", container.status)
+            error = state.get("Error", "")
+            if status == target_status:
+                return {"status": status, "error": error}
+            if status in error_statuses:
+                message = f"容器进入错误状态 {status}"
+                if error:
+                    message += f": {error}"
+                raise RuntimeError(message)
+            time.sleep(interval)
+
+        # 超时：再读一次状态，构造错误信息
+        container.reload()
+        state = container.attrs.get("State", {}) or {}
+        status = state.get("Status", container.status)
+        error = state.get("Error", "")
+        message = f"等待容器状态超时，当前状态 {status}"
+        if error:
+            message += f": {error}"
+        raise RuntimeError(message)
+
+    def create_container(self, request: dict) -> dict:
+        """根据请求参数创建容器。
+
+        Args:
+            request: 创建容器请求字典，字段与 ContainerCreateRequest 对应。
+
+        Returns:
+            dict: 格式化后的容器信息字典。
+
+        Raises:
+            RuntimeError: 当 Docker 服务不可用时抛出。
+            docker.errors.ImageNotFound: 当镜像不存在时抛出。
+            docker.errors.APIError: 当创建失败时抛出。
+        """
+        if not self._client:
+            raise RuntimeError("Docker not available")
+
+        # 处理端口映射："80/tcp" -> "8080" 或 "127.0.0.1:8080"
+        ports = {}
+        for mapping in request.get("ports") or []:
+            container_port = mapping.get("container", "").strip()
+            host = mapping.get("host", "").strip()
+            if container_port and host:
+                ports[container_port] = host
+
+        # 处理卷挂载
+        volumes = {}
+        for mount in request.get("volumes") or []:
+            host_path = mount.get("host", "").strip()
+            container_path = mount.get("container", "").strip()
+            mode = mount.get("mode", "rw")
+            if host_path and container_path:
+                volumes[host_path] = {"bind": container_path, "mode": mode}
+
+        # 处理环境变量
+        environment = [
+            f"{item.get('key', '')}={item.get('value', '')}"
+            for item in request.get("environment") or []
+            if item.get("key") is not None
+        ]
+
+        # 处理标签
+        labels = {
+            item.get("key", ""): item.get("value", "")
+            for item in request.get("labels") or []
+            if item.get("key") is not None
+        }
+
+        # 拆分命令和入口点
+        command = shlex.split(request["command"]) if request.get("command") else None
+        entrypoint = shlex.split(request["entrypoint"]) if request.get("entrypoint") else None
+
+        # 重启策略
+        restart_policy = {"Name": request.get("restart_policy", "no")}
+
+        create_kwargs = {
+            "image": request["image"],
+            "command": command,
+            "entrypoint": entrypoint,
+            "ports": ports or None,
+            "volumes": volumes or None,
+            "environment": environment or None,
+            "labels": labels or None,
+            "restart_policy": restart_policy,
+            "detach": True,
+        }
+
+        name = request.get("name")
+        if name:
+            create_kwargs["name"] = name
+
+        network = request.get("network")
+        if network:
+            create_kwargs["network"] = network
+
+        # 过滤掉 None 值，避免 Docker SDK 报错
+        create_kwargs = {k: v for k, v in create_kwargs.items() if v is not None}
+
+        container = self._client.containers.create(**create_kwargs)
+        if request.get("auto_start", True):
+            container.start()
+            # 确认容器真正进入运行状态，避免返回虚假成功
+            self._wait_for_status(container, "running", timeout=10)
+        return self._format_container(container)
+
+    def batch_container_action(self, ids: list[str], action: str) -> dict:
+        """批量对容器执行操作。
+
+        Args:
+            ids: 容器 ID 列表。
+            action: 要执行的操作，必须是 "start"、"stop"、"restart" 或 "remove"。
+
+        Returns:
+            dict: 包含 succeeded 和 failed 两个列表的结果。
+
+        Raises:
+            ValueError: 当 action 不在白名单中时抛出。
+            RuntimeError: 当 Docker 服务不可用时抛出。
+        """
+        if action not in self._ALLOWED_ACTIONS:
+            raise ValueError(f"Action '{action}' is not allowed")
+        if not self._client:
+            raise RuntimeError("Docker not available")
+
+        succeeded = []
+        failed = []
+        for cid in ids:
+            try:
+                container = self._client.containers.get(cid)
+                if action == "remove":
+                    container.remove(force=True)
+                else:
+                    getattr(container, action)()
+                    # 批量启动/重启同样需要确认容器真正进入目标状态
+                    if action in {"start", "restart"}:
+                        self._wait_for_status(container, "running", timeout=10)
+                succeeded.append(cid)
+            except Exception as e:
+                failed.append({"id": cid, "reason": str(e)})
+        return {"succeeded": succeeded, "failed": failed}
 
     def get_container_logs(self, container_id: str, tail: int = 100) -> str:
         """获取容器的最近日志。
@@ -147,6 +343,337 @@ class DockerManager:
             return ""
         # Docker SDK 返回的是 bytes 类型，需解码为字符串
         return container.logs(tail=tail).decode("utf-8", errors="replace")
+
+    def get_container_status(self, container_id: str) -> dict | None:
+        """获取容器实时状态摘要。
+
+        Args:
+            container_id: 目标容器的 ID。
+
+        Returns:
+            dict | None: 包含 id、name、status、state 的字典；容器不存在或 Docker 不可用时返回 None。
+        """
+        if not self._client:
+            return None
+        try:
+            container = self._client.containers.get(container_id)
+            # reload 确保读取到最新状态，避免缓存 attrs 滞后
+            container.reload()
+        except docker.errors.NotFound:
+            return None
+
+        state = container.attrs.get("State", {}) or {}
+        status = state.get("Status", container.status)
+        return {
+            "id": container.id[:12],
+            "name": container.name,
+            "status": status,
+            "state": self._state_summary(status),
+        }
+
+    def stream_container_logs(
+        self,
+        container_id: str,
+        tail: int = 100,
+        follow: bool = True,
+        timestamps: bool = True,
+    ):
+        """流式获取容器日志。
+
+        Args:
+            container_id: 目标容器的 ID。
+            tail: 返回最后 N 行日志，默认为 100 行。
+            follow: 是否持续跟踪新日志。
+            timestamps: 是否包含时间戳。
+
+        Yields:
+            str: 单条日志行。
+
+        Raises:
+            RuntimeError: 当 Docker 服务不可用时抛出。
+            docker.errors.NotFound: 当容器不存在时抛出。
+        """
+        if not self._client:
+            raise RuntimeError("Docker not available")
+        container = self._client.containers.get(container_id)
+        for line in container.logs(
+            stdout=True,
+            stderr=True,
+            stream=True,
+            follow=follow,
+            tail=tail,
+            timestamps=timestamps,
+        ):
+            yield line.decode("utf-8", errors="replace")
+
+    def get_container_detail(self, container_id: str) -> dict | None:
+        """获取容器完整详情。
+
+        Args:
+            container_id: 目标容器的 ID。
+
+        Returns:
+            dict | None: 容器详情字典，容器不存在或 Docker 不可用时返回 None。
+        """
+        if not self._client:
+            return None
+        try:
+            container = self._client.containers.get(container_id)
+        except docker.errors.NotFound:
+            return None
+
+        attrs = container.attrs
+        config = attrs.get("Config", {}) or {}
+        state = attrs.get("State", {}) or {}
+        host_config = attrs.get("HostConfig", {}) or {}
+        network_settings = attrs.get("NetworkSettings", {}) or {}
+
+        # 命令和入口点
+        command = config.get("Cmd") or None
+        entrypoint = config.get("Entrypoint") or None
+
+        # 端口绑定
+        ports = []
+        port_bindings = network_settings.get("Ports") or {}
+        for container_port, bindings in port_bindings.items():
+            if isinstance(bindings, list):
+                for binding in bindings:
+                    ports.append({
+                        "container_port": container_port,
+                        "host_ip": binding.get("HostIp", ""),
+                        "host_port": binding.get("HostPort", ""),
+                    })
+            else:
+                ports.append({
+                    "container_port": container_port,
+                    "host_ip": "",
+                    "host_port": "",
+                })
+
+        # 挂载
+        mounts = []
+        for mount in attrs.get("Mounts") or []:
+            mounts.append({
+                "type": mount.get("Type", "bind"),
+                "source": mount.get("Source", ""),
+                "destination": mount.get("Destination", ""),
+                "mode": mount.get("Mode", "rw"),
+                "rw": mount.get("RW", True),
+            })
+
+        # 网络信息
+        networks = []
+        network_mode = host_config.get("NetworkMode", "default")
+        networks_config = network_settings.get("Networks") or {}
+        for net_name, net_info in networks_config.items():
+            networks.append({
+                "name": net_name,
+                "ip_address": net_info.get("IPAddress", ""),
+                "gateway": net_info.get("Gateway", ""),
+                "mac_address": net_info.get("MacAddress", ""),
+            })
+
+        # 重启策略
+        restart_policy = host_config.get("RestartPolicy", {}) or {}
+        restart_policy_name = restart_policy.get("Name", "no")
+
+        # 状态摘要
+        status = state.get("Status", container.status)
+        health = "unknown"
+        if "Health" in state:
+            health = state["Health"].get("Status", "unknown")
+
+        return {
+            "id": container.id[:12],
+            "name": container.name,
+            "image": str(container.image.tags[0]) if container.image.tags else "unknown",
+            "status": status,
+            "state": self._state_summary(status),
+            "health": health,
+            "command": command,
+            "entrypoint": entrypoint,
+            "env": config.get("Env") or None,
+            "working_dir": config.get("WorkingDir") or None,
+            "user": config.get("User") or None,
+            "labels": config.get("Labels") or None,
+            "ports": ports,
+            "mounts": mounts,
+            "networks": networks,
+            "restart_policy": restart_policy_name,
+            "network_mode": network_mode,
+            "privileged": host_config.get("Privileged", False),
+            "created": attrs.get("Created", ""),
+            "started_at": state.get("StartedAt", ""),
+            "finished_at": state.get("FinishedAt", ""),
+            "exit_code": state.get("ExitCode", 0),
+            "error": state.get("Error", ""),
+        }
+
+    def exec_container(
+        self,
+        container_id: str,
+        command: str,
+        workdir: str | None = None,
+        user: str | None = None,
+        environment: list[dict] | None = None,
+    ) -> tuple[int, str]:
+        """在容器内执行命令。
+
+        Args:
+            container_id: 目标容器的 ID。
+            command: 要执行的命令字符串。
+            workdir: 工作目录（可选）。
+            user: 执行用户（可选）。
+            environment: 额外环境变量列表（可选）。
+
+        Returns:
+            tuple[int, str]: (退出码, 输出内容)。
+
+        Raises:
+            RuntimeError: 当 Docker 服务不可用时抛出。
+            docker.errors.NotFound: 当容器不存在时抛出。
+        """
+        if not self._client:
+            raise RuntimeError("Docker not available")
+        container = self._client.containers.get(container_id)
+        cmd_list = shlex.split(command)
+        env_list = [
+            f"{item.get('key', '')}={item.get('value', '')}"
+            for item in environment or []
+            if item.get("key") is not None
+        ]
+        exec_kwargs = {
+            "stdout": True,
+            "stderr": True,
+            "stream": True,
+        }
+        if workdir:
+            exec_kwargs["workdir"] = workdir
+        if user:
+            exec_kwargs["user"] = user
+        if env_list:
+            exec_kwargs["environment"] = env_list
+
+        result = container.exec_run(cmd_list, **exec_kwargs)
+        output_chunks = []
+        for chunk in result.output:
+            output_chunks.append(chunk.decode("utf-8", errors="replace"))
+        return result.exit_code, "".join(output_chunks)
+
+    def exec_container_interactive(
+        self,
+        container_id: str,
+        command: list[str],
+        workdir: str | None = None,
+        user: str | None = None,
+        environment: list[dict] | None = None,
+        tty: bool = True,
+    ) -> tuple[str, object]:
+        """在容器内创建交互式 exec 会话。
+
+        通过 Docker SDK 的 exec_create + exec_start(socket=True) 获得一个可读写的 socket，
+        用于 WebSocket 双向转发，实现类似 `docker exec -it` 的交互体验。
+
+        Args:
+            container_id: 目标容器的 ID。
+            command: 要执行的命令列表，例如 ["/bin/sh"]。
+            workdir: 工作目录（可选）。
+            user: 执行用户（可选）。
+            environment: 额外环境变量列表（可选）。
+            tty: 是否分配伪终端，默认 True。
+
+        Returns:
+            tuple[str, object]: (exec_id, socket)。
+
+        Raises:
+            RuntimeError: 当 Docker 服务不可用时抛出。
+            docker.errors.NotFound: 当容器不存在时抛出。
+        """
+        if not self._client:
+            raise RuntimeError("Docker not available")
+        container = self._client.containers.get(container_id)
+        env_list = [
+            f"{item.get('key', '')}={item.get('value', '')}"
+            for item in environment or []
+            if item.get("key") is not None
+        ]
+        exec_kwargs = {
+            "stdin": True,
+            "stdout": True,
+            "stderr": True,
+            "tty": tty,
+        }
+        if workdir:
+            exec_kwargs["workdir"] = workdir
+        if user:
+            exec_kwargs["user"] = user
+        if env_list:
+            exec_kwargs["environment"] = env_list
+
+        exec_id = self._client.api.exec_create(container.id, command, **exec_kwargs)
+        socket = self._client.api.exec_start(exec_id, socket=True, tty=tty)
+        return exec_id, socket
+
+    def _state_summary(self, status: str) -> str:
+        """根据 Docker 状态返回中文摘要。"""
+        mapping = {
+            "running": "运行中",
+            "exited": "已停止",
+            "paused": "已暂停",
+            "restarting": "重启中",
+            "dead": "已死亡",
+            "created": "已创建",
+        }
+        return mapping.get(status, status)
+
+    def _format_container(self, container) -> dict:
+        """将 Docker 容器对象格式化为字典。
+
+        提取容器的基本信息和健康检查状态。
+
+        Args:
+            container: Docker SDK 的 Container 对象。
+
+        Returns:
+            dict: 包含 id（短 ID）、name、status、state、health、image、ports、created 的字典。
+        """
+        # 默认健康状态为 unknown
+        health = "unknown"
+        # 从容器属性中提取健康检查状态
+        state = container.attrs.get("State", {})
+        status = state.get("Status", container.status)
+        if "Health" in state:
+            health = state["Health"].get("Status", "unknown")
+
+        config = container.attrs.get("Config", {}) or {}
+
+        # 端口映射摘要
+        ports_summary = ""
+        network_settings = container.attrs.get("NetworkSettings", {}) or {}
+        port_bindings = network_settings.get("Ports") or {}
+        parts = []
+        for container_port, bindings in port_bindings.items():
+            if isinstance(bindings, list):
+                for binding in bindings:
+                    host_ip = binding.get("HostIp", "0.0.0.0")
+                    host_port = binding.get("HostPort", "")
+                    if host_ip == "0.0.0.0":
+                        parts.append(f"{host_port}:{container_port}")
+                    else:
+                        parts.append(f"{host_ip}:{host_port}:{container_port}")
+        ports_summary = ", ".join(parts)
+
+        return {
+            "id": container.id[:12],  # 使用 12 位短 ID，与 docker 命令行一致
+            "name": container.name,
+            "status": status,
+            "state": self._state_summary(status),
+            "health": health,
+            "image": str(container.image.tags[0]) if container.image.tags else "unknown",
+            "ports": ports_summary,
+            "created": container.attrs.get("Created", ""),
+            "labels": config.get("Labels") or {},
+        }
 
     def get_host_info(self) -> dict | None:
         """获取 Docker 宿主机综合信息。
@@ -867,31 +1394,6 @@ class DockerManager:
             task_manager.fail_task(task_id, f"拉取镜像失败: {e}")
         except Exception as e:
             task_manager.fail_task(task_id, f"拉取镜像失败: {e}")
-
-    def _format_container(self, container) -> dict:
-        """将 Docker 容器对象格式化为字典。
-
-        提取容器的基本信息和健康检查状态。
-
-        Args:
-            container: Docker SDK 的 Container 对象。
-
-        Returns:
-            dict: 包含 id（短 ID）、name、status、health、image 的字典。
-        """
-        # 默认健康状态为 unknown
-        health = "unknown"
-        # 从容器属性中提取健康检查状态
-        state = container.attrs.get("State", {})
-        if "Health" in state:
-            health = state["Health"].get("Status", "unknown")
-        return {
-            "id": container.id[:12],  # 使用 12 位短 ID，与 docker 命令行一致
-            "name": container.name,
-            "status": container.status,
-            "health": health,
-            "image": str(container.image.tags[0]) if container.image.tags else "unknown",
-        }
 
 
 class ImagePullTaskManager:

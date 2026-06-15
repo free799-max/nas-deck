@@ -9,12 +9,12 @@ import { Popover as PopoverPrimitive } from "@base-ui/react/popover";
 import { cn } from "@/lib/utils";
 
 /** Popover 根组件 */
-function PopoverRoot({ children, ...props }: PopoverPrimitive.Root.Props) {
+export function Popover({ children, ...props }: PopoverPrimitive.Root.Props) {
   return <PopoverPrimitive.Root {...props}>{children}</PopoverPrimitive.Root>;
 }
 
 /** Popover 触发器 */
-function PopoverTrigger({
+export function PopoverTrigger({
   className,
   children,
   ...props
@@ -33,7 +33,7 @@ function PopoverTrigger({
 }
 
 /** Popover 弹出内容（已包含 Portal + Positioner + 样式） */
-function PopoverPopup({
+export function PopoverContent({
   className,
   children,
   ...props
@@ -56,7 +56,7 @@ function PopoverPopup({
 }
 
 /** Popover 箭头 */
-function PopoverArrow({ className, ...props }: PopoverPrimitive.Arrow.Props) {
+export function PopoverArrow({ className, ...props }: PopoverPrimitive.Arrow.Props) {
   return (
     <PopoverPrimitive.Arrow
       className={cn("fill-popover stroke-border", className)}
@@ -66,7 +66,7 @@ function PopoverArrow({ className, ...props }: PopoverPrimitive.Arrow.Props) {
 }
 
 /** Popover 关闭按钮 */
-function PopoverClose({ className, ...props }: PopoverPrimitive.Close.Props) {
+export function PopoverClose({ className, ...props }: PopoverPrimitive.Close.Props) {
   return (
     <PopoverPrimitive.Close
       className={cn(
@@ -78,14 +78,25 @@ function PopoverClose({ className, ...props }: PopoverPrimitive.Close.Props) {
   );
 }
 
-export const Popover = {
-  Root: PopoverRoot,
-  Trigger: PopoverTrigger,
-  Portal: PopoverPrimitive.Portal,
-  Positioner: PopoverPrimitive.Positioner,
-  Popup: PopoverPopup,
-  Arrow: PopoverArrow,
-  Close: PopoverClose,
-  Title: PopoverPrimitive.Title,
-  Description: PopoverPrimitive.Description,
-};
+/** Popover 标题 */
+export function PopoverTitle({ className, ...props }: PopoverPrimitive.Title.Props) {
+  return (
+    <PopoverPrimitive.Title
+      className={cn("text-sm font-medium", className)}
+      {...props}
+    />
+  );
+}
+
+/** Popover 描述 */
+export function PopoverDescription({
+  className,
+  ...props
+}: PopoverPrimitive.Description.Props) {
+  return (
+    <PopoverPrimitive.Description
+      className={cn("text-sm text-muted-foreground", className)}
+      {...props}
+    />
+  );
+}

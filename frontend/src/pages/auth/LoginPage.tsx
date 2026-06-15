@@ -20,6 +20,7 @@ import {
   CheckCircle2,
 } from "lucide-react";
 import api from "@/lib/api";
+import axios from "axios";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/components/ui/toast";
 import { LogoIcon } from "@/components/LogoIcon";
@@ -73,6 +74,7 @@ export function LoginPage() {
         setIsCheckingUsers(false);
         setTimeout(() => usernameRef.current?.focus(), 300);
       });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   /* 登录提交 */
@@ -121,8 +123,10 @@ export function LoginPage() {
       await login(loginResp.data.access_token);
       toast.success("注册成功，正在进入系统...", { duration: 2000 });
       setTimeout(() => navigate("/"), 600);
-    } catch (err: any) {
-      const msg = err?.response?.data?.message || "注册失败";
+    } catch (err) {
+      const msg = axios.isAxiosError(err)
+        ? err.response?.data?.message || "注册失败"
+        : "注册失败";
       toast.error(msg, { duration: 3000 });
     } finally {
       setIsLoading(false);

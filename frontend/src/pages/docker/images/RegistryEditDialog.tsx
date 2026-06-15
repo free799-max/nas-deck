@@ -2,7 +2,7 @@
  * Registry 新增/编辑弹窗组件
  */
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import {
   Dialog,
   DialogContent,
@@ -24,6 +24,35 @@ interface RegistryEditDialogProps {
   editingRegistry: Registry | null;
 }
 
+const emptyForm = {
+  name: "",
+  search_api_url: "",
+  enable_mirror: false,
+  mirror_urls: [] as string[],
+  trust_ssl_self_signed: false,
+  enable_auth: false,
+  username: "",
+  password: "",
+};
+
+function getInitialForm(registry: Registry | null) {
+  if (!registry) return emptyForm;
+  return {
+    name: registry.name,
+    search_api_url: registry.search_api_url,
+    enable_mirror: registry.enable_mirror,
+    mirror_urls: registry.mirror_urls?.length
+      ? registry.mirror_urls
+      : registry.mirror_url
+        ? [registry.mirror_url]
+        : [],
+    trust_ssl_self_signed: registry.trust_ssl_self_signed,
+    enable_auth: !!registry.username,
+    username: registry.username || "",
+    password: "",
+  };
+}
+
 export function RegistryEditDialog({
   open,
   onOpenChange,
@@ -33,57 +62,16 @@ export function RegistryEditDialog({
   const createRegistry = useCreateRegistry();
   const updateRegistry = useUpdateRegistry();
 
-  const [form, setForm] = useState<{
-    name: string;
-    search_api_url: string;
-    enable_mirror: boolean;
-    mirror_urls: string[];
-    trust_ssl_self_signed: boolean;
-    enable_auth: boolean;
-    username: string;
-    password: string;
-  }>({
-    name: "",
-    search_api_url: "",
-    enable_mirror: false,
-    mirror_urls: [],
-    trust_ssl_self_signed: false,
-    enable_auth: false,
-    username: "",
-    password: "",
-  });
+  const [form, setForm] = useState(() => getInitialForm(editingRegistry));
 
-  useEffect(() => {
-    if (open) {
-      if (editingRegistry) {
-        setForm({
-          name: editingRegistry.name,
-          search_api_url: editingRegistry.search_api_url,
-          enable_mirror: editingRegistry.enable_mirror,
-          mirror_urls: editingRegistry.mirror_urls?.length
-            ? editingRegistry.mirror_urls
-            : editingRegistry.mirror_url
-              ? [editingRegistry.mirror_url]
-              : [],
-          trust_ssl_self_signed: editingRegistry.trust_ssl_self_signed,
-          enable_auth: !!editingRegistry.username,
-          username: editingRegistry.username || "",
-          password: "",
-        });
-      } else {
-        setForm({
-          name: "",
-          search_api_url: "",
-          enable_mirror: false,
-          mirror_urls: [],
-          trust_ssl_self_signed: false,
-          enable_auth: false,
-          username: "",
-          password: "",
-        });
-      }
+  const handleOpenChange = (newOpen: boolean) => {
+    if (newOpen) {
+      setForm(getInitialForm(editingRegistry));
+    } else {
+      setForm(emptyForm);
     }
-  }, [open, editingRegistry]);
+    onOpenChange(newOpen);
+  };
 
   const handleSave = () => {
     if (!form.name.trim() || !form.search_api_url.trim()) {
@@ -113,7 +101,7 @@ export function RegistryEditDialog({
         payload.username = null;
         payload.password = null;
       } else if (!form.password.trim() && editingRegistry.username) {
-        (payload as any).password = undefined;
+        payload.password = undefined;
       }
       updateRegistry.mutate(
         { id: editingRegistry.id, data: payload },
@@ -149,7 +137,7 @@ export function RegistryEditDialog({
   const isEdit = !!editingRegistry;
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent
         className="w-[560px] p-0 gap-0 rounded shadow-lg border border-gray-300"
         style={{ maxWidth: 560 }}

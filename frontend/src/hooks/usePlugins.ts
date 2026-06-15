@@ -12,6 +12,11 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import api from "@/lib/api";
 import { useToast } from "@/components/ui/toast";
 
+/** API 错误对象 */
+interface ApiError {
+  displayMessage?: string;
+}
+
 /**
  * 插件信息接口
  *
@@ -101,7 +106,7 @@ export function useCreateInstance() {
       qc.invalidateQueries({ queryKey: ["plugins", "instances"] });
       toast.success("创建成功");
     },
-    onError: (error: any) => {
+    onError: (error: ApiError) => {
       toast.error(error.displayMessage || "创建失败");
     },
   });
@@ -126,7 +131,7 @@ export function useDeleteInstance() {
       qc.invalidateQueries({ queryKey: ["plugins", "instances"] });
       toast.success("删除成功");
     },
-    onError: (error: any) => {
+    onError: (error: ApiError) => {
       toast.error(error.displayMessage || "删除失败");
     },
   });

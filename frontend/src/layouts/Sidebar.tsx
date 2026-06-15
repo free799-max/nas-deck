@@ -189,10 +189,9 @@ function NavGroup({
 
 interface SidebarProps {
   collapsed: boolean;
-  onToggle: () => void;
 }
 
-export function Sidebar({ collapsed, onToggle: _onToggle }: SidebarProps) {
+export function Sidebar({ collapsed }: SidebarProps) {
   const location = useLocation();
   const pathname = location.pathname;
 
@@ -204,7 +203,8 @@ export function Sidebar({ collapsed, onToggle: _onToggle }: SidebarProps) {
   // 侧边栏宽度过渡中，保持收缩布局避免错位
   const [isResizing, setIsResizing] = useState(false);
   useEffect(() => {
-    setIsResizing(true);
+    // 使用 microtask 避免在 effect 中同步 setState
+    queueMicrotask(() => setIsResizing(true));
     const timer = setTimeout(() => setIsResizing(false), 300);
     return () => clearTimeout(timer);
   }, [collapsed]);

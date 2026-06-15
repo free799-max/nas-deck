@@ -5,13 +5,14 @@
  * 不依赖外部库，纯 React + Tailwind 实现。
  */
 
-import { useState, useEffect, useCallback, createContext, useContext } from "react";
+import { useState, useEffect, useCallback, createContext, useContext, useMemo } from "react";
 import { CheckCircle, XCircle, X } from "lucide-react";
 
-interface Toast {
+export interface Toast {
   id: number;
   message: string;
   type: "success" | "error";
+  duration?: number;
 }
 
 interface ToastContextValue {
@@ -36,9 +37,9 @@ function ToastItem({
    * 组件挂载后启动自动关闭定时器
    */
   useEffect(() => {
-    const timer = setTimeout(() => onRemove(toast.id), 3000);
+    const timer = setTimeout(() => onRemove(toast.id), toast.duration ?? 3000);
     return () => clearTimeout(timer);
-  }, [toast.id, onRemove]);
+  }, [toast.id, toast.duration, onRemove]);
 
   return (
     <div
@@ -73,21 +74,24 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const addToast = useCallback(
-    (message: string, type: "success" | "error") => {
+    (message: string, type: "success" | "error", duration?: number) => {
       const id = ++toastIdCounter;
-      setToasts((prev) => [...prev, { id, message, type }]);
+      setToasts((prev) => [...prev, { id, message, type, duration }]);
     },
     []
   );
 
-  const toastValue = {
-    toast: {
-      success: (message: string, _options?: { duration?: number }) =>
-        addToast(message, "success"),
-      error: (message: string, _options?: { duration?: number }) =>
-        addToast(message, "error"),
-    },
-  };
+  const toastValue = useMemo(
+    () => ({
+      toast: {
+        success: (message: string, options?: { duration?: number }) =>
+          addToast(message, "success", options?.duration),
+        error: (message: string, options?: { duration?: number }) =>
+          addToast(message, "error", options?.duration),
+      },
+    }),
+    [addToast]
+  );
 
   return (
     <ToastContext.Provider value={toastValue}>
@@ -101,6 +105,7 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
   );
 }
 
+// eslint-disable-next-line react-refresh/only-export-components
 export function useToast() {
   const context = useContext(ToastContext);
   if (context === undefined) {

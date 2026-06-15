@@ -14,6 +14,7 @@ import { PluginsPage } from "./pages/services/PluginsPage";
 import { DockerPage } from "./pages/docker/containers/DockerPage";
 import { DockerHostPage } from "./pages/docker/host/DockerHostPage";
 import { DockerImagesPage } from "./pages/docker/images/DockerImagesPage";
+import { DockerStacksPage } from "./pages/docker/stacks/DockerStacksPage";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -113,7 +114,7 @@ export default function App() {
               {/* Docker 管理 */}
               <Route
                 path="/docker/stacks"
-                element={<PlaceholderPage title="容器编排" />}
+                element={<DockerStacksPage />}
               />
               <Route path="/docker/containers" element={<DockerPage />} />
               <Route path="/docker/images" element={<DockerImagesPage />} />

@@ -22,10 +22,7 @@ export function AppLayout() {
   return (
     <div className="flex h-screen bg-background">
       {/* 左侧侧边栏 */}
-      <Sidebar
-        collapsed={sidebarCollapsed}
-        onToggle={() => setSidebarCollapsed((v) => !v)}
-      />
+      <Sidebar collapsed={sidebarCollapsed} />
       {/* 右侧区域 */}
       <div className="flex-1 flex flex-col overflow-hidden">
         {/* 顶部栏组件 */}

@@ -2,7 +2,7 @@
  * Registry 配置列表弹窗组件
  */
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import {
   Dialog,
   DialogContent,
@@ -37,9 +37,10 @@ export function RegistryConfigDialog({
 
   const selectedRegistry = registries.find((r) => r.id === selectedId);
 
-  useEffect(() => {
-    if (!open) setSelectedId(null);
-  }, [open]);
+  const handleOpenChange = (newOpen: boolean) => {
+    if (!newOpen) setSelectedId(null);
+    onOpenChange(newOpen);
+  };
 
   const handleSetDefault = () => {
     if (selectedId && !selectedRegistry?.is_default) {
@@ -63,7 +64,7 @@ export function RegistryConfigDialog({
   };
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent
         className="w-[680px] p-0 gap-0 rounded shadow-lg border border-gray-300"
         style={{ maxWidth: 680 }}

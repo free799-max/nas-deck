@@ -50,15 +50,23 @@ def test_container_action_stop(mock_docker_module):
 
 
 @patch("app.core.docker_manager.docker")
-def test_container_action_restart(mock_docker_module):
+@patch("app.core.docker_manager.time")
+def test_container_action_restart(mock_time, mock_docker_module):
     mock_container = MagicMock()
+    mock_container.attrs = {"State": {"Status": "running", "Error": ""}}
+    mock_container.status = "running"
     mock_client = MagicMock()
     mock_client.containers.get.return_value = mock_container
     mock_docker_module.from_env.return_value = mock_client
 
+    # 避免真实等待
+    mock_time.time.side_effect = [0, 1]
+    mock_time.sleep = MagicMock()
+
     manager = DockerManager()
-    manager.container_action("abc123", "restart")
+    result = manager.container_action("abc123", "restart")
     mock_container.restart.assert_called_once()
+    assert result["status"] == "running"
 
 
 @patch("app.core.docker_manager.docker")
@@ -372,3 +380,103 @@ def test_complete_task_syncs_layer_counts(mock_time, mock_docker_module):
     # 完成时两层都应算已完成
     assert task["progress"]["completed_layers"] == 2
     assert task["progress"]["total_layers"] == 2
+
+
+@patch("app.core.docker_manager.docker")
+@patch("app.core.docker_manager.time")
+def test_container_action_start_waits_for_running(mock_time, mock_docker_module):
+    """start 操作应等待容器真正进入 running 状态后再返回。"""
+    mock_container = MagicMock()
+    mock_container.attrs = {"State": {"Status": "running", "Error": ""}}
+    mock_container.status = "running"
+
+    mock_client = MagicMock()
+    mock_client.containers.get.return_value = mock_container
+    mock_docker_module.from_env.return_value = mock_client
+
+    # 模拟时间快速推进，避免真实等待
+    mock_time.time.side_effect = [0, 1]
+    mock_time.sleep = MagicMock()
+
+    manager = DockerManager()
+    result = manager.container_action("abc123", "start")
+
+    mock_container.start.assert_called_once()
+    assert result["status"] == "running"
+    assert result["error"] == ""
+
+
+@patch("app.core.docker_manager.docker")
+@patch("app.core.docker_manager.time")
+def test_container_action_start_fails_on_dead(mock_time, mock_docker_module):
+    """start 操作若容器进入 dead 状态应抛出异常并附带错误信息。"""
+    mock_container = MagicMock()
+    mock_container.attrs = {
+        "State": {
+            "Status": "dead",
+            "Error": "driver failed programming external connectivity",
+        }
+    }
+    mock_container.status = "dead"
+
+    mock_client = MagicMock()
+    mock_client.containers.get.return_value = mock_container
+    mock_docker_module.from_env.return_value = mock_client
+
+    mock_time.time.side_effect = [0, 1]
+    mock_time.sleep = MagicMock()
+
+    manager = DockerManager()
+    with pytest.raises(RuntimeError) as exc_info:
+        manager.container_action("abc123", "start")
+
+    assert "driver failed programming external connectivity" in str(exc_info.value)
+
+
+@patch("app.core.docker_manager.docker")
+@patch("app.core.docker_manager.time")
+def test_container_action_start_times_out(mock_time, mock_docker_module):
+    """start 操作超时时应抛出异常并附带当前状态。"""
+    mock_container = MagicMock()
+    mock_container.attrs = {"State": {"Status": "restarting", "Error": ""}}
+    mock_container.status = "restarting"
+
+    mock_client = MagicMock()
+    mock_client.containers.get.return_value = mock_container
+    mock_docker_module.from_env.return_value = mock_client
+
+    # 每次调用 time.time 推进 5 秒，确保在几次轮询后超时
+    call_count = 0
+    def fake_time():
+        nonlocal call_count
+        call_count += 1
+        return call_count * 5
+
+    mock_time.time.side_effect = fake_time
+    mock_time.sleep = MagicMock()
+
+    manager = DockerManager()
+    with pytest.raises(RuntimeError) as exc_info:
+        manager.container_action("abc123", "start")
+
+    assert "等待容器状态超时" in str(exc_info.value)
+    assert "restarting" in str(exc_info.value)
+
+
+@patch("app.core.docker_manager.docker")
+def test_container_action_stop_returns_immediately(mock_docker_module):
+    """stop 操作应立即返回当前状态，不需要等待 running。"""
+    mock_container = MagicMock()
+    mock_container.attrs = {"State": {"Status": "exited", "Error": ""}}
+    mock_container.status = "exited"
+
+    mock_client = MagicMock()
+    mock_client.containers.get.return_value = mock_container
+    mock_docker_module.from_env.return_value = mock_client
+
+    manager = DockerManager()
+    result = manager.container_action("abc123", "stop")
+
+    mock_container.stop.assert_called_once()
+    assert result["status"] == "exited"
+    assert result["error"] == ""

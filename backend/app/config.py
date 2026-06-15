@@ -25,6 +25,9 @@ class Settings(BaseSettings):
     PLUGIN_DIR: str = "app/plugins"
     """插件自动发现目录。"""
 
+    COMPOSE_WORKSPACE_DIR: str = "./data/compose"
+    """Compose 项目工作目录，用于存放运行时 docker-compose.yml 文件。"""
+
     model_config = {"env_file": ".env"}
     """指定 .env 文件路径用于加载环境变量。"""
 

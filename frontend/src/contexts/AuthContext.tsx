@@ -34,6 +34,7 @@ interface AuthContextValue {
   logout: () => void;
 }
 
+// eslint-disable-next-line react-refresh/only-export-components
 export const AuthContext = createContext<AuthContextValue | undefined>(
   undefined
 );
@@ -49,7 +50,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     const token = localStorage.getItem("token");
     if (!token) {
-      setIsLoading(false);
+      // 使用 microtask 避免在 effect 中同步 setState
+      queueMicrotask(() => setIsLoading(false));
       return;
     }
 
