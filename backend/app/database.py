@@ -48,20 +48,6 @@ async def init_db():
         await conn.run_sync(Base.metadata.create_all)
 
     # 初始化默认 Docker Hub 镜像仓库配置
-    from sqlalchemy import select
-    from app.models.docker import DockerMirrorConfig
+    from app.initializers.docker_initializer import init_default_registry
 
-    async with async_session() as session:
-        result = await session.execute(select(DockerMirrorConfig))
-        if not result.scalars().first():
-            default_config = DockerMirrorConfig(
-                name="Docker Hub",
-                search_api_url="https://registry.hub.docker.com",
-                mirror_url=None,
-                enable_mirror=False,
-                username=None,
-                password=None,
-                is_default=True,
-            )
-            session.add(default_config)
-            await session.commit()
+    await init_default_registry()

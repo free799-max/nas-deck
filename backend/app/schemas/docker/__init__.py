@@ -1,0 +1,111 @@
+"""Docker 相关 Pydantic Schema 子包。
+
+为了兼容旧代码，所有符号仍从 app.schemas.docker 导出。
+"""
+
+from app.schemas.docker.container import (
+    ContainerAction,
+    ContainerActionResponse,
+    ContainerBatchActionRequest,
+    ContainerCreateRequest,
+    ContainerDetail,
+    ContainerExecRequest,
+    ContainerExecResponse,
+    ContainerInfo,
+    ContainerMount,
+    ContainerNetwork,
+    ContainerPortBinding,
+    EnvVar,
+    LabelItem,
+    PortMapping,
+    VolumeMount,
+)
+from app.schemas.docker.host import (
+    DockerStatsInfo,
+    DockerVersionInfo,
+    HostInfo,
+    NetworkInfo,
+    ResourceInfo,
+)
+from app.schemas.docker.image import (
+    BatchImageDeleteRequest,
+    ImageDetail,
+    ImageInfo,
+    ImageLayer,
+    ImagePruneResult,
+    ImagePullRequest,
+    ImageSearchResult,
+    ImageTag,
+    PullProgressEvent,
+    PullProgressLayer,
+    PullTaskResponse,
+    PullTaskStatus,
+)
+from app.schemas.docker.registry import (
+    RegistryCreate,
+    RegistryOut,
+    RegistryUpdate,
+)
+from app.schemas.docker.compose import (
+    ComposeActionRequest,
+    ComposeEditRequest,
+    ComposeLogQuery,
+    ComposeProjectCreate,
+    ComposeProjectOut,
+    ComposeProjectUpdate,
+    ComposeStackStatusOut,
+    ComposeVersionCreate,
+    ComposeVersionOut,
+)
+
+__all__ = [
+    # container
+    "PortMapping",
+    "EnvVar",
+    "VolumeMount",
+    "LabelItem",
+    "ContainerInfo",
+    "ContainerAction",
+    "ContainerActionResponse",
+    "ContainerCreateRequest",
+    "ContainerPortBinding",
+    "ContainerMount",
+    "ContainerNetwork",
+    "ContainerDetail",
+    "ContainerBatchActionRequest",
+    "ContainerExecRequest",
+    "ContainerExecResponse",
+    # image
+    "ImageInfo",
+    "ImageLayer",
+    "ImageDetail",
+    "ImagePruneResult",
+    "ImageSearchResult",
+    "ImagePullRequest",
+    "ImageTag",
+    "PullTaskResponse",
+    "PullProgressLayer",
+    "PullProgressEvent",
+    "PullTaskStatus",
+    "BatchImageDeleteRequest",
+    # registry
+    "RegistryCreate",
+    "RegistryUpdate",
+    "RegistryOut",
+    # host
+    "DockerVersionInfo",
+    "ResourceInfo",
+    "DockerStatsInfo",
+    "NetworkInfo",
+    "HostInfo",
+    # compose
+    "ComposeProjectCreate",
+    "ComposeProjectUpdate",
+    "ComposeEditRequest",
+    "ComposeVersionOut",
+    "ComposeVersionCreate",
+    "ComposeStackStatusOut",
+    "ComposeProjectOut",
+    "ComposeActionRequest",
+    "ComposeLogQuery",
+]

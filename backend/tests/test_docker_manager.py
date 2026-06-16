@@ -17,7 +17,7 @@ def test_docker_manager_init():
     assert manager is not None
 
 
-@patch("app.core.docker_manager.docker")
+@patch("app.services.docker_common.docker")
 def test_list_containers(mock_docker_module):
     mock_container = MagicMock()
     mock_container.id = "abc123def456"
@@ -37,7 +37,7 @@ def test_list_containers(mock_docker_module):
     assert containers[0]["status"] == "running"
 
 
-@patch("app.core.docker_manager.docker")
+@patch("app.services.docker_common.docker")
 def test_container_action_stop(mock_docker_module):
     mock_container = MagicMock()
     mock_client = MagicMock()
@@ -49,8 +49,8 @@ def test_container_action_stop(mock_docker_module):
     mock_container.stop.assert_called_once()
 
 
-@patch("app.core.docker_manager.docker")
-@patch("app.core.docker_manager.time")
+@patch("app.services.docker_common.docker")
+@patch("app.services.docker_common.time")
 def test_container_action_restart(mock_time, mock_docker_module):
     mock_container = MagicMock()
     mock_container.attrs = {"State": {"Status": "running", "Error": ""}}
@@ -69,8 +69,8 @@ def test_container_action_restart(mock_time, mock_docker_module):
     assert result["status"] == "running"
 
 
-@patch("app.core.docker_manager.docker")
-@patch("app.core.docker_manager.time")
+@patch("app.services.docker_common.docker")
+@patch("app.services.docker_common.time")
 def test_pull_progress_monotonic_on_new_layer(mock_time, mock_docker_module):
     """新层动态发现时，总进度不应回退。"""
 
@@ -134,8 +134,8 @@ def test_pull_progress_monotonic_on_new_layer(mock_time, mock_docker_module):
     assert task["progress"]["percentage"] == 100
 
 
-@patch("app.core.docker_manager.docker")
-@patch("app.core.docker_manager.time")
+@patch("app.services.docker_common.docker")
+@patch("app.services.docker_common.time")
 def test_pull_progress_byte_weighted(mock_time, mock_docker_module):
     """总进度应按字节加权，大层主导进度而不是简单按层数平均。"""
 
@@ -191,8 +191,8 @@ def test_pull_progress_byte_weighted(mock_time, mock_docker_module):
     assert last_percentage[0] <= 80
 
 
-@patch("app.core.docker_manager.docker")
-@patch("app.core.docker_manager.time")
+@patch("app.services.docker_common.docker")
+@patch("app.services.docker_common.time")
 def test_pull_progress_completes_at_100(mock_time, mock_docker_module):
     """拉取流结束后，任务应标记为完成并置进度为 100%。"""
 
@@ -228,8 +228,8 @@ def test_pull_progress_completes_at_100(mock_time, mock_docker_module):
     assert task["progress"]["status"] == "拉取完成"
 
 
-@patch("app.core.docker_manager.docker")
-@patch("app.core.docker_manager.time")
+@patch("app.services.docker_common.docker")
+@patch("app.services.docker_common.time")
 def test_pull_progress_all_completed_with_zero_byte_data(mock_time, mock_docker_module):
     """所有层已完成但无字节信息时，进度应基于层平均到达 99%（完成前置 100）。"""
 
@@ -274,7 +274,7 @@ def test_pull_progress_all_completed_with_zero_byte_data(mock_time, mock_docker_
     assert task["progress"]["percentage"] == 100
 
 
-@patch("app.core.docker_manager.docker")
+@patch("app.services.docker_common.docker")
 def test_prune_unused_images_counts_tags_not_layers(mock_docker_module):
     """清理未使用镜像时，deleted 应只统计镜像标签，不把层摘要计入镜像数。"""
 
@@ -300,8 +300,8 @@ def test_prune_unused_images_counts_tags_not_layers(mock_docker_module):
     assert len(result["deleted"]) == 2
 
 
-@patch("app.core.docker_manager.docker")
-@patch("app.core.docker_manager.time")
+@patch("app.services.docker_common.docker")
+@patch("app.services.docker_common.time")
 def test_pull_progress_counts_100_percent_as_completed(mock_time, mock_docker_module):
     """层百分比达到 100 时，即使状态尚未变为 Pull complete，也应计入已完成层数。"""
 
@@ -346,8 +346,8 @@ def test_pull_progress_counts_100_percent_as_completed(mock_time, mock_docker_mo
     assert recorded[-1]["total_layers"] == 2
 
 
-@patch("app.core.docker_manager.docker")
-@patch("app.core.docker_manager.time")
+@patch("app.services.docker_common.docker")
+@patch("app.services.docker_common.time")
 def test_complete_task_syncs_layer_counts(mock_time, mock_docker_module):
     """拉取完成时，completed_layers 和 total_layers 应与实际层数一致。"""
 
@@ -382,8 +382,8 @@ def test_complete_task_syncs_layer_counts(mock_time, mock_docker_module):
     assert task["progress"]["total_layers"] == 2
 
 
-@patch("app.core.docker_manager.docker")
-@patch("app.core.docker_manager.time")
+@patch("app.services.docker_common.docker")
+@patch("app.services.docker_common.time")
 def test_container_action_start_waits_for_running(mock_time, mock_docker_module):
     """start 操作应等待容器真正进入 running 状态后再返回。"""
     mock_container = MagicMock()
@@ -406,8 +406,8 @@ def test_container_action_start_waits_for_running(mock_time, mock_docker_module)
     assert result["error"] == ""
 
 
-@patch("app.core.docker_manager.docker")
-@patch("app.core.docker_manager.time")
+@patch("app.services.docker_common.docker")
+@patch("app.services.docker_common.time")
 def test_container_action_start_fails_on_dead(mock_time, mock_docker_module):
     """start 操作若容器进入 dead 状态应抛出异常并附带错误信息。"""
     mock_container = MagicMock()
@@ -433,8 +433,8 @@ def test_container_action_start_fails_on_dead(mock_time, mock_docker_module):
     assert "driver failed programming external connectivity" in str(exc_info.value)
 
 
-@patch("app.core.docker_manager.docker")
-@patch("app.core.docker_manager.time")
+@patch("app.services.docker_common.docker")
+@patch("app.services.docker_common.time")
 def test_container_action_start_times_out(mock_time, mock_docker_module):
     """start 操作超时时应抛出异常并附带当前状态。"""
     mock_container = MagicMock()
@@ -463,7 +463,7 @@ def test_container_action_start_times_out(mock_time, mock_docker_module):
     assert "restarting" in str(exc_info.value)
 
 
-@patch("app.core.docker_manager.docker")
+@patch("app.services.docker_common.docker")
 def test_container_action_stop_returns_immediately(mock_docker_module):
     """stop 操作应立即返回当前状态，不需要等待 running。"""
     mock_container = MagicMock()
