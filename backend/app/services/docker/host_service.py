@@ -2,7 +2,7 @@
 
 import shutil
 
-from app.services import docker_common as common
+from app.services.docker import docker_common as common
 
 
 class HostService(common.BaseDockerService):

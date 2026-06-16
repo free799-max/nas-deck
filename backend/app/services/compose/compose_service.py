@@ -16,7 +16,7 @@ from app.models.docker import (
     DockerComposeStack,
     DockerComposeVersion,
 )
-from app.services.compose_discovery import ComposeDiscoveryService
+from app.services.compose.compose_discovery import ComposeDiscoveryService
 
 logger = logging.getLogger(__name__)
 

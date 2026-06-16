@@ -26,7 +26,7 @@ class ComposeDiscoveryService:
         对未入库项目创建记录并尝试读取当前 compose 文件内容作为初始版本。
         """
         from app.core.docker_manager import docker_manager
-        from app.services.compose_service import ComposeService
+        from app.services.compose.compose_service import ComposeService
 
         if not docker_manager.available:
             result = await db.execute(

@@ -4,10 +4,13 @@
 本模块保留旧的导入路径，避免外部代码和测试一次性大面积改动。
 """
 
-from app.services.container_service import ContainerService
-from app.services.host_service import HostService
-from app.services.image_service import ImageService
-from app.services.pull_task_service import ImagePullTaskManager, task_manager
+from app.services.docker import (
+    ContainerService,
+    HostService,
+    ImageService,
+    ImagePullTaskManager,
+    task_manager,
+)
 
 
 class DockerManager(ContainerService, ImageService, HostService):

@@ -2,14 +2,24 @@
 
 将原本集中在 core/docker_manager.py、core/compose_manager.py 中的业务逻辑
 下沉到 services/，让 core/ 只保留基础设施。
+
+按功能域进一步拆分为：
+- services/docker/ — Docker 容器/镜像/宿主机/拉取任务
+- services/compose/ — Docker Compose 编排与自动发现
 """
 
-from app.services.compose_discovery import ComposeDiscoveryService
-from app.services.compose_service import ComposeService, compose_manager
-from app.services.container_service import ContainerService
-from app.services.host_service import HostService
-from app.services.image_service import ImageService
-from app.services.pull_task_service import ImagePullTaskManager, task_manager
+from app.services.compose import (
+    ComposeDiscoveryService,
+    ComposeService,
+    compose_manager,
+)
+from app.services.docker import (
+    ContainerService,
+    HostService,
+    ImagePullTaskManager,
+    ImageService,
+    task_manager,
+)
 
 __all__ = [
     "ComposeDiscoveryService",

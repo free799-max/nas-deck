@@ -5,7 +5,7 @@ import urllib.parse
 
 import httpx
 
-from app.services import docker_common as common
+from app.services.docker import docker_common as common
 
 
 class ImageService(common.BaseDockerService):
