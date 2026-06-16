@@ -130,9 +130,9 @@ export function StackCard({
   const isRunning = status === "running";
 
   return (
-    <Card className="flex flex-col h-full rounded-xl gap-1">
-      <CardHeader className="pb-2 pt-2 bg-muted/50">
-        <div className="flex items-start justify-between gap-3">
+    <Card className="flex flex-col h-full rounded-xl gap-1 pt-0">
+      <CardHeader className="py-2 bg-muted/50">
+        <div className="flex items-center justify-between gap-3">
           <CardTitle
             className="text-base font-semibold truncate"
             title={project.project_name}

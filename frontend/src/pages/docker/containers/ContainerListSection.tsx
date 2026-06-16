@@ -138,7 +138,7 @@ export function ContainerListSection({
   return (
     <>
       <Card className="rounded-xl">
-        <CardContent className="p-4 space-y-4">
+        <CardContent className="pt-1 pb-4 px-4 space-y-4">
           {/* 头部：标题 + 搜索 + 操作 */}
           <div className="flex items-center gap-3 flex-wrap">
             <div className="flex items-center gap-2">

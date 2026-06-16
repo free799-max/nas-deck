@@ -6,7 +6,7 @@
  */
 
 import { useMemo, useState } from "react";
-import { Plus, RefreshCw, Search, X } from "lucide-react";
+import { Layers, Plus, RefreshCw, Search, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
@@ -73,7 +73,7 @@ export function StackGrid({
 
   return (
     <Card className="rounded-xl">
-      <CardContent className="p-4 space-y-4">
+      <CardContent className="pt-1 pb-4 px-4 space-y-4">
         {projects.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-16 text-center">
             <p className="text-muted-foreground">暂无 Compose 编排项目</p>
@@ -87,6 +87,7 @@ export function StackGrid({
             {/* 头部工具栏 */}
             <div className="flex items-center gap-3 flex-wrap">
               <div className="flex items-center gap-2">
+                <Layers className="h-4 w-4 text-muted-foreground" />
                 <h2 className="text-sm font-medium">编排项目</h2>
                 <span className="text-xs text-muted-foreground">
                   共 {filteredProjects.length} 个
@@ -140,7 +141,7 @@ export function StackGrid({
                 未找到匹配的项目
               </p>
             ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
                 {filteredProjects.map((project) => (
                   <StackCard
                     key={project.id}
