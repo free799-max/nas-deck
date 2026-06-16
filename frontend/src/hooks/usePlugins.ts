@@ -49,8 +49,6 @@ export interface PluginInstance {
   display_name: string;
   /** 实例配置（JSON 对象，内容因插件而异） */
   config: Record<string, unknown>;
-  /** 关联的 Docker 容器 ID，若未运行则为 null */
-  docker_id: string | null;
   /** 是否启用该实例 */
   enabled: boolean;
 }

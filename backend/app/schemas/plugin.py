@@ -38,7 +38,6 @@ class PluginInstanceResponse(BaseModel):
         plugin_name: 插件标识名称
         display_name: 显示名称
         config: 插件配置参数
-        docker_id: 关联的 Docker 容器 ID，未绑定时为 None
         enabled: 是否启用
     """
 
@@ -46,7 +45,6 @@ class PluginInstanceResponse(BaseModel):
     plugin_name: str  # 插件标识名
     display_name: str  # 显示名称
     config: dict  # 插件配置参数
-    docker_id: str | None  # Docker 容器 ID，可为空
     enabled: bool  # 是否启用
 
     # 允许从 ORM 模型对象直接构造（from_attributes=True）
