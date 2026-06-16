@@ -8,7 +8,7 @@ async def test_register_user(client):
         "password": "admin123",
     })
     assert resp.status_code == 201
-    data = resp.json()
+    data = resp.json()["data"]
     assert data["username"] == "admin"
     assert "id" in data
     assert "hashed_password" not in data  # 不暴露密码
@@ -34,7 +34,7 @@ async def test_login(client):
         "username": "admin", "password": "admin123",
     })
     assert resp.status_code == 200
-    data = resp.json()
+    data = resp.json()["data"]
     assert "access_token" in data
     assert data["token_type"] == "bearer"
 
@@ -58,12 +58,12 @@ async def test_get_current_user(client):
     login_resp = await client.post("/api/auth/login", json={
         "username": "admin", "password": "admin123",
     })
-    token = login_resp.json()["access_token"]
+    token = login_resp.json()["data"]["access_token"]
     resp = await client.get("/api/auth/me", headers={
         "Authorization": f"Bearer {token}",
     })
     assert resp.status_code == 200
-    assert resp.json()["username"] == "admin"
+    assert resp.json()["data"]["username"] == "admin"
 
 
 @pytest.mark.asyncio

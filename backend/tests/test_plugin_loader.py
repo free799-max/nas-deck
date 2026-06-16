@@ -1,6 +1,6 @@
 import pytest
 
-from app.plugins.base import BasePlugin, Source, Item, Update
+from app.plugins.base import BasePlugin, Source, Item
 from app.core.plugin_loader import PluginLoader
 
 
@@ -20,8 +20,6 @@ class FakePlugin(BasePlugin):
     async def get_items(self, config: dict, source_id: str) -> list[Item]:
         return [Item(id="item-1", title="Test Item", source_id=source_id, meta={})]
 
-    async def check_updates(self, config: dict, subscriptions: list) -> list[Update]:
-        return [Update(subscription_id=1, title="New content", content="Details")]
 
 
 def test_base_plugin_interface():
@@ -53,14 +51,6 @@ async def test_plugin_get_items():
     assert items[0].title == "Test Item"
     assert items[0].source_id == "lib-1"
 
-
-@pytest.mark.asyncio
-async def test_plugin_check_updates():
-    plugin = FakePlugin()
-    updates = await plugin.check_updates({}, [{"id": 1, "item_id": "item-1"}])
-    assert len(updates) == 1
-    assert updates[0].subscription_id == 1
-    assert updates[0].title == "New content"
 
 
 def test_plugin_loader_register():
