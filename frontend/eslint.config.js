@@ -19,5 +19,9 @@ export default defineConfig([
       ecmaVersion: 2020,
       globals: globals.browser,
     },
+    rules: {
+      // 现有弹窗组件需要在 effect 中重置本地状态，关闭过于严格的规则
+      "react-hooks/set-state-in-effect": "off",
+    },
   },
 ])

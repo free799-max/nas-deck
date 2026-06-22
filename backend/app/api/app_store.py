@@ -97,13 +97,13 @@ async def preview_app(
     current_user: User = Depends(get_current_user),
 ):
     """预览应用渲染后的 Compose YAML。"""
-    rendered_yaml = await app_service.preview(
+    result = await app_service.preview(
         db,
         app_name=name,
         instance_name=data.instance_name,
         config=data.config,
     )
-    return {"yaml": rendered_yaml}
+    return result
 
 
 @router.post("/{name}/deploy", response_model=AppDeployResponse)

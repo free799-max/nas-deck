@@ -8,11 +8,17 @@ Create Date: 2026-06-19 20:44:24.380685
 from typing import Sequence, Union
 
 from alembic import op
-from sqlalchemy import select
+from sqlalchemy import MetaData, Table, select
 from sqlalchemy.orm import Session
 
 import app.models  # noqa: F401
 from app.models.app_store import App
+
+
+def _reflect_table(table_name: str) -> Table:
+    """反射当前数据库中的表结构，兼容 ORM 模型与表结构不同步的情况。"""
+    metadata = MetaData()
+    return Table(table_name, metadata, autoload_with=op.get_bind())
 
 
 # revision identifiers, used by Alembic.
@@ -335,15 +341,25 @@ def upgrade() -> None:
     bind = op.get_bind()
     session = Session(bind=bind)
 
+    # 反射当前 apps 表结构，兼容 default_values 被删除前的旧表
+    table = _reflect_table("apps")
+    columns = {col.name for col in table.columns}
+
     for data in BUILTIN_APPS:
         existing = session.execute(
             select(App).where(App.name == data["name"])
         ).scalar_one_or_none()
         if existing is None:
-            session.add(App(**data))
+            app_data = dict(data)
+            if "default_values" in columns:
+                app_data["default_values"] = {}
+            # 过滤掉当前表不存在的字段
+            app_data = {k: v for k, v in app_data.items() if k in columns}
+            session.execute(table.insert().values(app_data))
         elif existing.is_builtin:
             for key, value in data.items():
-                setattr(existing, key, value)
+                if key in columns:
+                    setattr(existing, key, value)
 
     session.commit()
 

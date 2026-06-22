@@ -135,22 +135,32 @@ class AppService:
         app_name: str,
         instance_name: str,
         config: dict,
-    ) -> str:
+    ) -> dict:
         """预览应用渲染后的 Compose YAML。
 
         复用部署前的校验、端口预检与渲染逻辑，但不创建项目与实例。
+        校验失败时返回包含错误信息的字典，而不是抛异常。
         """
         db_app = await self.get_app(db, app_name)
-        project_name = await self._validate_and_prepare(
-            db_app=db_app,
-            instance_name=instance_name,
-            config=config,
-        )
-        return self._render_app(
-            db_app=db_app,
-            config=config,
-            project_name=project_name,
-        )
+
+        # 1. JSON Schema 校验与端口预检失败时，把错误返回给前端展示
+        try:
+            project_name = await self._validate_and_prepare(
+                db_app=db_app,
+                instance_name=instance_name,
+                config=config,
+            )
+        except APIException as e:
+            return {"yaml": None, "error": e.message}
+
+        return {
+            "yaml": self._render_app(
+                db_app=db_app,
+                config=config,
+                project_name=project_name,
+            ),
+            "error": None,
+        }
 
     async def _validate_and_prepare(
         self,

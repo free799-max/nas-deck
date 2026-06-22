@@ -63,7 +63,8 @@ export interface AppPreviewRequest {
 
 /** 预览响应 */
 export interface AppPreviewResponse {
-  yaml: string;
+  yaml: string | null;
+  error: string | null;
 }
 
 /**
@@ -120,12 +121,8 @@ export function useDeployApp() {
  * 预览应用渲染后的 Compose YAML
  */
 export function useAppPreview(name: string) {
-  const toast = useToast();
   return useMutation({
     mutationFn: (data: AppPreviewRequest) =>
-      api.post<AppPreviewResponse>(`/apps/${name}/preview`, data).then((r) => r.data.yaml),
-    onError: (error: ApiError) => {
-      toast.error(error.displayMessage || "预览失败");
-    },
+      api.post<AppPreviewResponse>(`/apps/${name}/preview`, data).then((r) => r.data),
   });
 }

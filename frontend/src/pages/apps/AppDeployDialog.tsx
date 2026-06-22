@@ -71,11 +71,16 @@ function useDebouncedPreview(
       };
       preview.mutate(payload, {
         onSuccess: (data) => {
-          setYaml(data);
-          setError(null);
+          if (data.error) {
+            setError(data.error);
+            setYaml("");
+          } else {
+            setYaml(data.yaml || "");
+            setError(null);
+          }
         },
-        onError: (err: { displayMessage?: string }) => {
-          setError(err.displayMessage || "预览失败");
+        onError: () => {
+          setError("预览请求失败");
           setYaml("");
         },
       });

@@ -227,7 +227,6 @@ interface ArrayFieldProps {
   value: unknown;
   required: boolean;
   onChange: (key: string, value: unknown) => void;
-  settingType: string;
 }
 
 function ArrayField({
@@ -236,7 +235,6 @@ function ArrayField({
   value,
   required,
   onChange,
-  settingType,
 }: ArrayFieldProps) {
   const rows = Array.isArray(value) ? (value as Record<string, unknown>[]) : [];
   const items = prop.items || {};
@@ -259,8 +257,10 @@ function ArrayField({
     onChange(propKey, newRows);
   };
 
-  const addRow = () => {
-    updateRows([...rows, defaultRow()]);
+  const addRow = (index: number) => {
+    const newRows = [...rows];
+    newRows.splice(index + 1, 0, defaultRow());
+    updateRows(newRows);
   };
 
   const removeRow = (index: number) => {
@@ -275,16 +275,17 @@ function ArrayField({
     updateRows(newRows);
   };
 
-  const gridCols =
-    settingType === "ports"
-      ? "grid-cols-[1fr_1fr_80px_32px]"
-      : "grid-cols-[1fr_1fr_90px_32px]";
+  const itemPropEntries = Object.entries(itemProps);
+  const colWidths = itemPropEntries.map(([, p]) =>
+    p.enum && p.enum.length > 0 ? "90px" : "1fr"
+  );
+  const gridCols = `grid-cols-[${colWidths.join("_")}_32px_32px]`;
 
   return (
     <div className="space-y-1.5">
       {rows.map((row, index) => (
         <div key={index} className={`grid ${gridCols} gap-2 items-end`}>
-          {Object.entries(itemProps).map(([key, p]) => (
+          {itemPropEntries.map(([key, p]) => (
             <FieldInput
               key={key}
               propKey={key}
@@ -305,18 +306,29 @@ function ArrayField({
           >
             <Minus className="h-4 w-4" />
           </Button>
+          <Button
+            type="button"
+            variant="secondary"
+            size="icon"
+            className="h-8 w-8 rounded-sm"
+            onClick={() => addRow(index)}
+          >
+            <Plus className="h-4 w-4" />
+          </Button>
         </div>
       ))}
-      <Button
-        type="button"
-        variant="secondary"
-        size="sm"
-        className="h-8 gap-1 rounded-md"
-        onClick={addRow}
-      >
-        <Plus className="h-4 w-4" />
-        新增
-      </Button>
+      {rows.length === 0 && (
+        <Button
+          type="button"
+          variant="secondary"
+          size="sm"
+          className="h-8 gap-1 rounded-md mr-1"
+          onClick={() => addRow(0)}
+        >
+          <Plus className="h-4 w-4" />
+          新增
+        </Button>
+      )}
     </div>
   );
 }
@@ -445,7 +457,7 @@ function ContainerSchemaForm({
     onChange({ ...data, [key]: value });
   };
 
-  const renderFields = (fields: string[], settingType: string) => {
+  const renderFields = (fields: string[]) => {
     return (
       <div className="space-y-2">
         {fields
@@ -461,7 +473,6 @@ function ContainerSchemaForm({
                   value={data[key]}
                   required={requiredSet.has(key)}
                   onChange={handleChange}
-                  settingType={settingType}
                 />
               );
             }
@@ -535,7 +546,7 @@ function ContainerSchemaForm({
                             {setting.description}
                           </p>
                         )}
-                        {renderFields(setting.fields, setting.type)}
+                        {renderFields(setting.fields)}
                       </div>
                     )}
                   </div>

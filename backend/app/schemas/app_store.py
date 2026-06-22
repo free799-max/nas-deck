@@ -45,9 +45,14 @@ class AppDeployRequest(BaseModel):
 
 
 class AppPreviewResponse(BaseModel):
-    """应用 Compose YAML 预览响应模型。"""
+    """应用 Compose YAML 预览响应模型。
 
-    yaml: str
+    校验通过时 yaml 为渲染后的 YAML，error 为空；
+    校验失败时 error 为错误描述，yaml 为空。
+    """
+
+    yaml: str | None = None
+    error: str | None = None
 
     model_config = ConfigDict(from_attributes=True)
 
