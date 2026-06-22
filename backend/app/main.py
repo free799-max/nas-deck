@@ -15,17 +15,26 @@ from app.schemas.response import StandardResponse
 from app.core.custom_route import CustomAPIRoute
 
 from app.config import settings
-from app.database import init_db
 from app.api.auth import router as auth_router
 from app.api.plugins import router as plugins_router
+from app.api.orchestrations import router as orchestrations_router
+from app.api.app_store import router as apps_router
 # trigger-reload: docker_manager fixed
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期管理：启动时初始化资源，关闭时释放资源。"""
-    # 初始化数据库表结构
-    await init_db()
+    # 执行数据库迁移（包含 schema 与内置数据初始化）
+    import asyncio
+    from pathlib import Path
+    from alembic.config import Config
+    from alembic import command
+
+    backend_dir = Path(__file__).resolve().parent.parent
+    alembic_cfg = Config(str(backend_dir / "alembic.ini"))
+    # alembic env 内部使用 asyncio.run，必须在独立线程执行以避免与当前事件循环冲突
+    await asyncio.to_thread(command.upgrade, alembic_cfg, "head")
 
     # 自动发现并加载插件
     from app.core.plugin_loader import plugin_loader
@@ -77,6 +86,8 @@ app.add_middleware(
 # 注册所有 API 路由
 app.include_router(auth_router)
 app.include_router(plugins_router)
+app.include_router(orchestrations_router)
+app.include_router(apps_router)
 
 # Docker 管理路由（依赖可选的 Docker 环境）
 from app.api.docker import router as docker_router

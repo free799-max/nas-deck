@@ -11,6 +11,8 @@ import { AppLayout } from "./layouts/AppLayout";
 import { LoginPage } from "./pages/auth/LoginPage";
 import { DashboardPage } from "./pages/dashboard/DashboardPage";
 import { PluginsPage } from "./pages/services/PluginsPage";
+import { AppsPage } from "./pages/apps/AppsPage";
+import { OrchestrationsPage } from "./pages/orchestrations/OrchestrationsPage";
 import { DockerPage } from "./pages/docker/containers/DockerPage";
 import { DockerHostPage } from "./pages/docker/host/DockerHostPage";
 import { DockerImagesPage } from "./pages/docker/images/DockerImagesPage";
@@ -80,6 +82,8 @@ export default function App() {
               {/* 核心入口 */}
               <Route path="/" element={<DashboardPage />} />
               <Route path="/services" element={<PluginsPage />} />
+              <Route path="/appstore" element={<AppsPage />} />
+              <Route path="/orchestrations" element={<OrchestrationsPage />} />
 
               {/* 自动化管理 */}
               <Route

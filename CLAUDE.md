@@ -173,7 +173,7 @@ DockerComposeProject 1--1 DockerComposeStack
 
 - **注释语言**：中文（docstring + `#` 行内注释）
 - **Python 环境**：开发环境使用 `backend/.venv/bin/python`（Linux）或 `backend/.venv/Scripts/python.exe`（Windows）；运行命令需设置 `PYTHONPATH=./app`
-- **数据库**：SQLite + aiosqlite 异步驱动，开发时数据库文件在 `backend/nasdeck.db`；容器化部署时通过 `.env` 指向 `./data/nasdeck.db`
+- **数据库**：SQLite + aiosqlite 异步驱动，全项目统一使用 `data/nasdeck.db`；`.env` 的 `DATABASE_URL` 使用绝对路径（`sqlite+aiosqlite:////<项目绝对路径>/data/nasdeck.db`），避免不同 cwd 下相对路径解析到不同库。测试使用内存库（`sqlite+aiosqlite:///:memory:`），不影响该文件。改表结构后只需对这一个库执行 `alembic upgrade head`
 - **认证**：JWT Bearer token（HS256），`register` 端点默认赋予 `admin` 角色，token 有效期 24 小时
 - **CORS**：开发环境 `allow_origins=["*"]`
 - **路径别名**：前端 `@/` 映射到 `src/`

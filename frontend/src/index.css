@@ -142,10 +142,13 @@
     scrollbar-color: var(--scrollbar-thumb) transparent;
     }
 
-  /* 全局滚动条：细、半透明、风格一致 */
+  /* 全局滚动条：极细、半透明、无上下箭头、风格一致 */
   ::-webkit-scrollbar {
-    width: 6px;
-    height: 6px;
+    width: 4px;
+    height: 4px;
+  }
+  ::-webkit-scrollbar-button {
+    display: none;
   }
   ::-webkit-scrollbar-track {
     background: transparent;
@@ -186,8 +189,11 @@
     scrollbar-color: var(--scrollbar-thumb) transparent;
   }
   .scrollbar-thin::-webkit-scrollbar {
-    width: 6px;
-    height: 6px;
+    width: 4px;
+    height: 4px;
+  }
+  .scrollbar-thin::-webkit-scrollbar-button {
+    display: none;
   }
   .scrollbar-thin::-webkit-scrollbar-track {
     background: transparent;
@@ -204,5 +210,56 @@
   }
   .dark .scrollbar-thin::-webkit-scrollbar-thumb:hover {
     background: var(--scrollbar-thumb-hover);
+  }
+}
+
+@layer components {
+  .markdown-body {
+    @apply text-foreground/90 leading-relaxed;
+  }
+  .markdown-body > :first-child {
+    @apply mt-0;
+  }
+  .markdown-body h1 {
+    @apply text-2xl font-bold text-foreground mt-6 mb-4 pb-2 border-b border-border/60;
+  }
+  .markdown-body h2 {
+    @apply text-xl font-semibold text-foreground mt-6 mb-3;
+  }
+  .markdown-body h3 {
+    @apply text-lg font-semibold text-foreground mt-5 mb-2;
+  }
+  .markdown-body p {
+    @apply mb-4;
+  }
+  .markdown-body ul {
+    @apply list-disc pl-6 mb-4 space-y-2;
+  }
+  .markdown-body ol {
+    @apply list-decimal pl-6 mb-4 space-y-2;
+  }
+  .markdown-body li {
+    @apply text-foreground/90;
+  }
+  .markdown-body strong {
+    @apply font-semibold text-foreground;
+  }
+  .markdown-body a {
+    @apply text-primary hover:underline;
+  }
+  .markdown-body code {
+    @apply bg-muted px-1.5 py-0.5 rounded text-sm font-mono;
+  }
+  .markdown-body pre {
+    @apply bg-muted p-4 rounded-lg overflow-x-auto mb-4;
+  }
+  .markdown-body pre code {
+    @apply bg-transparent p-0;
+  }
+  .markdown-body blockquote {
+    @apply border-l-4 border-primary/30 pl-4 italic text-muted-foreground mb-4;
+  }
+  .markdown-body hr {
+    @apply border-border my-6;
   }
 }
