@@ -1,12 +1,48 @@
 """Docker 宿主机信息服务。"""
 
 import shutil
+from pathlib import Path
 
+from app.core.exceptions import APIException
 from app.services.docker import docker_common as common
 
 
 class HostService(common.BaseDockerService):
     """宿主机信息服务，获取 Docker 引擎与主机资源概况。"""
+
+    def list_directories(self, path: str) -> dict:
+        """列出指定路径下的目录条目。
+
+        仅返回目录，不返回文件；解析真实路径以防御路径遍历。
+        """
+        try:
+            target = Path(path).expanduser().resolve()
+        except Exception as exc:
+            raise APIException(f"无效路径: {path}", 400) from exc
+
+        if not target.exists():
+            raise APIException(f"路径不存在: {path}", 404)
+        if not target.is_dir():
+            raise APIException(f"不是目录: {path}", 400)
+
+        entries = []
+        try:
+            for child in sorted(target.iterdir()):
+                if child.is_dir():
+                    entries.append({
+                        "name": child.name,
+                        "path": str(child.resolve()),
+                        "is_directory": True,
+                    })
+        except PermissionError as exc:
+            raise APIException(f"无权限访问路径: {path}", 403) from exc
+        except OSError as exc:
+            raise APIException(f"读取路径失败: {exc}", 500) from exc
+
+        return {
+            "path": str(target),
+            "entries": entries,
+        }
 
     def get_host_info(self) -> dict | None:
         """获取 Docker 宿主机综合信息。"""

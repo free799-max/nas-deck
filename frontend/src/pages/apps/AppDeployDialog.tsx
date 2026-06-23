@@ -18,6 +18,7 @@ import { SchemaForm } from "@/components/SchemaForm";
 import { CodeBlock } from "@/components/ui/code-block";
 import { useToast } from "@/components/ui/toast";
 import api from "@/lib/api";
+import { generatePassword } from "@/lib/utils";
 import { useAppPreview, type AppPreviewRequest } from "@/hooks/useApps";
 import type { App } from "@/hooks/useApps";
 import type { SchemaProperty } from "@/components/SchemaForm";
@@ -50,6 +51,60 @@ function extractDefaults(schema: Record<string, unknown>): Record<string, unknow
     }
   }
   return defaults;
+}
+
+interface SchemaPropertyWithItems extends Record<string, unknown> {
+  format?: string;
+  type?: string;
+  items?: {
+    properties?: Record<string, SchemaPropertyWithItems>;
+  };
+  default?: unknown;
+}
+
+/** 遍历 defaults，为空密码字段自动生成密码 */
+function fillEmptyPasswords(
+  schema: Record<string, unknown>,
+  defaults: Record<string, unknown>
+): Record<string, unknown> {
+  const properties = schema?.properties as
+    | Record<string, SchemaPropertyWithItems>
+    | undefined;
+  if (!properties) return defaults;
+
+  const filled = structuredClone(defaults);
+
+  for (const [key, prop] of Object.entries(properties)) {
+    if (prop.format === "password") {
+      const value = filled[key];
+      if (value === "" || value === undefined || value === null) {
+        filled[key] = generatePassword();
+      }
+      continue;
+    }
+
+    if (
+      prop.type === "array" &&
+      prop.items?.properties &&
+      "key" in prop.items.properties &&
+      "value" in prop.items.properties
+    ) {
+      const rows = Array.isArray(filled[key]) ? filled[key] as Record<string, unknown>[] : [];
+      filled[key] = rows.map((row) => {
+        const keyValue = String(row?.key || "").toLowerCase();
+        const value = row?.value;
+        if (
+          (keyValue.includes("password") || keyValue.includes("pass")) &&
+          (value === "" || value === undefined || value === null)
+        ) {
+          return { ...row, value: generatePassword() };
+        }
+        return row;
+      });
+    }
+  }
+
+  return filled;
 }
 
 function useDebouncedPreview(
@@ -142,7 +197,8 @@ export function AppDeployDialog({
   useEffect(() => {
     if (app) {
       setInstanceName(app.display_name);
-      setConfig(extractDefaults(app.config_schema));
+      const defaults = extractDefaults(app.config_schema);
+      setConfig(fillEmptyPasswords(app.config_schema, defaults));
     }
   }, [app?.name, JSON.stringify(app?.config_schema)]);
 

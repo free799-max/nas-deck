@@ -54,3 +54,25 @@ export function formatCount(count: number): string {
   if (count >= 1_000) return `${(count / 1_000).toFixed(1)}K`;
   return String(count);
 }
+
+/** 生成随机密码（大小写字母 + 数字） */
+export function generatePassword(length = 16): string {
+  const upper = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+  const lower = "abcdefghijklmnopqrstuvwxyz";
+  const digits = "0123456789";
+  const all = upper + lower + digits;
+
+  let password = "";
+  password += upper[Math.floor(Math.random() * upper.length)];
+  password += lower[Math.floor(Math.random() * lower.length)];
+  password += digits[Math.floor(Math.random() * digits.length)];
+
+  for (let i = 3; i < length; i++) {
+    password += all[Math.floor(Math.random() * all.length)];
+  }
+
+  return password
+    .split("")
+    .sort(() => Math.random() - 0.5)
+    .join("");
+}

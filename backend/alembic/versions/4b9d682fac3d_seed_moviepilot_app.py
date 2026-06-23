@@ -88,6 +88,7 @@ BUILTIN_APPS: list[dict] = [
                             'host_path': {
                                 'type': 'string',
                                 'title': '本地路径',
+                                'format': 'directory',
                             },
                             'container_path': {
                                 'type': 'string',

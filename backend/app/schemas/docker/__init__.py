@@ -21,6 +21,8 @@ from app.schemas.docker.container import (
     VolumeMount,
 )
 from app.schemas.docker.host import (
+    DirectoryEntry,
+    DirectoryList,
     DockerStatsInfo,
     DockerVersionInfo,
     HostInfo,
@@ -93,6 +95,8 @@ __all__ = [
     "RegistryUpdate",
     "RegistryOut",
     # host
+    "DirectoryEntry",
+    "DirectoryList",
     "DockerVersionInfo",
     "ResourceInfo",
     "DockerStatsInfo",

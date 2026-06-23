@@ -10,7 +10,9 @@ import { useState } from "react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
-import { Minus, Plus, ChevronUp, ChevronDown } from "lucide-react";
+import { DirectoryPicker } from "@/components/DirectoryPicker";
+import { generatePassword } from "@/lib/utils";
+import { Minus, Plus, ChevronUp, ChevronDown, FolderOpen, RefreshCw } from "lucide-react";
 
 /** Schema 属性定义 */
 export interface SchemaProperty {
@@ -21,6 +23,7 @@ export interface SchemaProperty {
   enum?: unknown[];
   minimum?: number;
   maximum?: number;
+  format?: string;
   items?: {
     type?: string;
     properties?: Record<string, SchemaProperty>;
@@ -138,6 +141,7 @@ function FieldInput({
   hideLabel = false,
 }: FieldInputProps) {
   const label = prop.title || propKey;
+  const [pickerOpen, setPickerOpen] = useState(false);
 
   const handleChange = (next: unknown) => {
     onChange(propKey, next);
@@ -194,29 +198,86 @@ function FieldInput({
     );
   }
 
+  const isPasswordField = prop.format === "password";
+  const isDirectoryField = prop.format === "directory";
+
   const inputType =
     prop.type === "integer" || prop.type === "number" ? "number" : "text";
+
+  const inputNode = (
+    <Input
+      id={propKey}
+      type={inputType}
+      value={value === undefined || value === null ? "" : String(value)}
+      onChange={(e) => {
+        const raw = e.target.value;
+        if (prop.type === "integer") {
+          handleChange(raw === "" ? "" : parseInt(raw, 10));
+        } else if (prop.type === "number") {
+          handleChange(raw === "" ? "" : parseFloat(raw));
+        } else {
+          handleChange(raw);
+        }
+      }}
+      placeholder={hideLabel ? label : prop.description}
+      className="h-8 rounded-md border-input bg-white px-2 text-sm shadow-none"
+    />
+  );
+
+  // 目录选择：输入框 + 浏览按钮
+  if (isDirectoryField) {
+    return (
+      <div className="space-y-1">
+        {!hideLabel && labelNode}
+        <div className="flex items-center gap-2">
+          {inputNode}
+          <Button
+            type="button"
+            variant="secondary"
+            size="icon"
+            className="h-8 w-8 shrink-0 rounded-md"
+            onClick={() => setPickerOpen(true)}
+            title="选择目录"
+          >
+            <FolderOpen className="h-4 w-4" />
+          </Button>
+        </div>
+        <DirectoryPicker
+          open={pickerOpen}
+          onOpenChange={setPickerOpen}
+          initialPath={value ? String(value) : "/"}
+          onSelect={(path) => handleChange(path)}
+        />
+      </div>
+    );
+  }
+
+  // 密码生成：输入框 + 生成按钮（默认明文显示）
+  if (isPasswordField) {
+    return (
+      <div className="space-y-1">
+        {!hideLabel && labelNode}
+        <div className="flex items-center gap-2">
+          {inputNode}
+          <Button
+            type="button"
+            variant="secondary"
+            size="icon"
+            className="h-8 w-8 shrink-0 rounded-md"
+            onClick={() => handleChange(generatePassword())}
+            title="重新生成密码"
+          >
+            <RefreshCw className="h-4 w-4" />
+          </Button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-1">
       {!hideLabel && labelNode}
-      <Input
-        id={propKey}
-        type={inputType}
-        value={value === undefined || value === null ? "" : String(value)}
-        onChange={(e) => {
-          const raw = e.target.value;
-          if (prop.type === "integer") {
-            handleChange(raw === "" ? "" : parseInt(raw, 10));
-          } else if (prop.type === "number") {
-            handleChange(raw === "" ? "" : parseFloat(raw));
-          } else {
-            handleChange(raw);
-          }
-        }}
-        placeholder={hideLabel ? label : prop.description}
-        className="h-8 rounded-md border-input bg-white px-2 text-sm shadow-none"
-      />
+      {inputNode}
     </div>
   );
 }
@@ -276,29 +337,45 @@ function ArrayField({
   };
 
   const itemPropEntries = Object.entries(itemProps);
-  const buttonColSpan = itemPropEntries.length >= 3 ? "col-span-1" : "col-span-2";
+  const isTwoColumnRow = itemPropEntries.length === 2;
 
   // 使用 display: contents 让每行子元素直接参与外层统一 grid：
   // grid-cols-[1fr_1fr_90px_auto]
-  // - 端口/存储空间：3 个字段各占 1 列，按钮占第 4 列
-  // - 环境变量：2 个字段各占 1 列，按钮占第 3-4 列
+  // - 3 个字段（ports/volumes）：各占 1 列，按钮在第 4 列
+  // - 2 个字段（env）：key 占 1 列，value 跨 2-3 列，按钮在第 4 列，不留空白
   return (
     <>
       {rows.map((row, index) => (
         <div key={`${propKey}-row-${index}`} className="contents">
-          {itemPropEntries.map(([key, p]) => (
-            <div key={key} className="col-span-1">
-              <FieldInput
-                propKey={key}
-                prop={p}
-                value={row[key]}
-                required={itemRequired.has(key)}
-                onChange={(_, val) => updateRow(index, key, val)}
-                hideLabel
-              />
-            </div>
-          ))}
-          <div className={`flex items-center gap-2 mr-2 ${buttonColSpan}`}>
+          {itemPropEntries.map(([key, p]) => {
+            // key/value 数组中，根据 key 的值推断 value 的语义
+            let prop = p;
+            if (
+              key === "value" &&
+              "key" in itemProps &&
+              row.key !== undefined
+            ) {
+              const keyValue = String(row.key).toLowerCase();
+              if (keyValue.includes("password") || keyValue.includes("pass")) {
+                prop = { ...p, format: "password" };
+              }
+            }
+            const colSpan =
+              isTwoColumnRow && key === "value" ? "col-span-2" : "col-span-1";
+            return (
+              <div key={key} className={colSpan}>
+                <FieldInput
+                  propKey={key}
+                  prop={prop}
+                  value={row[key]}
+                  required={itemRequired.has(key)}
+                  onChange={(_, val) => updateRow(index, key, val)}
+                  hideLabel
+                />
+              </div>
+            );
+          })}
+          <div className="col-span-1 flex items-center justify-end gap-2 mr-2">
             <Button
               type="button"
               variant="secondary"
@@ -466,8 +543,11 @@ function ContainerSchemaForm({
   };
 
   const renderFields = (fields: string[]) => {
+    // 端口/存储空间：3 字段，协议/权限列占 90px，按钮在 auto 列
+    // 环境变量：2 字段，按钮直接放 auto 列，由相同按钮组自然对齐，不留空白列
+    const gridClass = "grid-cols-[1fr_1fr_90px_auto]";
     return (
-      <div className="grid grid-cols-[1fr_1fr_90px_auto] gap-2">
+      <div className={`grid ${gridClass} gap-2`}>
         {fields
           .filter((key) => properties[key])
           .map((key) => {

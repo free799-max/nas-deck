@@ -3,6 +3,21 @@
 from pydantic import BaseModel
 
 
+class DirectoryEntry(BaseModel):
+    """目录条目信息。"""
+
+    name: str
+    path: str
+    is_directory: bool
+
+
+class DirectoryList(BaseModel):
+    """目录列表响应。"""
+
+    path: str
+    entries: list[DirectoryEntry]
+
+
 class DockerVersionInfo(BaseModel):
     """Docker 引擎版本信息。"""
 
