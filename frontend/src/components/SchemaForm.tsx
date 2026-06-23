@@ -276,60 +276,68 @@ function ArrayField({
   };
 
   const itemPropEntries = Object.entries(itemProps);
-  const colWidths = itemPropEntries.map(([, p]) =>
-    p.enum && p.enum.length > 0 ? "90px" : "1fr"
-  );
-  const gridCols = `grid-cols-[${colWidths.join("_")}_32px_32px]`;
+  const buttonColSpan = itemPropEntries.length >= 3 ? "col-span-1" : "col-span-2";
 
+  // 使用 display: contents 让每行子元素直接参与外层统一 grid：
+  // grid-cols-[1fr_1fr_90px_auto]
+  // - 端口/存储空间：3 个字段各占 1 列，按钮占第 4 列
+  // - 环境变量：2 个字段各占 1 列，按钮占第 3-4 列
   return (
-    <div className="space-y-1.5">
+    <>
       {rows.map((row, index) => (
-        <div key={index} className={`grid ${gridCols} gap-2 items-end`}>
+        <div key={`${propKey}-row-${index}`} className="contents">
           {itemPropEntries.map(([key, p]) => (
-            <FieldInput
-              key={key}
-              propKey={key}
-              prop={p}
-              value={row[key]}
-              required={itemRequired.has(key)}
-              onChange={(_, val) => updateRow(index, key, val)}
-              hideLabel
-            />
+            <div key={key} className="col-span-1">
+              <FieldInput
+                propKey={key}
+                prop={p}
+                value={row[key]}
+                required={itemRequired.has(key)}
+                onChange={(_, val) => updateRow(index, key, val)}
+                hideLabel
+              />
+            </div>
           ))}
-          <Button
-            type="button"
-            variant="secondary"
-            size="icon"
-            className="h-8 w-8 rounded-sm"
-            onClick={() => removeRow(index)}
-            disabled={required && rows.length <= 1}
-          >
-            <Minus className="h-4 w-4" />
-          </Button>
-          <Button
-            type="button"
-            variant="secondary"
-            size="icon"
-            className="h-8 w-8 rounded-sm"
-            onClick={() => addRow(index)}
-          >
-            <Plus className="h-4 w-4" />
-          </Button>
+          <div className={`flex items-center gap-2 mr-2 ${buttonColSpan}`}>
+            <Button
+              type="button"
+              variant="secondary"
+              size="icon"
+              className="h-8 w-8 rounded-sm"
+              onClick={() => removeRow(index)}
+              disabled={required && rows.length <= 1}
+            >
+              <Minus className="h-4 w-4" />
+            </Button>
+            <Button
+              type="button"
+              variant="secondary"
+              size="icon"
+              className="h-8 w-8 rounded-sm"
+              onClick={() => addRow(index)}
+            >
+              <Plus className="h-4 w-4" />
+            </Button>
+          </div>
         </div>
       ))}
       {rows.length === 0 && (
-        <Button
-          type="button"
-          variant="secondary"
-          size="sm"
-          className="h-8 gap-1 rounded-md mr-1"
-          onClick={() => addRow(0)}
-        >
-          <Plus className="h-4 w-4" />
-          新增
-        </Button>
+        <div className="contents">
+          <div className="col-span-4">
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              className="h-8 gap-1 rounded-md mr-2"
+              onClick={() => addRow(0)}
+            >
+              <Plus className="h-4 w-4" />
+              新增
+            </Button>
+          </div>
+        </div>
       )}
-    </div>
+    </>
   );
 }
 
@@ -459,7 +467,7 @@ function ContainerSchemaForm({
 
   const renderFields = (fields: string[]) => {
     return (
-      <div className="space-y-2">
+      <div className="grid grid-cols-[1fr_1fr_90px_auto] gap-2">
         {fields
           .filter((key) => properties[key])
           .map((key) => {
@@ -477,15 +485,16 @@ function ContainerSchemaForm({
               );
             }
             return (
-              <FieldInput
-                key={key}
-                propKey={key}
-                prop={prop}
-                value={data[key]}
-                required={requiredSet.has(key)}
-                onChange={handleChange}
-                hideLabel
-              />
+              <div key={key} className="col-span-4">
+                <FieldInput
+                  propKey={key}
+                  prop={prop}
+                  value={data[key]}
+                  required={requiredSet.has(key)}
+                  onChange={handleChange}
+                  hideLabel
+                />
+              </div>
             );
           })}
       </div>
