@@ -6,7 +6,7 @@
  */
 
 import { useState, useEffect, useCallback, createContext, useContext, useMemo } from "react";
-import { CheckCircle, XCircle, X } from "lucide-react";
+import { CheckCircle, AlertCircle, X } from "lucide-react";
 
 export interface Toast {
   id: number;
@@ -53,7 +53,7 @@ function ToastItem({
       {toast.type === "success" ? (
         <CheckCircle className="h-4 w-4 shrink-0" />
       ) : (
-        <XCircle className="h-4 w-4 shrink-0" />
+        <AlertCircle className="h-4 w-4 shrink-0" />
       )}
       <span>{toast.message}</span>
       <button

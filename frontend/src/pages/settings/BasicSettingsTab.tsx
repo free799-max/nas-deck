@@ -16,6 +16,9 @@ import {
   useSystemConfig,
   useUpdateSystemConfig,
   useSettingsDirectories,
+  useSettingsCreateDirectory,
+  useSettingsRenameDirectory,
+  useSettingsDeleteDirectory,
   type SystemConfig,
 } from "@/hooks/useSettings";
 import { Network, HardDrive, FolderOpen } from "lucide-react";
@@ -49,6 +52,9 @@ function DirectoryInput({
   description,
 }: DirectoryInputProps) {
   const [pickerOpen, setPickerOpen] = useState(false);
+  const createDirectory = useSettingsCreateDirectory();
+  const renameDirectory = useSettingsRenameDirectory();
+  const deleteDirectory = useSettingsDeleteDirectory();
 
   return (
     <div className="space-y-1.5">
@@ -76,9 +82,14 @@ function DirectoryInput({
         <DirectoryPicker
           open={pickerOpen}
           onOpenChange={setPickerOpen}
+          rootPath="/"
           initialPath={value || "/"}
+          returnRelative={false}
           onSelect={onChange}
           useDirectoriesQuery={useSettingsDirectories}
+          createDirectory={createDirectory}
+          renameDirectory={renameDirectory}
+          deleteDirectory={deleteDirectory}
         />
       </div>
       {description && (

@@ -18,7 +18,7 @@ import { SchemaForm } from "@/components/SchemaForm";
 import { CodeBlock } from "@/components/ui/code-block";
 import { useToast } from "@/components/ui/toast";
 import api from "@/lib/api";
-import { generatePassword } from "@/lib/utils";
+import { generatePassword, sanitizeInstanceName, slugify } from "@/lib/utils";
 import { useAppPreview, type AppPreviewRequest } from "@/hooks/useApps";
 import type { App } from "@/hooks/useApps";
 import type { SchemaProperty } from "@/components/SchemaForm";
@@ -121,7 +121,7 @@ function useDebouncedPreview(
 
     const timer = setTimeout(() => {
       const payload: AppPreviewRequest = {
-        instance_name: instanceName.trim() || app.display_name,
+        instance_name: slugify(instanceName) || slugify(app.display_name),
         config,
       };
       preview.mutate(payload, {
@@ -196,7 +196,7 @@ export function AppDeployDialog({
 
   useEffect(() => {
     if (app) {
-      setInstanceName(app.display_name);
+      setInstanceName(slugify(app.display_name));
       const defaults = extractDefaults(app.config_schema);
       setConfig(fillEmptyPasswords(app.config_schema, defaults));
     }
@@ -239,11 +239,12 @@ export function AppDeployDialog({
   }
 
   const handleDeploy = () => {
-    if (!instanceName.trim()) {
-      toast.error("请输入实例名称");
+    const projectName = slugify(instanceName);
+    if (!projectName) {
+      toast.error("请输入有效的实例名称");
       return;
     }
-    onDeploy({ instance_name: instanceName.trim(), config });
+    onDeploy({ instance_name: projectName, config });
   };
 
   return (
@@ -265,8 +266,9 @@ export function AppDeployDialog({
                 <Input
                   id="instance-name"
                   value={instanceName}
-                  onChange={(e) => setInstanceName(e.target.value)}
-                  placeholder="如：我的 Jellyfin 媒体服务器"
+                  onChange={(e) => setInstanceName(sanitizeInstanceName(e.target.value))}
+                  onBlur={() => setInstanceName(slugify(instanceName))}
+                  placeholder="如：my-moviepilot"
                   className="h-8 rounded-md border-input bg-white px-2 text-sm shadow-none"
                 />
               </div>
@@ -280,6 +282,7 @@ export function AppDeployDialog({
                 }
                 data={config}
                 onChange={setConfig}
+                instanceName={instanceName}
               />
             </div>
 

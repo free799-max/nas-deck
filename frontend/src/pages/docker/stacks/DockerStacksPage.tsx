@@ -20,6 +20,7 @@ import { StackEditorDialog } from "./StackEditorDialog";
 import { StackVersionDialog } from "./StackVersionDialog";
 import { StackLogsDialog } from "./StackLogsDialog";
 import { StackDetailDialog } from "./StackDetailDialog";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 
 export function DockerStacksPage() {
   const {
@@ -35,6 +36,7 @@ export function DockerStacksPage() {
   const [logsProject, setLogsProject] = useState<ComposeProject | null>(null);
   const [detailProjectId, setDetailProjectId] = useState<number | null>(null);
   const [pendingProjectId, setPendingProjectId] = useState<number | null>(null);
+  const [deleteProject, setDeleteProject] = useState<ComposeProject | null>(null);
 
   const actionMutation = useComposeAction();
   const deleteMutation = useDeleteComposeProject();
@@ -53,8 +55,13 @@ export function DockerStacksPage() {
   };
 
   const handleDelete = (project: ComposeProject) => {
-    if (confirm(`确定删除编排项目 "${project.project_name}" 吗？\n将停止并移除其容器与网络。`)) {
-      deleteMutation.mutate(project.id);
+    setDeleteProject(project);
+  };
+
+  const handleConfirmDelete = () => {
+    if (deleteProject) {
+      deleteMutation.mutate(deleteProject.id);
+      setDeleteProject(null);
     }
   };
 
@@ -130,6 +137,24 @@ export function DockerStacksPage() {
         onOpenChange={(open) => {
           if (!open) setDetailProjectId(null);
         }}
+      />
+
+      <ConfirmDialog
+        open={!!deleteProject}
+        onOpenChange={(open) => {
+          if (!open) setDeleteProject(null);
+        }}
+        title="删除编排项目"
+        description={
+          deleteProject
+            ? `确定删除编排项目${deleteProject.project_name}，将删除容器与网络？`
+            : undefined
+        }
+        confirmText="删除"
+        cancelText="取消"
+        onConfirm={handleConfirmDelete}
+        destructive
+        isPending={deleteMutation.isPending}
       />
     </div>
   );

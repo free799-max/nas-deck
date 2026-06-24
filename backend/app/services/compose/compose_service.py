@@ -16,6 +16,7 @@ from app.models.docker import (
     DockerComposeStack,
     DockerComposeVersion,
 )
+from app.models.orchestration import AppInstance
 from app.services.compose.compose_discovery import ComposeDiscoveryService
 
 logger = logging.getLogger(__name__)
@@ -301,6 +302,13 @@ class ComposeService:
             if project_dir == self._working_dir(project):
                 if project_dir.exists():
                     shutil.rmtree(project_dir)
+
+            # 先清理关联的应用实例记录（含备份级联删除）
+            from sqlalchemy import delete
+
+            await db.execute(
+                delete(AppInstance).where(AppInstance.project_id == project.id)
+            )
 
             await db.delete(project)
             await db.commit()

@@ -9,8 +9,14 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { DirectoryPicker } from "@/components/DirectoryPicker";
-import { generatePassword } from "@/lib/utils";
+import { generatePassword, toDisplayPath } from "@/lib/utils";
 import { useSystemConfig } from "@/hooks/useSettings";
+import {
+  useCreateDirectory,
+  useDeleteDirectory,
+  useDirectories,
+  useRenameDirectory,
+} from "@/hooks/useHost";
 import { Minus, Plus, ChevronUp, ChevronDown, FolderOpen, RefreshCw } from "lucide-react";
 
 /** Schema 属性定义 */
@@ -57,6 +63,8 @@ interface SchemaFormProps {
   data: Record<string, unknown>;
   /** 表单数据变化回调 */
   onChange: (data: Record<string, unknown>) => void;
+  /** 实例名，用于相对路径展示 */
+  instanceName?: string;
 }
 interface FieldInputProps {
   propKey: string;
@@ -65,6 +73,7 @@ interface FieldInputProps {
   required: boolean;
   onChange: (key: string, value: unknown) => void;
   hideLabel?: boolean;
+  instanceName?: string;
 }
 
 function FieldInput({
@@ -74,10 +83,14 @@ function FieldInput({
   required,
   onChange,
   hideLabel = false,
+  instanceName,
 }: FieldInputProps) {
   const label = prop.title || propKey;
   const [pickerOpen, setPickerOpen] = useState(false);
   const { data: systemConfig } = useSystemConfig();
+  const createDirectory = useCreateDirectory();
+  const renameDirectory = useRenameDirectory();
+  const deleteDirectory = useDeleteDirectory();
 
   const handleChange = (next: unknown) => {
     onChange(propKey, next);
@@ -162,18 +175,24 @@ function FieldInput({
 
   // 目录选择：输入框 + 浏览按钮
   if (isDirectoryField) {
-    const dockerMountDir = systemConfig?.storage_docker_mount_dir;
-    const currentValue = value === undefined || value === null ? "" : String(value);
-    const pickerInitialPath =
-      currentValue && currentValue.startsWith("/")
-        ? currentValue
-        : dockerMountDir || "/";
+    const hostRootDir = systemConfig?.storage_host_root_dir || "/";
+    const dockerMountDir = systemConfig?.storage_docker_mount_dir || hostRootDir;
+    const currentValue =
+      value === undefined || value === null ? "" : String(value);
+    const displayValue = toDisplayPath(currentValue, hostRootDir, dockerMountDir, instanceName);
 
     return (
       <div className="space-y-1">
         {!hideLabel && labelNode}
         <div className="flex items-center gap-2">
-          {inputNode}
+          <Input
+            id={propKey}
+            type="text"
+            value={displayValue}
+            readOnly
+            placeholder={hideLabel ? label : prop.description}
+            className="h-8 rounded-md border-input bg-white px-2 text-sm shadow-none"
+          />
           <Button
             type="button"
             variant="secondary"
@@ -188,8 +207,16 @@ function FieldInput({
         <DirectoryPicker
           open={pickerOpen}
           onOpenChange={setPickerOpen}
-          initialPath={pickerInitialPath}
+          rootPath={hostRootDir}
+          dockerMountDir={dockerMountDir}
+          initialPath={currentValue}
+          returnRelative={false}
+          instanceName={instanceName}
           onSelect={(path) => handleChange(path)}
+          useDirectoriesQuery={useDirectories}
+          createDirectory={createDirectory}
+          renameDirectory={renameDirectory}
+          deleteDirectory={deleteDirectory}
         />
       </div>
     );
@@ -231,6 +258,7 @@ interface ArrayFieldProps {
   value: unknown;
   required: boolean;
   onChange: (key: string, value: unknown) => void;
+  instanceName?: string;
 }
 
 function ArrayField({
@@ -239,6 +267,7 @@ function ArrayField({
   value,
   required,
   onChange,
+  instanceName,
 }: ArrayFieldProps) {
   const rows = Array.isArray(value) ? (value as Record<string, unknown>[]) : [];
   const items = prop.items || {};
@@ -281,16 +310,21 @@ function ArrayField({
 
   const itemPropEntries = Object.entries(itemProps);
   const isTwoColumnRow = itemPropEntries.length === 2;
+  // 3 字段布局（ports/volumes）把第一列（本地端口/本地路径）放到最右面，
+  // 协议/权限列仍占 90px 固定列，按钮在最后 auto 列。
+  const displayEntries = isTwoColumnRow
+    ? itemPropEntries
+    : [...itemPropEntries.slice(1), itemPropEntries[0]];
 
   // 使用 display: contents 让每行子元素直接参与外层统一 grid：
   // grid-cols-[1fr_1fr_90px_auto]
-  // - 3 个字段（ports/volumes）：各占 1 列，按钮在第 4 列
-  // - 2 个字段（env）：key 占 1 列，value 跨 2-3 列，按钮在第 4 列，不留空白
+  // - 3 字段（ports/volumes）：容器端口/路径、本地端口/路径、协议/权限、按钮
+  // - 2 字段（env）：key 占 1 列，value 跨 2-3 列，按钮在第 4 列，不留空白
   return (
     <>
       {rows.map((row, index) => (
         <div key={`${propKey}-row-${index}`} className="contents">
-          {itemPropEntries.map(([key, p]) => {
+          {displayEntries.map(([key, p]) => {
             // key/value 数组中，根据 key 的值推断 value 的语义
             let prop = p;
             if (
@@ -314,6 +348,7 @@ function ArrayField({
                   required={itemRequired.has(key)}
                   onChange={(_, val) => updateRow(index, key, val)}
                   hideLabel
+                  instanceName={instanceName}
                 />
               </div>
             );
@@ -343,16 +378,15 @@ function ArrayField({
       ))}
       {rows.length === 0 && (
         <div className="contents">
-          <div className="col-span-4">
+          <div className="col-start-4 col-span-1 flex items-center justify-end gap-2 mr-2">
             <Button
               type="button"
               variant="secondary"
-              size="sm"
-              className="h-8 gap-1 rounded-md mr-2"
+              size="icon"
+              className="h-8 w-8 rounded-sm"
               onClick={() => addRow(0)}
             >
               <Plus className="h-4 w-4" />
-              新增
             </Button>
           </div>
         </div>
@@ -366,10 +400,12 @@ function ContainerSchemaForm({
   schema,
   data,
   onChange,
+  instanceName,
 }: {
   schema: SchemaFormProps["schema"];
   data: Record<string, unknown>;
   onChange: (data: Record<string, unknown>) => void;
+  instanceName?: string;
 }) {
   const properties = schema.properties || {};
   const requiredSet = new Set(schema.required || []);
@@ -412,6 +448,7 @@ function ContainerSchemaForm({
                   value={data[key]}
                   required={requiredSet.has(key)}
                   onChange={handleChange}
+                  instanceName={instanceName}
                 />
               );
             }
@@ -424,6 +461,7 @@ function ContainerSchemaForm({
                   required={requiredSet.has(key)}
                   onChange={handleChange}
                   hideLabel
+                  instanceName={instanceName}
                 />
               </div>
             );
@@ -499,8 +537,8 @@ function ContainerSchemaForm({
   );
 }
 
-export function SchemaForm({ schema, data, onChange }: SchemaFormProps) {
+export function SchemaForm({ schema, data, onChange, instanceName }: SchemaFormProps) {
   return (
-    <ContainerSchemaForm schema={schema} data={data} onChange={onChange} />
+    <ContainerSchemaForm schema={schema} data={data} onChange={onChange} instanceName={instanceName} />
   );
 }

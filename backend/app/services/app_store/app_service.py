@@ -90,15 +90,53 @@ def _extract_app_ports(config_schema: dict) -> list[str]:
     return ports
 
 
+def _parse_proc_net_tcp(path: str) -> set[int]:
+    """读取 /proc/net/tcp 或 /proc/net/tcp6，提取处于 LISTEN 状态的本地端口。
+
+    当 NasDeck 以 host network 模式运行时，读取到的是宿主机的监听端口；
+    普通容器模式下读取的是容器自身命名空间内的端口，作为兜底信息使用。
+    """
+    listening: set[int] = set()
+    try:
+        with open(path, "r") as f:
+            # 跳过第一行表头
+            next(f, None)
+            for line in f:
+                parts = line.strip().split()
+                if len(parts) < 4:
+                    continue
+                # st 列：0A 表示 LISTEN
+                if parts[3] != "0A":
+                    continue
+                local_addr = parts[1]
+                if ":" not in local_addr:
+                    continue
+                _, port_hex = local_addr.rsplit(":", 1)
+                try:
+                    listening.add(int(port_hex, 16))
+                except ValueError:
+                    continue
+    except (OSError, StopIteration):
+        pass
+    return listening
+
+
 def _get_used_ports() -> set[int]:
-    """获取宿主机上已被容器占用的端口。"""
-    used = set()
+    """获取宿主机上已被占用的端口。
+
+    合并两个来源：
+    1. Docker 容器已映射的端口（需要能访问 Docker daemon）；
+    2. /proc/net/tcp* 中处于 LISTEN 状态的端口（host network 模式下为宿主机端口）。
+    """
+    used: set[int] = set()
+
+    # 1. Docker 容器端口映射
     try:
         client = docker.from_env()
         for container in client.containers.list(all=True):
             host_config = container.attrs.get("HostConfig") or {}
-            bindings = (host_config.get("PortBindings") or {})
-            for container_port, binding_list in bindings.items():
+            bindings = host_config.get("PortBindings") or {}
+            for binding_list in bindings.values():
                 if not isinstance(binding_list, list):
                     continue
                 for binding in binding_list:
@@ -109,8 +147,13 @@ def _get_used_ports() -> set[int]:
                         except ValueError:
                             pass
     except Exception:
-        # Docker 不可用时跳过端口预检
+        # Docker 不可用时跳过
         pass
+
+    # 2. 从 /proc/net/tcp* 读取监听端口
+    used.update(_parse_proc_net_tcp("/proc/net/tcp"))
+    used.update(_parse_proc_net_tcp("/proc/net/tcp6"))
+
     return used
 
 
@@ -155,7 +198,8 @@ class AppService:
     ) -> dict:
         """预览应用渲染后的 Compose YAML。
 
-        复用部署前的校验、端口预检与渲染逻辑，但不创建项目与实例。
+        复用部署前的 JSON Schema 校验与渲染逻辑，但不创建项目与实例，
+        也不做端口冲突预检（端口检测留在部署阶段执行）。
         校验失败时返回包含错误信息的字典，而不是抛异常。
         """
         db_app = await self.get_app(db, app_name)
@@ -176,6 +220,7 @@ class AppService:
                 db_app=db_app,
                 instance_name=instance_name,
                 config=config,
+                check_ports=False,
             )
         except APIException as e:
             return {"yaml": None, "error": e.message}
@@ -195,8 +240,16 @@ class AppService:
         db_app: App,
         instance_name: str,
         config: dict,
+        check_ports: bool = True,
     ) -> str:
-        """执行部署/预览前的公共校验，返回可用的项目名。"""
+        """执行部署/预览前的公共校验，返回可用的项目名。
+
+        Args:
+            db_app: 应用模型
+            instance_name: 实例名称
+            config: 用户配置
+            check_ports: 是否检查端口冲突；预览阶段为 False，部署阶段为 True
+        """
         # 1. JSON Schema 校验
         schema = db_app.config_schema or {}
         if schema:
@@ -205,15 +258,30 @@ class AppService:
             except ValidationError as e:
                 raise APIException(f"配置校验失败: {e.message}", 400) from e
 
-        # 2. 端口冲突预检
-        used_ports = _get_used_ports()
-        port_keys = _extract_app_ports(schema)
-        for key in port_keys:
-            value = config.get(key)
-            if value is not None and int(value) in used_ports:
-                raise APIException(
-                    f"端口 {value} 已被其他容器占用，请修改 {key}", 409
-                )
+        # 2. 端口冲突预检（仅在部署时执行）
+        if check_ports:
+            used_ports = _get_used_ports()
+
+            # 2.1 单端口字段（如 moviepilot_port: 3000）
+            port_keys = _extract_app_ports(schema)
+            for key in port_keys:
+                value = config.get(key)
+                if value is not None and int(value) in used_ports:
+                    raise APIException(
+                        f"端口 {value} 已被占用，请修改 {key}", 409
+                    )
+
+            # 2.2 端口数组（如 ports: [{local_port: 3000, ...}]
+            ports = config.get("ports")
+            if isinstance(ports, list):
+                for index, port_entry in enumerate(ports):
+                    if not isinstance(port_entry, dict):
+                        continue
+                    local_port = port_entry.get("local_port")
+                    if local_port is not None and int(local_port) in used_ports:
+                        raise APIException(
+                            f"端口 {local_port} 已被占用，请修改 ports[{index}].local_port", 409
+                        )
 
         # 3. 生成项目名
         return _slugify(instance_name)

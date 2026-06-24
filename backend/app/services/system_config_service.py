@@ -36,6 +36,16 @@ class StoragePathResolver:
         self.host_root_dir = _normalize(host_root_dir)
         self.docker_mount_dir = _normalize(docker_mount_dir)
 
+    @staticmethod
+    def _join(base: str, path: str) -> str:
+        """拼接基础路径与后续路径，避免产生双斜杠或丢失根目录。"""
+        if not base or not path:
+            return base or path or ""
+        path = path.lstrip("/")
+        if base.endswith("/"):
+            return base + path
+        return f"{base}/{path}"
+
     @property
     def configured(self) -> bool:
         """是否已配置宿主机根目录和 Docker 挂载目录。"""
@@ -47,13 +57,13 @@ class StoragePathResolver:
             raise APIException(
                 "未配置宿主机根目录和 Docker 挂载目录，请前往系统设置-基础设置配置", 400
             )
-        if (
-            self.docker_mount_dir != self.host_root_dir
-            and not self.docker_mount_dir.startswith(self.host_root_dir + "/")
-        ):
-            raise APIException(
-                "Docker 挂载目录必须是宿主机根目录的子目录", 400
-            )
+        if self.docker_mount_dir != self.host_root_dir:
+            try:
+                Path(self.docker_mount_dir).relative_to(Path(self.host_root_dir))
+            except ValueError:
+                raise APIException(
+                    "Docker 挂载目录必须是宿主机根目录的子目录", 400
+                )
 
     def with_defaults(self) -> "StoragePathResolver":
         """返回使用默认根目录的解析器，用于未配置时的预览。
@@ -72,10 +82,13 @@ class StoragePathResolver:
 
     @property
     def container_mount_base(self) -> str:
-        """容器视角的 Docker 挂载基础目录（去掉宿主机根前缀）。"""
+        """容器视角的 Docker 挂载基础目录（去掉宿主机根前缀，保留前导 /）。"""
         if self.docker_mount_dir == self.host_root_dir:
             return ""
-        return self.docker_mount_dir[len(self.host_root_dir) :]
+        base = self.docker_mount_dir[len(self.host_root_dir) :]
+        if base.startswith("/"):
+            return base
+        return f"/{base}"
 
     def make_host_path(
         self,
@@ -84,8 +97,10 @@ class StoragePathResolver:
         mount_name: str,
     ) -> str:
         """按规则生成宿主机上的自动挂载目录。"""
-        base = self.docker_mount_dir.rstrip("/")
-        return f"{base}/{app_name}/{service_name}/{mount_name}"
+        return self._join(
+            self.docker_mount_dir,
+            f"{app_name}/{service_name}/{mount_name}",
+        )
 
     def make_container_path(
         self,
@@ -94,26 +109,49 @@ class StoragePathResolver:
         mount_name: str,
     ) -> str:
         """按规则生成容器内的自动挂载目录。"""
-        base = self.container_mount_base.rstrip("/")
-        return f"{base}/{app_name}/{service_name}/{mount_name}"
+        base = self.container_mount_base
+        return self._join(base or "/", f"{app_name}/{service_name}/{mount_name}")
 
     def to_container_path(self, path: str) -> str:
         """将用户填写或选择的路径转换为容器内路径。
 
         - 以宿主机根目录开头的绝对路径：去掉该前缀。
-        - 普通相对路径：视为在容器挂载基础目录下的相对路径，补上前导 /。
+        - 以 Docker 挂载目录开头的绝对路径：按容器挂载基础路径转换。
+        - 以容器挂载基础路径开头的路径：保持原样。
         - 其他绝对路径（如 /media）：保持原样。
+        - 相对路径：视为在 Docker 挂载目录下的相对路径，转换为容器视角。
         """
         path = (path or "").strip().rstrip("/")
         if not path:
             return ""
+
+        # 宿主机根目录下的路径
         if path == self.host_root_dir:
             return ""
         if path.startswith(self.host_root_dir + "/"):
-            return path[len(self.host_root_dir) :]
+            suffix = path[len(self.host_root_dir) + 1 :]
+            return self._join("/", suffix)
+
+        # Docker 挂载目录下的绝对路径（宿主机根目录不是其前缀时，如两者相同）
+        if path == self.docker_mount_dir or path.startswith(
+            self.docker_mount_dir + "/"
+        ):
+            suffix = path[len(self.docker_mount_dir) :].lstrip("/")
+            return self._join(self.container_mount_base or "/", suffix)
+
+        # 容器视角的挂载基础路径
+        container_base = self.container_mount_base
+        if container_base and (
+            path == container_base or path.startswith(container_base + "/")
+        ):
+            return path
+
+        # 其他绝对路径保持原样
         if path.startswith("/"):
             return path
-        return f"/{path}"
+
+        # 相对路径视为在 Docker 挂载目录下
+        return self._join(self.container_mount_base or "/", path)
 
     def to_host_path(self, path: str) -> str:
         """将用户填写或选择的路径还原为宿主机绝对路径。
@@ -128,24 +166,22 @@ class StoragePathResolver:
             return ""
 
         # 已是宿主机根目录下的路径
-        if path.startswith(self.host_root_dir + "/") or path == self.host_root_dir:
+        if path == self.host_root_dir or path.startswith(self.host_root_dir + "/"):
             return path
 
-        # 以容器挂载基础路径开头的路径，还原为宿主机路径
+        # 以容器挂载基础路径开头的路径，还原为宿主机根目录下的路径
         container_base = self.container_mount_base
         if container_base and (
-            path == container_base
-            or path.startswith(container_base.rstrip("/") + "/")
+            path == container_base or path.startswith(container_base + "/")
         ):
-            relative = path[len(container_base.rstrip("/")) :]
-            return f"{self.docker_mount_dir}{relative}"
+            return self._join(self.host_root_dir, path)
 
         # 其他容器内绝对路径，保持原样作为宿主机路径
         if path.startswith("/"):
             return path
 
         # 相对路径，拼接到 Docker 挂载目录
-        return f"{self.docker_mount_dir}/{path}"
+        return self._join(self.docker_mount_dir, path)
 
 
 class SystemConfigService:

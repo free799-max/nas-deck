@@ -16,6 +16,27 @@ class DirectoryList(BaseModel):
 
     path: str
     entries: list[DirectoryEntry]
+    exists: bool = True
+
+
+class DirectoryCreateRequest(BaseModel):
+    """创建目录请求。"""
+
+    path: str
+    name: str
+
+
+class DirectoryRenameRequest(BaseModel):
+    """重命名目录请求。"""
+
+    old_path: str
+    new_name: str
+
+
+class DirectoryDeleteRequest(BaseModel):
+    """删除目录请求。"""
+
+    path: str
 
 
 class DockerVersionInfo(BaseModel):

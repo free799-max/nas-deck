@@ -27,6 +27,13 @@ class TestStoragePathResolver:
         with pytest.raises(APIException):
             StoragePathResolver("/mnt/data", "/opt/docker").validate()
 
+    def test_validate_accepts_root_as_host_root_dir(self):
+        """宿主机根目录为 / 时，任意非根 Docker 挂载目录应视为子目录。"""
+        resolver = StoragePathResolver("/", "/opt/docker")
+        resolver.validate()
+        assert resolver.host_mount_base == "/opt/docker"
+        assert resolver.container_mount_base == "/opt/docker"
+
     def test_with_defaults_uses_root_when_unconfigured(self):
         """未配置时 with_defaults 返回使用根目录的解析器，用于预览。"""
         resolver = StoragePathResolver(None, None).with_defaults()
@@ -50,12 +57,18 @@ class TestStoragePathResolver:
     def test_make_host_path(self):
         """自动生成宿主机挂载目录。"""
         resolver = StoragePathResolver("/mnt/data", "/mnt/data/docker")
-        assert resolver.make_host_path("moviepilot", "moviepilot", "config") == "/mnt/data/docker/moviepilot/moviepilot/config"
+        assert (
+            resolver.make_host_path("moviepilot", "moviepilot", "config")
+            == "/mnt/data/docker/moviepilot/moviepilot/config"
+        )
 
     def test_make_container_path(self):
         """自动生成容器内挂载目录。"""
         resolver = StoragePathResolver("/mnt/data", "/mnt/data/docker")
-        assert resolver.make_container_path("moviepilot", "moviepilot", "config") == "/docker/moviepilot/moviepilot/config"
+        assert (
+            resolver.make_container_path("moviepilot", "moviepilot", "config")
+            == "/docker/moviepilot/moviepilot/config"
+        )
 
     def test_to_container_path_under_host_root(self):
         """宿主机根目录下的路径转换为容器相对路径。"""
@@ -73,9 +86,13 @@ class TestStoragePathResolver:
         assert resolver.to_container_path("/media") == "/media"
 
     def test_to_container_path_for_relative(self):
-        """相对路径视为在容器挂载基础目录下。"""
+        """相对路径视为在 Docker 挂载目录下，按容器基础路径转换。"""
         resolver = StoragePathResolver("/mnt/data", "/mnt/data/docker")
-        assert resolver.to_container_path("movies") == "/movies"
+        assert resolver.to_container_path("movies") == "/docker/movies"
+        assert (
+            resolver.to_container_path("moviepilot/moviepilot/config")
+            == "/docker/moviepilot/moviepilot/config"
+        )
 
     def test_to_host_path_for_host_absolute(self):
         """宿主机根目录下的绝对路径保持原样。"""
@@ -95,7 +112,31 @@ class TestStoragePathResolver:
     def test_to_host_path_for_relative(self):
         """相对路径拼接到 Docker 挂载目录。"""
         resolver = StoragePathResolver("/mnt/data", "/mnt/data/docker")
-        assert resolver.to_host_path("movies") == "/mnt/data/docker/movies"
+        assert (
+            resolver.to_host_path("movies") == "/mnt/data/docker/movies"
+        )
+        assert (
+            resolver.to_host_path("moviepilot/moviepilot/config")
+            == "/mnt/data/docker/moviepilot/moviepilot/config"
+        )
+
+    def test_to_host_path_with_root_slash(self):
+        """宿主机根目录为 / 时不应产生双斜杠。"""
+        resolver = StoragePathResolver("/", "/opt/docker")
+        assert resolver.to_host_path("movies") == "/opt/docker/movies"
+        assert (
+            resolver.to_host_path("moviepilot/moviepilot/config")
+            == "/opt/docker/moviepilot/moviepilot/config"
+        )
+
+    def test_to_container_path_with_root_slash(self):
+        """宿主机根目录为 / 时相对路径应转换为 /opt/docker/... 容器视角。"""
+        resolver = StoragePathResolver("/", "/opt/docker")
+        assert resolver.to_container_path("movies") == "/opt/docker/movies"
+        assert (
+            resolver.to_container_path("moviepilot/moviepilot/config")
+            == "/opt/docker/moviepilot/moviepilot/config"
+        )
 
     def test_trailing_slashes_are_normalized(self):
         """尾部斜杠应被规范化。"""

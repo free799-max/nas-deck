@@ -76,3 +76,66 @@ export function generatePassword(length = 16): string {
     .sort(() => Math.random() - 0.5)
     .join("");
 }
+
+/** 将实例名称转换为合法 Compose 项目名（严格：去除首尾连字符） */
+export function slugify(name: string): string {
+  return name
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9_\s-]+/g, "")
+    .replace(/\s+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 50);
+}
+
+/** 实例名输入框实时过滤（宽松：保留首尾连字符，便于输入） */
+export function sanitizeInstanceName(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(/[^a-z0-9_\s-]+/g, "")
+    .replace(/\s+/g, "-")
+    .replace(/-+/g, "-")
+    .slice(0, 50);
+}
+export function toDisplayPath(
+  value: string,
+  hostRootDir: string,
+  dockerMountDir: string,
+  instanceName?: string
+): string {
+  if (!value) return "";
+  if (value.startsWith("/")) {
+    const relative = toRelativePath(value, hostRootDir);
+    if (relative === "") return "/";
+    return `/${relative}`;
+  }
+  // 相对路径视为在 Docker 挂载目录下；若提供实例名，按实例隔离展示
+  const containerBase = toRelativePath(dockerMountDir, hostRootDir);
+  const prefix = containerBase ? `/${containerBase}` : "";
+  if (instanceName) {
+    return `${prefix}/${instanceName}/${value}`;
+  }
+  if (containerBase) {
+    return `/${containerBase}/${value}`;
+  }
+  return `/${value}`;
+}
+
+/** 将相对或绝对路径转换为基于 rootPath 的绝对路径 */
+export function toAbsolutePath(relativeOrAbsolute: string, rootPath: string): string {
+  if (!relativeOrAbsolute) return rootPath;
+  if (relativeOrAbsolute.startsWith("/")) return relativeOrAbsolute;
+  return `${rootPath.replace(/\/+$/, "")}/${relativeOrAbsolute}`;
+}
+
+/** 将绝对路径转换为相对于 rootPath 的路径；不在 rootPath 下则原样返回 */
+export function toRelativePath(absolutePath: string, rootPath: string): string {
+  if (!absolutePath.startsWith("/")) return absolutePath;
+  const normalizedRoot = rootPath.replace(/\/+$/, "");
+  if (absolutePath === normalizedRoot) return "";
+  if (absolutePath.startsWith(`${normalizedRoot}/`)) {
+    return absolutePath.slice(normalizedRoot.length + 1);
+  }
+  return absolutePath;
+}
