@@ -176,6 +176,46 @@ class ComposeService:
             "stderr": stderr.decode("utf-8", errors="replace"),
         }
 
+    @staticmethod
+    def _ensure_host_directories(content: str) -> None:
+        """解析 Compose YAML，为 bind mount 的宿主机路径自动创建目录。"""
+        try:
+            data = yaml.safe_load(content) or {}
+        except yaml.YAMLError:
+            return
+
+        services = data.get("services") or {}
+        host_paths: set[str] = set()
+
+        for svc in services.values():
+            if not isinstance(svc, dict):
+                continue
+            volumes = svc.get("volumes") or []
+            if not isinstance(volumes, list):
+                continue
+            for vol in volumes:
+                source: str | None = None
+                if isinstance(vol, str):
+                    # 短语法：source:target[:mode]
+                    parts = vol.split(":")
+                    if parts:
+                        source = parts[0].strip()
+                elif isinstance(vol, dict):
+                    # 长语法
+                    if vol.get("type") == "bind" or "source" in vol:
+                        source = vol.get("source")
+                        if not source and "bind" in vol:
+                            source = vol["bind"].get("source")
+                if source and source.startswith("/"):
+                    host_paths.add(source)
+
+        for path_str in host_paths:
+            try:
+                Path(path_str).mkdir(parents=True, exist_ok=True)
+            except OSError:
+                # 权限不足或路径非法时跳过，避免阻塞部署
+                logger.warning("自动创建宿主机目录失败: %s", path_str)
+
     async def create_project(
         self,
         db,
@@ -187,6 +227,9 @@ class ComposeService:
         """创建 Compose 项目并写入初始版本。"""
         self.validate_project_name(project_name)
         self.validate_yaml(content)
+
+        # 自动创建 bind mount 所需的宿主机目录
+        self._ensure_host_directories(content)
 
         project_dir = self._project_dir(project_name)
         project_dir.mkdir(parents=True, exist_ok=True)

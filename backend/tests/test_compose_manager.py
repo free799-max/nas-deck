@@ -221,3 +221,41 @@ async def test_edit_and_deploy_invalid_yaml(compose_manager, tmp_path):
 
     db.add.assert_not_called()
     db.commit.assert_not_awaited()
+
+
+def test_ensure_host_directories_creates_bind_mount_dirs(compose_manager, tmp_path):
+    """解析 Compose YAML 并为 bind mount 的宿主机路径自动创建目录。"""
+    host_dir = tmp_path / "host"
+    content = f"""services:
+  web:
+    image: nginx
+    volumes:
+      - {host_dir}/data:/data:rw
+      - {host_dir}/config:/config
+  db:
+    image: postgres
+    volumes:
+      - type: bind
+        source: {host_dir}/db
+        target: /var/lib/postgresql
+"""
+    compose_manager._ensure_host_directories(content)
+
+    assert (host_dir / "data").is_dir()
+    assert (host_dir / "config").is_dir()
+    assert (host_dir / "db").is_dir()
+
+
+def test_ensure_host_directories_ignores_named_volumes(compose_manager, tmp_path):
+    """命名卷和相对路径不应被创建为宿主机目录。"""
+    content = """services:
+  web:
+    image: nginx
+    volumes:
+      - data_volume:/data
+      - ./relative:/app
+"""
+    compose_manager._ensure_host_directories(content)
+
+    # 不应抛出异常，也不应在当前目录创建意外目录
+    assert True

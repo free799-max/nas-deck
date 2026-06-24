@@ -17,6 +17,7 @@ import { DockerPage } from "./pages/docker/containers/DockerPage";
 import { DockerHostPage } from "./pages/docker/host/DockerHostPage";
 import { DockerImagesPage } from "./pages/docker/images/DockerImagesPage";
 import { DockerStacksPage } from "./pages/docker/stacks/DockerStacksPage";
+import { SettingsPage } from "./pages/settings/SettingsPage";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -125,10 +126,7 @@ export default function App() {
               <Route path="/docker/host" element={<DockerHostPage />} />
 
               {/* 系统设置 */}
-              <Route
-                path="/settings"
-                element={<PlaceholderPage title="系统设置" />}
-              />
+              <Route path="/settings" element={<SettingsPage />} />
 
               {/* 旧路由重定向 */}
               <Route

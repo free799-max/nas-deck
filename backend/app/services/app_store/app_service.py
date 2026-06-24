@@ -15,6 +15,10 @@ from app.models.app_store import App
 from app.models.docker import DockerComposeProject
 from app.models.orchestration import AppInstance
 from app.services.compose import compose_manager
+from app.services.system_config_service import (
+    StoragePathResolver,
+    system_config_service,
+)
 
 
 def _extract_default_values(config_schema: dict) -> dict:
@@ -31,17 +35,30 @@ def _render_yaml_template(
     config_schema: dict,
     config: dict,
     project_name: str,
+    app_name: str = "",
+    resolver: StoragePathResolver | None = None,
 ) -> str:
     """使用 Jinja2 渲染 Compose YAML 模板。
 
     合并 Schema 默认值与用户配置后渲染，并校验结果为合法 YAML。
+    同时注入宿主机/容器挂载基础路径变量及路径转换函数。
     """
     default_values = _extract_default_values(config_schema or {})
     merged = {**default_values, **(config or {})}
     merged["project_name"] = project_name
+    merged["app_name"] = app_name
+
+    if resolver is not None:
+        merged["host_mount_base"] = resolver.host_mount_base
+        merged["container_mount_base"] = resolver.container_mount_base
 
     try:
         env = Environment(loader=BaseLoader(), autoescape=False)
+        if resolver is not None:
+            env.globals["make_host_path"] = resolver.make_host_path
+            env.globals["make_container_path"] = resolver.make_container_path
+            env.globals["to_host_path"] = resolver.to_host_path
+            env.globals["to_container_path"] = resolver.to_container_path
         rendered = env.from_string(yaml_template).render(merged)
     except Exception as e:
         raise ValueError(f"应用模板渲染失败: {e}") from e
@@ -143,6 +160,16 @@ class AppService:
         """
         db_app = await self.get_app(db, app_name)
 
+        # 0. 读取系统存储配置；未配置时使用根目录默认值继续预览，
+        #    实际部署前仍需配置真实路径。
+        system_config = await system_config_service.get_or_create(db)
+        resolver = StoragePathResolver(
+            system_config.storage_host_root_dir,
+            system_config.storage_docker_mount_dir,
+        )
+        if not resolver.configured:
+            resolver = resolver.with_defaults()
+
         # 1. JSON Schema 校验与端口预检失败时，把错误返回给前端展示
         try:
             project_name = await self._validate_and_prepare(
@@ -158,6 +185,7 @@ class AppService:
                 db_app=db_app,
                 config=config,
                 project_name=project_name,
+                resolver=resolver,
             ),
             "error": None,
         }
@@ -200,6 +228,15 @@ class AppService:
     ) -> AppInstance:
         """一键部署应用。"""
         db_app = await self.get_app(db, app_name)
+
+        # 0. 读取并校验系统存储配置
+        system_config = await system_config_service.get_or_create(db)
+        resolver = StoragePathResolver(
+            system_config.storage_host_root_dir,
+            system_config.storage_docker_mount_dir,
+        )
+        resolver.validate()
+
         project_name = await self._validate_and_prepare(
             db_app=db_app,
             instance_name=instance_name,
@@ -222,6 +259,7 @@ class AppService:
             db_app=db_app,
             config=config,
             project_name=project_name,
+            resolver=resolver,
         )
 
         # 6. 创建 Compose 项目并部署
@@ -257,6 +295,7 @@ class AppService:
         db_app: App,
         config: dict,
         project_name: str,
+        resolver: StoragePathResolver,
     ) -> str:
         """渲染应用为 Compose YAML。"""
         if not db_app.yaml_template:
@@ -268,6 +307,8 @@ class AppService:
                 db_app.config_schema,
                 config,
                 project_name,
+                db_app.name,
+                resolver,
             )
         except ValueError as e:
             raise APIException(str(e), 500) from e

@@ -18,6 +18,7 @@ from app.models.user import User
 from app.models.plugin import PluginInstance
 from app.models.app_store import App
 from app.models.orchestration import AppOrchestration, AppInstance, AppInstanceBackup
+from app.models.system_config import SystemConfig
 from app.models.docker import (
     DockerMirrorConfig,
     DockerComposeProject,
@@ -29,6 +30,7 @@ from app.models.docker import (
 # __all__ 显式声明公开导出的模型名称，便于 `from app.models import *` 使用
 __all__ = [
     "User", "PluginInstance", "App", "AppOrchestration", "AppInstance", "AppInstanceBackup",
+    "SystemConfig",
     "DockerMirrorConfig",
     "DockerComposeProject", "DockerComposeVersion", "DockerComposeStack",
     "COMPOSE_PROJECT_LABEL",

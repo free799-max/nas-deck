@@ -5,6 +5,7 @@
  */
 
 import { useState, useMemo } from "react";
+import type { UseQueryResult } from "@tanstack/react-query";
 import {
   Dialog,
   DialogContent,
@@ -13,14 +14,22 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { useDirectories } from "@/hooks/useHost";
+import { useDirectories, type DirectoryList } from "@/hooks/useHost";
 import { Folder, ChevronRight, Home, Loader2 } from "lucide-react";
+
+/** 目录列表查询 hook 类型 */
+type UseDirectoriesHook = (
+  path: string,
+  enabled: boolean
+) => UseQueryResult<DirectoryList, Error>;
 
 interface DirectoryPickerProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   initialPath?: string;
   onSelect: (path: string) => void;
+  /** 自定义目录查询 hook，默认使用 Docker 宿主机目录接口 */
+  useDirectoriesQuery?: UseDirectoriesHook;
 }
 
 export function DirectoryPicker({
@@ -28,11 +37,12 @@ export function DirectoryPicker({
   onOpenChange,
   initialPath = "/",
   onSelect,
+  useDirectoriesQuery = useDirectories,
 }: DirectoryPickerProps) {
   const [currentPath, setCurrentPath] = useState(initialPath);
   const [inputPath, setInputPath] = useState(initialPath);
 
-  const { data, isLoading, error } = useDirectories(currentPath, open);
+  const { data, isLoading, error } = useDirectoriesQuery(currentPath, open);
 
   const breadcrumbs = useMemo(() => {
     const parts = currentPath.split("/").filter(Boolean);

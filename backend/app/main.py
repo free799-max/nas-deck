@@ -19,6 +19,7 @@ from app.api.auth import router as auth_router
 from app.api.plugins import router as plugins_router
 from app.api.orchestrations import router as orchestrations_router
 from app.api.app_store import router as apps_router
+from app.api.settings import router as settings_router
 # trigger-reload: docker_manager fixed
 
 
@@ -88,6 +89,7 @@ app.include_router(auth_router)
 app.include_router(plugins_router)
 app.include_router(orchestrations_router)
 app.include_router(apps_router)
+app.include_router(settings_router)
 
 # Docker 管理路由（依赖可选的 Docker 环境）
 from app.api.docker import router as docker_router

@@ -146,7 +146,7 @@ class MyPlugin(BasePlugin):
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
 | `APP_NAME` | NasDeck | 应用名称 |
-| `DATABASE_URL` | sqlite+aiosqlite:///./nasdeck.db | 数据库连接 |
+| `DATABASE_URL` | postgresql+asyncpg://nasdeck:nasdeck@localhost:5434/nasdeck | 数据库连接 |
 | `SECRET_KEY` | change-me-in-production | JWT 签名密钥 |
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | 1440 | Token 过期时间（分钟）|
 | `PLUGIN_DIR` | app/plugins | 插件目录 |

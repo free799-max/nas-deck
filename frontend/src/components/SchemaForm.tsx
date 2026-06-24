@@ -1,9 +1,7 @@
 /**
  * JSON Schema 动态表单组件
  *
- * 支持两种格式：
- * 1. 新格式：按容器分组，schema.containers 定义容器、设置块及字段
- * 2. 旧格式：平铺 properties，按端口/挂载/环境变量/其他自动分组
+ * 按容器分组渲染：schema.containers 定义容器、设置块及字段。
  */
 
 import { useState } from "react";
@@ -12,6 +10,7 @@ import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { DirectoryPicker } from "@/components/DirectoryPicker";
 import { generatePassword } from "@/lib/utils";
+import { useSystemConfig } from "@/hooks/useSettings";
 import { Minus, Plus, ChevronUp, ChevronDown, FolderOpen, RefreshCw } from "lucide-react";
 
 /** Schema 属性定义 */
@@ -59,70 +58,6 @@ interface SchemaFormProps {
   /** 表单数据变化回调 */
   onChange: (data: Record<string, unknown>) => void;
 }
-
-/** 字段分组标识（旧格式用） */
-export type FieldGroup = "ports" | "mounts" | "env" | "others";
-
-/** 旧格式分组配置 */
-const GROUP_CONFIG: Record<FieldGroup, { label: string }> = {
-  ports: { label: "端口" },
-  mounts: { label: "挂载目录" },
-  env: { label: "环境变量" },
-  others: { label: "其他" },
-};
-
-const GROUP_ORDER: FieldGroup[] = ["ports", "mounts", "env", "others"];
-
-/**
- * 根据字段 key 和 title 判断所属分组（旧格式用）。
- * 优先级：端口 > 挂载目录 > 环境变量 > 其他
- */
-function getGroup(key: string, prop: SchemaProperty): FieldGroup {
-  const k = key.toLowerCase();
-  const t = (prop.title || "").toLowerCase();
-
-  const isPort = k.includes("port") || t.includes("端口");
-
-  const isMount =
-    k.includes("path") ||
-    k.includes("dir") ||
-    t.includes("路径") ||
-    t.includes("目录");
-
-  const isKeyLike =
-    k.includes("api_key") ||
-    k.includes("secret_key") ||
-    k.includes("access_key") ||
-    k.includes("private_key") ||
-    k.endsWith("_key");
-
-  const isEnv =
-    k.includes("user") ||
-    k.includes("username") ||
-    k.includes("password") ||
-    k.includes("pass") ||
-    k.includes("token") ||
-    k.includes("secret") ||
-    isKeyLike ||
-    k.includes("umask") ||
-    k.includes("timezone") ||
-    k === "tz" ||
-    k.includes("env_") ||
-    k.endsWith("_env") ||
-    t.includes("密码") ||
-    t.includes("账号") ||
-    t.includes("用户名") ||
-    t.includes("用户") ||
-    t.includes("密钥") ||
-    t.includes("令牌") ||
-    t.includes("时区");
-
-  if (isPort) return "ports";
-  if (isMount) return "mounts";
-  if (isEnv) return "env";
-  return "others";
-}
-
 interface FieldInputProps {
   propKey: string;
   prop: SchemaProperty;
@@ -142,6 +77,7 @@ function FieldInput({
 }: FieldInputProps) {
   const label = prop.title || propKey;
   const [pickerOpen, setPickerOpen] = useState(false);
+  const { data: systemConfig } = useSystemConfig();
 
   const handleChange = (next: unknown) => {
     onChange(propKey, next);
@@ -226,6 +162,13 @@ function FieldInput({
 
   // 目录选择：输入框 + 浏览按钮
   if (isDirectoryField) {
+    const dockerMountDir = systemConfig?.storage_docker_mount_dir;
+    const currentValue = value === undefined || value === null ? "" : String(value);
+    const pickerInitialPath =
+      currentValue && currentValue.startsWith("/")
+        ? currentValue
+        : dockerMountDir || "/";
+
     return (
       <div className="space-y-1">
         {!hideLabel && labelNode}
@@ -245,7 +188,7 @@ function FieldInput({
         <DirectoryPicker
           open={pickerOpen}
           onOpenChange={setPickerOpen}
-          initialPath={value ? String(value) : "/"}
+          initialPath={pickerInitialPath}
           onSelect={(path) => handleChange(path)}
         />
       </div>
@@ -418,98 +361,6 @@ function ArrayField({
   );
 }
 
-/** 旧格式渲染 */
-function LegacySchemaForm({
-  schema,
-  data,
-  onChange,
-}: {
-  schema: SchemaFormProps["schema"];
-  data: Record<string, unknown>;
-  onChange: (data: Record<string, unknown>) => void;
-}) {
-  const properties = schema.properties || {};
-  const requiredSet = new Set(schema.required || []);
-  const [expanded, setExpanded] = useState<Set<FieldGroup>>(
-    new Set(GROUP_ORDER)
-  );
-
-  const toggleGroup = (groupKey: FieldGroup) => {
-    setExpanded((prev) => {
-      const next = new Set(prev);
-      if (next.has(groupKey)) next.delete(groupKey);
-      else next.add(groupKey);
-      return next;
-    });
-  };
-
-  const handleChange = (key: string, value: unknown) => {
-    onChange({ ...data, [key]: value });
-  };
-
-  const groups = new Map<FieldGroup, [string, SchemaProperty][]>();
-
-  for (const [key, prop] of Object.entries(properties)) {
-    const group = getGroup(key, prop);
-    if (!groups.has(group)) {
-      groups.set(group, []);
-    }
-    groups.get(group)!.push([key, prop]);
-  }
-
-  return (
-    <div className="divide-y rounded-lg border bg-card p-4 shadow-sm">
-      {GROUP_ORDER.map((groupKey) => {
-        const fields = groups.get(groupKey);
-        if (!fields || fields.length === 0) return null;
-
-        const config = GROUP_CONFIG[groupKey];
-        const isPorts = groupKey === "ports";
-        const isExpanded = expanded.has(groupKey);
-
-        return (
-          <section key={groupKey} className="py-3 first:pt-0 last:pb-0">
-            <button
-              type="button"
-              onClick={() => toggleGroup(groupKey)}
-              className="flex items-center gap-1.5 text-left group"
-            >
-              {isExpanded ? (
-                <ChevronUp className="h-3.5 w-3.5 text-primary transition-transform" />
-              ) : (
-                <ChevronDown className="h-3.5 w-3.5 text-primary transition-transform" />
-              )}
-              <h4 className="text-xs font-semibold text-primary group-hover:underline">
-                {config.label}
-              </h4>
-            </button>
-            {isExpanded && (
-              <div
-                className={
-                  isPorts
-                    ? "mt-2 grid grid-cols-2 gap-3"
-                    : "mt-2 grid grid-cols-1 gap-3"
-                }
-              >
-                {fields.map(([key, prop]) => (
-                  <FieldInput
-                    key={key}
-                    propKey={key}
-                    prop={prop}
-                    value={data[key]}
-                    required={requiredSet.has(key)}
-                    onChange={handleChange}
-                  />
-                ))}
-              </div>
-            )}
-          </section>
-        );
-      })}
-    </div>
-  );
-}
-
 /** 新格式：按容器分组渲染 */
 function ContainerSchemaForm({
   schema,
@@ -649,11 +500,7 @@ function ContainerSchemaForm({
 }
 
 export function SchemaForm({ schema, data, onChange }: SchemaFormProps) {
-  if (schema.containers && schema.containers.length > 0) {
-    return (
-      <ContainerSchemaForm schema={schema} data={data} onChange={onChange} />
-    );
-  }
-
-  return <LegacySchemaForm schema={schema} data={data} onChange={onChange} />;
+  return (
+    <ContainerSchemaForm schema={schema} data={data} onChange={onChange} />
+  );
 }

@@ -14,6 +14,10 @@ from app.core.exceptions import APIException
 from app.models.docker import DockerComposeProject
 from app.models.orchestration import AppInstance, AppOrchestration
 from app.services.compose import compose_manager
+from app.services.system_config_service import (
+    StoragePathResolver,
+    system_config_service,
+)
 
 
 def _extract_default_values(config_schema: dict) -> dict:
@@ -30,17 +34,30 @@ def _render_yaml_template(
     config_schema: dict,
     config: dict,
     project_name: str,
+    orchestration_name: str = "",
+    resolver: StoragePathResolver | None = None,
 ) -> str:
     """使用 Jinja2 渲染 Compose YAML 模板。
 
     合并 Schema 默认值与用户配置后渲染，并校验结果为合法 YAML。
+    同时注入宿主机/容器挂载基础路径变量及路径转换函数。
     """
     default_values = _extract_default_values(config_schema or {})
     merged = {**default_values, **(config or {})}
     merged["project_name"] = project_name
+    merged["orchestration_name"] = orchestration_name
+
+    if resolver is not None:
+        merged["host_mount_base"] = resolver.host_mount_base
+        merged["container_mount_base"] = resolver.container_mount_base
 
     try:
         env = Environment(loader=BaseLoader(), autoescape=False)
+        if resolver is not None:
+            env.globals["make_host_path"] = resolver.make_host_path
+            env.globals["make_container_path"] = resolver.make_container_path
+            env.globals["to_host_path"] = resolver.to_host_path
+            env.globals["to_container_path"] = resolver.to_container_path
         rendered = env.from_string(yaml_template).render(merged)
     except Exception as e:
         raise ValueError(f"编排模板渲染失败: {e}") from e
@@ -139,6 +156,14 @@ class OrchestrationService:
         """一键部署编排实例。"""
         db_orchestration = await self.get_orchestration(db, orchestration_name)
 
+        # 0. 读取并校验系统存储配置
+        system_config = await system_config_service.get_or_create(db)
+        resolver = StoragePathResolver(
+            system_config.storage_host_root_dir,
+            system_config.storage_docker_mount_dir,
+        )
+        resolver.validate()
+
         # 1. JSON Schema 校验
         schema = db_orchestration.config_schema or {}
         if schema:
@@ -176,6 +201,7 @@ class OrchestrationService:
             db_orchestration=db_orchestration,
             config=config,
             project_name=project_name,
+            resolver=resolver,
         )
 
         # 6. 创建 Compose 项目并部署
@@ -211,6 +237,7 @@ class OrchestrationService:
         db_orchestration: AppOrchestration,
         config: dict,
         project_name: str,
+        resolver: StoragePathResolver,
     ) -> str:
         """渲染编排为 Compose YAML。"""
         if not db_orchestration.yaml_template:
@@ -222,6 +249,8 @@ class OrchestrationService:
                 db_orchestration.config_schema,
                 config,
                 project_name,
+                db_orchestration.name,
+                resolver,
             )
         except ValueError as e:
             raise APIException(str(e), 500) from e

@@ -13,8 +13,8 @@ class Settings(BaseSettings):
     APP_NAME: str = "NasDeck"
     """应用名称。"""
 
-    DATABASE_URL: str = "sqlite+aiosqlite:///./nasdeck.db"
-    """数据库连接字符串，默认使用本地 SQLite 异步驱动。"""
+    DATABASE_URL: str = "postgresql+asyncpg://nasdeck:nasdeck@localhost:5434/nasdeck"
+    """数据库连接字符串，默认使用本机 Docker PostgreSQL 异步驱动。"""
 
     SECRET_KEY: str = "change-me-in-production"
     """JWT 签名密钥，生产环境必须替换为随机字符串。"""

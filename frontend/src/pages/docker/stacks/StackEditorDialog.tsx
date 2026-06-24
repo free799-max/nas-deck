@@ -135,8 +135,6 @@ export function StackEditorDialog({
                     value={projectName}
                     onChange={(e) => setProjectNameInput(e.target.value)}
                     placeholder="如：nginx-stack"
-                    pattern="^[a-z0-9_-]+$"
-                    title="只能包含小写字母、数字、下划线和连字符"
                     required
                     readOnly={mode === "edit"}
                     className={mode === "edit" ? "bg-muted" : ""}
