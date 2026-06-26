@@ -5,7 +5,9 @@
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { AuthProvider } from "./contexts/AuthContext";
+import { DeployTaskProvider } from "./contexts/DeployTaskContext";
 import { ToastProvider } from "./components/ui/toast";
+import { DeployProgressDialog } from "./components/DeployProgressDialog";
 import { useAuth } from "./hooks/useAuth";
 import { AppLayout } from "./layouts/AppLayout";
 import { LoginPage } from "./pages/auth/LoginPage";
@@ -70,76 +72,79 @@ export default function App() {
     <QueryClientProvider client={queryClient}>
       <AuthProvider>
         <ToastProvider>
-        <BrowserRouter>
-          <Routes>
-            <Route path="/login" element={<LoginPage />} />
-            <Route
-              element={
-                <ProtectedRoute>
-                  <AppLayout />
-                </ProtectedRoute>
-              }
-            >
-              {/* 核心入口 */}
-              <Route path="/" element={<DashboardPage />} />
-              <Route path="/services" element={<PluginsPage />} />
-              <Route path="/appstore" element={<AppsPage />} />
-              <Route path="/orchestrations" element={<OrchestrationsPage />} />
+          <DeployTaskProvider>
+            <BrowserRouter>
+              <Routes>
+                <Route path="/login" element={<LoginPage />} />
+                <Route
+                  element={
+                    <ProtectedRoute>
+                      <AppLayout />
+                    </ProtectedRoute>
+                  }
+                >
+                  {/* 核心入口 */}
+                  <Route path="/" element={<DashboardPage />} />
+                  <Route path="/services" element={<PluginsPage />} />
+                  <Route path="/appstore" element={<AppsPage />} />
+                  <Route path="/orchestrations" element={<OrchestrationsPage />} />
 
-              {/* 自动化管理 */}
-              <Route
-                path="/automation/media"
-                element={<PlaceholderPage title="影视" />}
-              />
-              <Route
-                path="/automation/comics"
-                element={<PlaceholderPage title="漫画" />}
-              />
-              <Route
-                path="/automation/books"
-                element={<PlaceholderPage title="书籍" />}
-              />
-              <Route
-                path="/automation/music"
-                element={<PlaceholderPage title="音乐" />}
-              />
-              <Route
-                path="/automation/games"
-                element={<PlaceholderPage title="游戏" />}
-              />
-              <Route
-                path="/automation/gallery"
-                element={<PlaceholderPage title="图库" />}
-              />
-              <Route
-                path="/automation/news"
-                element={<PlaceholderPage title="资讯" />}
-              />
+                  {/* 自动化管理 */}
+                  <Route
+                    path="/automation/media"
+                    element={<PlaceholderPage title="影视" />}
+                  />
+                  <Route
+                    path="/automation/comics"
+                    element={<PlaceholderPage title="漫画" />}
+                  />
+                  <Route
+                    path="/automation/books"
+                    element={<PlaceholderPage title="书籍" />}
+                  />
+                  <Route
+                    path="/automation/music"
+                    element={<PlaceholderPage title="音乐" />}
+                  />
+                  <Route
+                    path="/automation/games"
+                    element={<PlaceholderPage title="游戏" />}
+                  />
+                  <Route
+                    path="/automation/gallery"
+                    element={<PlaceholderPage title="图库" />}
+                  />
+                  <Route
+                    path="/automation/news"
+                    element={<PlaceholderPage title="资讯" />}
+                  />
 
-              {/* Docker 管理 */}
-              <Route
-                path="/docker/stacks"
-                element={<DockerStacksPage />}
-              />
-              <Route path="/docker/containers" element={<DockerPage />} />
-              <Route path="/docker/images" element={<DockerImagesPage />} />
-              <Route path="/docker/host" element={<DockerHostPage />} />
+                  {/* Docker 管理 */}
+                  <Route
+                    path="/docker/stacks"
+                    element={<DockerStacksPage />}
+                  />
+                  <Route path="/docker/containers" element={<DockerPage />} />
+                  <Route path="/docker/images" element={<DockerImagesPage />} />
+                  <Route path="/docker/host" element={<DockerHostPage />} />
 
-              {/* 系统设置 */}
-              <Route path="/settings" element={<SettingsPage />} />
+                  {/* 系统设置 */}
+                  <Route path="/settings" element={<SettingsPage />} />
 
-              {/* 旧路由重定向 */}
-              <Route
-                path="/docker"
-                element={<Navigate to="/docker/containers" replace />}
-              />
-              <Route
-                path="/plugins"
-                element={<Navigate to="/services" replace />}
-              />
-            </Route>
-          </Routes>
-        </BrowserRouter>
+                  {/* 旧路由重定向 */}
+                  <Route
+                    path="/docker"
+                    element={<Navigate to="/docker/containers" replace />}
+                  />
+                  <Route
+                    path="/plugins"
+                    element={<Navigate to="/services" replace />}
+                  />
+                </Route>
+              </Routes>
+            </BrowserRouter>
+            <DeployProgressDialog />
+          </DeployTaskProvider>
         </ToastProvider>
       </AuthProvider>
     </QueryClientProvider>

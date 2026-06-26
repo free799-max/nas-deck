@@ -14,7 +14,7 @@ from sqlalchemy.orm import selectinload
 from app.core.custom_route import CustomAPIRoute
 from app.core.exceptions import APIException
 from app.core.security import get_current_user, get_current_user_sse
-from app.database import get_db
+from app.database import async_session, get_db
 from app.models.docker import DockerComposeProject, DockerComposeStack, DockerComposeVersion
 from app.models.user import User
 from app.schemas.docker import (
@@ -28,8 +28,10 @@ from app.schemas.docker import (
     ComposeVersionOut,
     ContainerInfo,
 )
+from app.schemas.orchestration.deploy_task import ComposeDeployResponse
 from app.core.compose_manager import compose_manager
 from app.core.docker_manager import docker_manager
+from app.services.orchestration.deploy_task_service import deploy_task_manager
 
 logger = logging.getLogger(__name__)
 router = APIRouter(route_class=CustomAPIRoute)
@@ -161,31 +163,65 @@ async def list_compose_projects(
     return await asyncio.gather(*[_project_with_status(p) for p in projects])
 
 
-@router.post("/compose", response_model=ComposeProjectOut, status_code=status.HTTP_201_CREATED)
+@router.post("/compose", response_model=ComposeDeployResponse, status_code=status.HTTP_202_ACCEPTED)
 async def create_compose_project(
     data: ComposeProjectCreate,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """创建 Compose 项目。"""
-    try:
-        project = await compose_manager.create_project(
-            db,
-            project_name=data.project_name,
-            content=data.content,
-            user_id=current_user.id,
-            description=data.description,
-        )
-    except IntegrityError:
-        await db.rollback()
-        raise APIException("项目名已存在", 409)
-    except ValueError as e:
-        raise APIException(str(e), 400)
-    except Exception as e:
-        raise APIException(f"创建项目失败: {e}", 500)
+    """创建 Compose 项目（异步）。"""
+    project_name = data.project_name
+    content = data.content
+    description = data.description
+    user_id = current_user.id
 
-    project = await _get_compose_project(db, project.id)
-    return _build_project_out(project)
+    task_id = deploy_task_manager.create_task(
+        "compose_deploy",
+        meta={
+            "project_name": project_name,
+            "content": content,
+            "description": description,
+            "user_id": user_id,
+        },
+    )
+
+    async def _task(task_id: str):
+        async with async_session() as task_db:
+            try:
+                def _progress(stage: str, percentage: int, message: str, detail: str | None = None):
+                    deploy_task_manager.update_progress(task_id, stage, percentage, message, detail)
+
+                project = await compose_manager.create_project_async(
+                    task_db,
+                    project_name=project_name,
+                    content=content,
+                    user_id=user_id,
+                    description=description,
+                    progress_callback=_progress,
+                )
+
+                # 更新任务中的 project_id
+                current = deploy_task_manager.get_task(task_id)
+                if current:
+                    current["project_id"] = project.id
+
+                deploy_task_manager.complete_task(task_id)
+            except IntegrityError:
+                await task_db.rollback()
+                deploy_task_manager.fail_task(task_id, "项目名已存在")
+            except ValueError as e:
+                deploy_task_manager.fail_task(task_id, str(e))
+            except Exception as e:
+                logger.exception("Compose 创建项目失败")
+                deploy_task_manager.fail_task(task_id, f"创建项目失败: {e}")
+
+    asyncio.create_task(_task(task_id))
+
+    return ComposeDeployResponse(
+        task_id=task_id,
+        project_id=0,
+        action="create_deploy",
+    )
 
 
 @router.get("/compose/{project_id}", response_model=ComposeProjectOut)
@@ -220,33 +256,65 @@ async def update_compose_project(
     return _build_project_out(project)
 
 
-@router.post("/compose/{project_id}/edit", response_model=ComposeProjectOut)
+@router.post("/compose/{project_id}/edit", response_model=ComposeDeployResponse)
 async def edit_compose_project(
     project_id: int,
     data: ComposeEditRequest,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """编辑 Compose 项目并自动部署。"""
+    """编辑 Compose 项目并自动部署（异步）。"""
     project = await _get_compose_project(db, project_id)
-    try:
-        await compose_manager.edit_and_deploy(
-            db,
-            project,
-            content=data.content,
-            user_id=current_user.id,
-            comment=data.comment,
-            description=data.description,
-        )
-    except ValueError as e:
-        raise APIException(str(e), 400)
-    except RuntimeError as e:
-        raise APIException(str(e), 500)
-    except Exception as e:
-        raise APIException(f"编辑部署失败: {e}", 500)
 
-    project = await _get_compose_project(db, project_id)
-    return _build_project_out(project)
+    content = data.content
+    comment = data.comment
+    description = data.description
+    user_id = current_user.id
+
+    task_id = deploy_task_manager.create_task(
+        "compose_deploy",
+        project_id=project.id,
+        meta={
+            "content": content,
+            "comment": comment,
+            "description": description,
+            "user_id": user_id,
+        },
+    )
+
+    async def _task(task_id: str):
+        async with async_session() as task_db:
+            try:
+                def _progress(stage: str, percentage: int, message: str, detail: str | None = None):
+                    deploy_task_manager.update_progress(task_id, stage, percentage, message, detail)
+
+                result = await task_db.execute(
+                    select(DockerComposeProject)
+                    .where(DockerComposeProject.id == project_id)
+                )
+                task_project = result.scalar_one()
+
+                await compose_manager.edit_and_deploy_async(
+                    task_db,
+                    task_project,
+                    content=content,
+                    user_id=user_id,
+                    comment=comment,
+                    description=description,
+                    progress_callback=_progress,
+                )
+                deploy_task_manager.complete_task(task_id)
+            except Exception as e:
+                logger.exception("Compose 编辑部署失败")
+                deploy_task_manager.fail_task(task_id, str(e))
+
+    asyncio.create_task(_task(task_id))
+
+    return ComposeDeployResponse(
+        task_id=task_id,
+        project_id=project.id,
+        action="edit_deploy",
+    )
 
 
 @router.delete("/compose/{project_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -318,24 +386,53 @@ async def rollback_compose_version(
     return _build_version_out(version)
 
 
-@router.post("/compose/{project_id}/action")
+@router.post("/compose/{project_id}/action", response_model=ComposeDeployResponse)
 async def compose_action(
     project_id: int,
     data: ComposeActionRequest,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """对 Compose 项目执行 up / down / restart 操作。"""
+    """对 Compose 项目执行 up / down / restart 操作（异步）。"""
     project = await _get_compose_project(db, project_id)
-    try:
-        result = await compose_manager.action(db, project, data.action)
-    except ValueError as e:
-        raise APIException(str(e), 400)
-    except RuntimeError as e:
-        raise APIException(str(e), 500)
-    except Exception as e:
-        raise APIException(f"操作失败: {e}", 500)
-    return {"success": True, "message": result["stdout"] or "ok"}
+    action = data.action
+
+    task_id = deploy_task_manager.create_task(
+        "compose_action",
+        project_id=project.id,
+        action=action,
+    )
+
+    async def _task(task_id: str):
+        async with async_session() as task_db:
+            try:
+                def _progress(stage: str, percentage: int, message: str, detail: str | None = None):
+                    deploy_task_manager.update_progress(task_id, stage, percentage, message, detail)
+
+                result = await task_db.execute(
+                    select(DockerComposeProject)
+                    .where(DockerComposeProject.id == project_id)
+                )
+                task_project = result.scalar_one()
+
+                await compose_manager.action_async(
+                    task_db,
+                    task_project,
+                    action=action,
+                    progress_callback=_progress,
+                )
+                deploy_task_manager.complete_task(task_id)
+            except Exception as e:
+                logger.exception("Compose 操作失败")
+                deploy_task_manager.fail_task(task_id, str(e))
+
+    asyncio.create_task(_task(task_id))
+
+    return ComposeDeployResponse(
+        task_id=task_id,
+        project_id=project.id,
+        action=action,
+    )
 
 
 @router.get("/compose/{project_id}/status", response_model=ComposeStackStatusOut)

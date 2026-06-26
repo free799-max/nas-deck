@@ -256,13 +256,17 @@ class OrchestrationService:
             raise APIException(str(e), 500) from e
 
     async def get_instance(self, db: AsyncSession, instance_id: int) -> AppInstance:
-        """获取单个编排实例（携带编排与项目关系）。"""
+        """获取单个编排实例（携带编排、项目及 Stack 关系）。"""
+        from app.models.docker import DockerComposeProject
+
         result = await db.execute(
             select(AppInstance)
             .where(AppInstance.id == instance_id)
             .options(
                 selectinload(AppInstance.orchestration),
-                selectinload(AppInstance.project),
+                selectinload(AppInstance.project).selectinload(
+                    DockerComposeProject.stack
+                ),
             )
         )
         instance = result.scalar_one_or_none()

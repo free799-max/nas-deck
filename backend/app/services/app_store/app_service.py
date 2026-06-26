@@ -1,5 +1,7 @@
 """应用商店业务服务。"""
 
+import asyncio
+import logging
 import re
 
 import docker
@@ -11,14 +13,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.exceptions import APIException
+from app.database import async_session
 from app.models.app_store import App
 from app.models.docker import DockerComposeProject
 from app.models.orchestration import AppInstance
 from app.services.compose import compose_manager
+from app.services.orchestration.deploy_task_service import deploy_task_manager
 from app.services.system_config_service import (
     StoragePathResolver,
     system_config_service,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _extract_default_values(config_schema: dict) -> dict:
@@ -293,8 +299,11 @@ class AppService:
         instance_name: str,
         config: dict,
         user_id: int | None = None,
-    ) -> AppInstance:
-        """一键部署应用。"""
+    ) -> tuple[AppInstance, str]:
+        """一键部署应用：校验并创建 deploying 实例，后台异步执行部署。
+
+        返回 (AppInstance, task_id)，调用方应立即将 task_id 返回给前端。
+        """
         db_app = await self.get_app(db, app_name)
 
         # 0. 读取并校验系统存储配置
@@ -330,33 +339,87 @@ class AppService:
             resolver=resolver,
         )
 
-        # 6. 创建 Compose 项目并部署
-        try:
-            project = await compose_manager.create_project(
-                db,
-                project_name=project_name,
-                content=rendered_yaml,
-                user_id=user_id,
-                description=f"由应用 {db_app.display_name} 部署",
-            )
-        except Exception as e:
-            raise APIException(f"部署失败: {e}", 500) from e
-
-        # 7. 创建 AppInstance 记录
+        # 6. 创建 deploying 状态实例
         instance = AppInstance(
             app_id=db_app.id,
-            project_id=project.id,
             instance_name=instance_name,
             config=config,
             orchestration_version=db_app.version,
-            status="running",
+            status="deploying",
         )
         db.add(instance)
         await db.flush()
         await db.refresh(instance)
-
         await db.commit()
-        return await self.get_instance(db, instance.id)
+
+        # 7. 创建部署任务并在主事件循环中启动后台协程
+        task_id = deploy_task_manager.create_task(
+            "app_deploy",
+            instance_id=instance.id,
+            meta={
+                "app_id": db_app.id,
+                "app_name": db_app.name,
+                "instance_name": instance_name,
+                "project_name": project_name,
+                "rendered_yaml": rendered_yaml,
+                "user_id": user_id,
+                "description": f"由应用 {db_app.display_name} 部署",
+            },
+        )
+
+        asyncio.create_task(self._do_deploy(task_id, instance.id))
+
+        return instance, task_id
+
+    async def _do_deploy(self, task_id: str, instance_id: int):
+        """实际执行应用部署并更新实例状态。"""
+        task = deploy_task_manager.get_task(task_id)
+        if not task:
+            logger.error("部署任务不存在: %s", task_id)
+            return
+
+        meta = task.get("meta") or {}
+        rendered_yaml = meta.get("rendered_yaml", "")
+        project_name = meta.get("project_name", "")
+        user_id = meta.get("user_id")
+        description = meta.get("description")
+
+        def _progress(stage: str, percentage: int, message: str, detail: str | None = None):
+            deploy_task_manager.update_progress(task_id, stage, percentage, message, detail)
+
+        async with async_session() as db:
+            try:
+                _progress("preparing", 5, "准备部署")
+                project = await compose_manager.create_project_async(
+                    db,
+                    project_name=project_name,
+                    content=rendered_yaml,
+                    user_id=user_id,
+                    description=description,
+                    progress_callback=_progress,
+                )
+
+                # 更新实例为 running 并关联 project
+                instance = await self.get_instance(db, instance_id)
+                instance.project_id = project.id
+                instance.status = "running"
+                await db.commit()
+
+                deploy_task_manager.complete_task(task_id)
+            except Exception as e:
+                logger.exception("应用部署失败: %s", e)
+                error_msg = str(e)
+                deploy_task_manager.fail_task(task_id, error_msg)
+
+                try:
+                    instance = await self.get_instance(db, instance_id)
+                    instance.status = "error"
+                    # 若项目已创建则关联 project_id，便于用户继续操作
+                    if "project" in locals() and project:
+                        instance.project_id = project.id
+                    await db.commit()
+                except Exception:
+                    logger.exception("更新实例失败状态失败")
 
     def _render_app(
         self,
@@ -382,13 +445,17 @@ class AppService:
             raise APIException(str(e), 500) from e
 
     async def get_instance(self, db: AsyncSession, instance_id: int) -> AppInstance:
-        """获取单个应用实例（携带应用与项目关系）。"""
+        """获取单个应用实例（携带应用、项目及 Stack 关系）。"""
+        from app.models.docker import DockerComposeProject
+
         result = await db.execute(
             select(AppInstance)
             .where(AppInstance.id == instance_id)
             .options(
                 selectinload(AppInstance.app),
-                selectinload(AppInstance.project),
+                selectinload(AppInstance.project).selectinload(
+                    DockerComposeProject.stack
+                ),
             )
         )
         instance = result.scalar_one_or_none()

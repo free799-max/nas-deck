@@ -76,8 +76,8 @@ class AppInstance(Base):
     app_id: Mapped[int | None] = mapped_column(
         ForeignKey("apps.id"), nullable=True
     )
-    project_id: Mapped[int] = mapped_column(
-        ForeignKey("docker_compose_projects.id"), nullable=False, unique=True
+    project_id: Mapped[int | None] = mapped_column(
+        ForeignKey("docker_compose_projects.id"), nullable=True, unique=True
     )
     instance_name: Mapped[str] = mapped_column(String(100), nullable=False)
     config: Mapped[dict] = mapped_column(
@@ -85,7 +85,7 @@ class AppInstance(Base):
     )
     # 实例当前部署的版本
     orchestration_version: Mapped[str] = mapped_column(String(20), default="1.0.0")
-    # 实例运行状态：running / stopped / error / upgrading
+    # 实例运行状态：running / stopped / error / upgrading / deploying
     status: Mapped[str] = mapped_column(String(20), default="running")
     # 实例级备份配置，可覆盖编排默认配置
     backup_config: Mapped[dict] = mapped_column(

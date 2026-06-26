@@ -2,6 +2,15 @@
 
 from pydantic import BaseModel, ConfigDict
 
+from app.schemas.orchestration.deploy_task import (
+    ComposeDeployResponse,
+    DeployTaskCreateResponse,
+    DeployTaskProgress,
+    DeployTaskStage,
+    DeployTaskStatus,
+    DeployTaskType,
+)
+
 
 class OrchestrationOut(BaseModel):
     """应用编排列表/详情响应模型。"""
@@ -52,3 +61,17 @@ class OrchestrationDeployResponse(BaseModel):
     instance_name: str
     status: str
     pending_config: dict = {}
+
+
+__all__ = [
+    "ComposeDeployResponse",
+    "DeployTaskCreateResponse",
+    "DeployTaskProgress",
+    "DeployTaskStage",
+    "DeployTaskStatus",
+    "DeployTaskType",
+    "OrchestrationDeployRequest",
+    "OrchestrationDeployResponse",
+    "OrchestrationDetailOut",
+    "OrchestrationOut",
+]

@@ -12,12 +12,13 @@ from app.database import get_db
 from app.models.user import User
 from app.schemas.app_store import (
     AppDeployRequest,
-    AppDeployResponse,
     AppDetailOut,
     AppOut,
     AppPreviewResponse,
 )
+from app.schemas.orchestration.deploy_task import DeployTaskCreateResponse
 from app.services.app_store import app_service
+from app.services.orchestration.deploy_task_service import deploy_task_manager
 
 from app.core.custom_route import CustomAPIRoute
 
@@ -106,15 +107,15 @@ async def preview_app(
     return result
 
 
-@router.post("/{name}/deploy", response_model=AppDeployResponse)
+@router.post("/{name}/deploy", response_model=DeployTaskCreateResponse)
 async def deploy_app(
     name: str,
     data: AppDeployRequest,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """一键部署应用。"""
-    instance = await app_service.deploy(
+    """一键部署应用，返回部署任务 ID。"""
+    instance, task_id = await app_service.deploy(
         db,
         app_name=name,
         instance_name=data.instance_name,
@@ -122,17 +123,8 @@ async def deploy_app(
         user_id=current_user.id,
     )
 
-    project = instance.project
-    stack = project.stack if project else None
-    status_text = stack.status if stack else "unknown"
-
-    pending = getattr(instance, "_pending_config", {})
-
-    return AppDeployResponse(
+    return DeployTaskCreateResponse(
+        task_id=task_id,
         instance_id=instance.id,
-        project_id=instance.project_id,
-        project_name=project.project_name if project else "",
-        instance_name=instance.instance_name,
-        status=status_text,
-        pending_config=pending,
+        status="deploying",
     )

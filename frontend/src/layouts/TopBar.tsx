@@ -12,8 +12,10 @@ import {
   LogOut,
   PanelLeft,
   PanelLeftClose,
+  Loader2,
 } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
+import { useDeployTasks } from "@/hooks/useDeployTasks";
 
 interface TopBarProps {
   sidebarCollapsed: boolean;
@@ -22,6 +24,7 @@ interface TopBarProps {
 
 export function TopBar({ sidebarCollapsed, onToggleSidebar }: TopBarProps) {
   const { user, logout } = useAuth();
+  const { activeTaskIds, isPanelOpen, openPanel } = useDeployTasks();
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -53,7 +56,7 @@ export function TopBar({ sidebarCollapsed, onToggleSidebar }: TopBarProps) {
         )}
       </button>
 
-      {/* 右侧：帮助 + 通知 + 用户菜单 */}
+      {/* 右侧：帮助 + 通知 + 部署任务入口 + 用户菜单 */}
       <div className="flex items-center gap-1">
         <button className="h-8 w-8 rounded-md flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted transition-colors">
           <HelpCircle className="h-4 w-4" />
@@ -62,6 +65,24 @@ export function TopBar({ sidebarCollapsed, onToggleSidebar }: TopBarProps) {
           <Bell className="h-4 w-4" />
           <span className="absolute top-1 right-1 h-2 w-2 rounded-full bg-red-500 ring-2 ring-white" />
         </button>
+
+        {activeTaskIds.length > 0 && (
+          <button
+            onClick={openPanel}
+            title="查看部署进度"
+            className={`h-8 pl-2 pr-2 rounded-md flex items-center gap-1.5 text-xs font-medium transition-colors relative ${
+              isPanelOpen
+                ? "bg-primary/10 text-primary"
+                : "text-muted-foreground hover:text-foreground hover:bg-muted"
+            }`}
+          >
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            <span>部署中</span>
+            <span className="h-4 min-w-4 px-1 rounded-full bg-primary text-primary-foreground text-[10px] flex items-center justify-center">
+              {activeTaskIds.length}
+            </span>
+          </button>
+        )}
 
         {/* 用户菜单 */}
         <div className="relative" ref={menuRef}>

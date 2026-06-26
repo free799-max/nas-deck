@@ -10,6 +10,8 @@ import { Input } from "@/components/ui/input";
 import { AppCard } from "./AppCard";
 import { AppDeployDialog } from "./AppDeployDialog";
 import { AppDetailDialog } from "./AppDetailDialog";
+import { useToast } from "@/components/ui/toast";
+import { useDeployTasks } from "@/hooks/useDeployTasks";
 import {
   useApps,
   useApp,
@@ -34,6 +36,8 @@ const CATEGORY_LABELS: Record<string, string> = {
 export function AppsTab() {
   const { data: apps = [], isLoading } = useApps();
   const deployMutation = useDeployApp();
+  const toast = useToast();
+  const { startTask } = useDeployTasks();
 
   const [search, setSearch] = useState("");
   const [selectedCategory, setSelectedCategory] = useState<string>("all");
@@ -99,8 +103,10 @@ export function AppsTab() {
     deployMutation.mutate(
       { name: deployApp.name, data },
       {
-        onSuccess: () => {
+        onSuccess: (response) => {
           setDeployApp(null);
+          startTask(response.task_id);
+          toast.success("部署任务已启动");
         },
       }
     );

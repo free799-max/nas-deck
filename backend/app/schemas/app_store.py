@@ -55,14 +55,3 @@ class AppPreviewResponse(BaseModel):
     error: str | None = None
 
     model_config = ConfigDict(from_attributes=True)
-
-
-class AppDeployResponse(BaseModel):
-    """应用部署响应模型。"""
-
-    instance_id: int
-    project_id: int
-    project_name: str
-    instance_name: str
-    status: str
-    pending_config: dict = {}

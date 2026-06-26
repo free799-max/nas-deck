@@ -5,7 +5,9 @@ import json
 import logging
 import re
 import shutil
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import yaml
 
@@ -177,6 +179,120 @@ class ComposeService:
             "stderr": stderr.decode("utf-8", errors="replace"),
         }
 
+    async def _run_streaming(
+        self,
+        project: DockerComposeProject,
+        *args: str,
+        on_line: Callable[..., Any] | None = None,
+        timeout: int = 300,
+    ) -> dict:
+        """流式执行 docker compose CLI 命令，实时回调每一行输出并收集结果。"""
+        if not self.docker_available:
+            raise RuntimeError("未找到 docker 命令，请确认 Docker 已安装")
+
+        config_files = self._config_files(project)
+        working_dir = self._working_dir(project)
+
+        cmd = ["docker", "compose"]
+        for cf in config_files:
+            cmd.extend(["-f", str(cf)])
+        cmd.extend(["-p", project.project_name, *args])
+
+        logger.info("执行 compose 命令: %s (cwd=%s)", " ".join(cmd), working_dir)
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            cwd=str(working_dir),
+        )
+
+        stdout_lines: list[str] = []
+        stderr_lines: list[str] = []
+
+        async def _read_stream(stream, name: str, collector: list[str]):
+            while True:
+                line = await stream.readline()
+                if not line:
+                    break
+                text = line.decode("utf-8", errors="replace").rstrip("\n")
+                if text:
+                    collector.append(text)
+                    if on_line:
+                        try:
+                            on_line(text, name)
+                        except Exception:
+                            logger.exception("compose 进度回调异常")
+
+        stdout_task = asyncio.create_task(_read_stream(proc.stdout, "stdout", stdout_lines))
+        stderr_task = asyncio.create_task(_read_stream(proc.stderr, "stderr", stderr_lines))
+        try:
+            await asyncio.wait_for(proc.wait(), timeout=timeout)
+        except asyncio.TimeoutError:
+            stdout_task.cancel()
+            stderr_task.cancel()
+            proc.kill()
+            await proc.wait()
+            raise RuntimeError("docker compose 命令执行超时")
+        finally:
+            await asyncio.gather(stdout_task, stderr_task, return_exceptions=True)
+
+        return {
+            "returncode": proc.returncode,
+            "stdout": "\n".join(stdout_lines),
+            "stderr": "\n".join(stderr_lines),
+        }
+
+    @staticmethod
+    def _detect_stage(line: str) -> str | None:
+        """根据 compose 输出行推断当前阶段。"""
+        lowered = line.lower()
+        if any(k in lowered for k in ("pulling", "downloading", "extracting", "already exists", "pulled")):
+            return "pulling_images"
+        if any(k in lowered for k in ("creating", "starting", "started", "container")):
+            return "starting_services"
+        return None
+
+    async def _run_up_with_progress(
+        self,
+        project: DockerComposeProject,
+        progress_callback: Callable[..., Any] | None,
+        timeout: int = 300,
+    ) -> dict:
+        """统一执行 docker compose up -d 并推送进度。
+
+        若未提供 progress_callback，则退化为非流式执行。
+        """
+        def _progress(stage: str, percentage: int, message: str, detail: str | None = None):
+            if progress_callback:
+                progress_callback(stage, percentage, message, detail)
+
+        _progress("pulling_images", 50, "拉取/启动服务中")
+        current_stage = "pulling_images"
+
+        if progress_callback:
+            def _on_line(line: str, name: str):
+                detected = self._detect_stage(line)
+                nonlocal current_stage
+                if detected:
+                    current_stage = detected
+                _progress(
+                    current_stage,
+                    50,
+                    "拉取镜像中" if current_stage == "pulling_images" else "启动服务中",
+                    line,
+                )
+
+            result = await self._run_streaming(
+                project, "up", "-d", on_line=_on_line, timeout=timeout
+            )
+        else:
+            result = await self._run(project, "up", "-d", timeout=timeout)
+
+        if result["returncode"] != 0:
+            stderr = result.get("stderr", "").strip()
+            raise RuntimeError(stderr or "docker compose up -d 执行失败")
+        return result
+
     @staticmethod
     def _ensure_host_directories(content: str) -> None:
         """解析 Compose YAML，为 bind mount 的宿主机路径自动创建目录。"""
@@ -225,13 +341,38 @@ class ComposeService:
         user_id: int | None = None,
         description: str | None = None,
     ) -> DockerComposeProject:
-        """创建 Compose 项目并写入初始版本。"""
+        """创建 Compose 项目并写入初始版本（同步包装）。"""
+        return await self.create_project_async(
+            db,
+            project_name=project_name,
+            content=content,
+            user_id=user_id,
+            description=description,
+        )
+
+    async def create_project_async(
+        self,
+        db,
+        project_name: str,
+        content: str,
+        user_id: int | None = None,
+        description: str | None = None,
+        progress_callback: Callable[..., Any] | None = None,
+    ) -> DockerComposeProject:
+        """创建 Compose 项目并写入初始版本（支持进度回调）。"""
         self.validate_project_name(project_name)
         self.validate_yaml(content)
+
+        def _progress(stage: str, percentage: int, message: str, detail: str | None = None):
+            if progress_callback:
+                progress_callback(stage, percentage, message, detail)
+
+        _progress("preparing", 5, "准备部署")
 
         # 自动创建 bind mount 所需的宿主机目录
         self._ensure_host_directories(content)
 
+        _progress("creating_project", 15, "创建 Compose 项目")
         project_dir = self._project_dir(project_name)
         project_dir.mkdir(parents=True, exist_ok=True)
         compose_file = self._compose_file(project_name)
@@ -256,12 +397,12 @@ class ComposeService:
         db.add(version)
         await db.flush()
 
+        _progress("writing_compose", 25, "写入 compose 文件")
         await self._write_compose_file(project, version)
 
-        result = await self._run(project, "up", "-d", timeout=300)
-        if result["returncode"] != 0:
-            raise RuntimeError(f"项目创建后部署失败: {result['stderr']}")
+        await self._run_up_with_progress(project, progress_callback, timeout=300)
 
+        _progress("syncing_status", 95, "同步服务状态")
         stack = await self.sync_stack_status(db, project, action="up")
         if stack.service_count > 0 and stack.running_count == 0:
             raise RuntimeError(
@@ -298,6 +439,10 @@ class ComposeService:
             except Exception as e:
                 logger.warning("删除项目时 down 失败（可能已不存在）: %s", e)
 
+            # 兜底：无论 docker compose down 是否成功，都强制清理归属容器，
+            # 避免外部发现的项目或 down 失败的项目反复“复活”。
+            await self._remove_project_containers(project.project_name)
+
             project_dir = self._project_dir(project.project_name)
             if project_dir == self._working_dir(project):
                 if project_dir.exists():
@@ -313,6 +458,25 @@ class ComposeService:
             await db.delete(project)
             await db.commit()
             self._locks.pop(project.id, None)
+
+    async def _remove_project_containers(self, project_name: str) -> None:
+        """按 Compose 项目标签强制停止并删除容器。"""
+        from app.core.docker_manager import docker_manager
+
+        if not docker_manager.available:
+            return
+
+        try:
+            filters = {"label": [f"com.docker.compose.project={project_name}"]}
+            containers = docker_manager.list_containers(filters=filters)
+            container_ids = [c.get("id") for c in containers if c.get("id")]
+            if container_ids:
+                logger.info(
+                    "强制删除项目 %s 的容器: %s", project_name, container_ids
+                )
+                docker_manager.batch_container_action(container_ids, "remove")
+        except Exception as e:
+            logger.warning("强制删除项目 %s 容器失败: %s", project_name, e)
 
     async def add_version(
         self,
@@ -363,12 +527,37 @@ class ComposeService:
         comment: str | None = None,
         description: str | None = None,
     ) -> tuple[DockerComposeVersion, dict]:
-        """编辑 Compose 项目：保存新版本并自动部署。"""
+        """编辑 Compose 项目：保存新版本并自动部署（同步包装）。"""
+        return await self.edit_and_deploy_async(
+            db,
+            project,
+            content=content,
+            user_id=user_id,
+            comment=comment,
+            description=description,
+        )
+
+    async def edit_and_deploy_async(
+        self,
+        db,
+        project: DockerComposeProject,
+        content: str,
+        user_id: int | None = None,
+        comment: str | None = None,
+        description: str | None = None,
+        progress_callback: Callable[..., Any] | None = None,
+    ) -> tuple[DockerComposeVersion, dict]:
+        """编辑 Compose 项目：保存新版本并自动部署（支持进度回调）。"""
         from sqlalchemy import select, update
+
+        def _progress(stage: str, percentage: int, message: str, detail: str | None = None):
+            if progress_callback:
+                progress_callback(stage, percentage, message, detail)
 
         self.validate_yaml(content)
 
         async with self._lock(project.id):
+            _progress("preparing", 5, "准备编辑部署")
             if description is not None:
                 project.description = description
 
@@ -397,18 +586,19 @@ class ComposeService:
             await db.commit()
             await db.refresh(version)
 
+            _progress("writing_compose", 25, "写入 compose 文件")
             await self._write_compose_file(project, version)
-            result = await self._run(project, "up", "-d", timeout=300)
-            if result["returncode"] != 0:
-                raise RuntimeError(f"编辑后部署失败: {result['stderr']}")
 
+            await self._run_up_with_progress(project, progress_callback, timeout=300)
+
+            _progress("syncing_status", 95, "同步服务状态")
             stack = await self.sync_stack_status(db, project, action="up")
             if stack.service_count > 0 and stack.running_count == 0:
                 raise RuntimeError(
                     "服务启动后未保持运行，请检查容器日志或 compose 配置"
                 )
 
-            return version, result
+            return version, {"returncode": 0, "stdout": "", "stderr": ""}
 
     async def rollback_version(
         self,
@@ -443,29 +633,49 @@ class ComposeService:
         project: DockerComposeProject,
         action: str,
     ) -> dict:
-        """对项目执行 up / down / restart 操作。"""
+        """对项目执行 up / down / restart 操作（同步包装）。"""
+        return await self.action_async(db, project, action)
+
+    async def action_async(
+        self,
+        db,
+        project: DockerComposeProject,
+        action: str,
+        progress_callback: Callable[..., Any] | None = None,
+    ) -> dict:
+        """对项目执行 up / down / restart 操作（支持进度回调）。"""
         if action not in {"up", "down", "restart"}:
             raise ValueError(f"不支持的操作: {action}")
 
+        def _progress(stage: str, percentage: int, message: str, detail: str | None = None):
+            if progress_callback:
+                progress_callback(stage, percentage, message, detail)
+
         async with self._lock(project.id):
+            _progress("preparing", 5, f"准备执行 {action}")
+
             if action == "up":
-                result = await self._run(project, "up", "-d", timeout=300)
+                await self._run_up_with_progress(project, progress_callback, timeout=300)
             elif action == "down":
+                _progress("starting_services", 50, "停止服务中")
                 result = await self._run(
                     project, "down", "--remove-orphans", timeout=120
                 )
+                if result["returncode"] != 0:
+                    raise RuntimeError(result.get("stderr") or "compose down 失败")
             else:
+                _progress("starting_services", 50, "重启服务中")
                 result = await self._run(project, "restart", timeout=120)
+                if result["returncode"] != 0:
+                    raise RuntimeError(result.get("stderr") or "compose restart 失败")
 
-            if result["returncode"] != 0:
-                raise RuntimeError(result["stderr"])
-
+            _progress("syncing_status", 95, "同步服务状态")
             stack = await self.sync_stack_status(db, project, action=action)
             if action == "up" and stack.service_count > 0 and stack.running_count == 0:
                 raise RuntimeError(
                     "服务启动后未保持运行，请检查容器日志或 compose 配置"
                 )
-            return result
+            return {"returncode": 0, "stdout": "", "stderr": ""}
 
     async def get_logs(
         self,

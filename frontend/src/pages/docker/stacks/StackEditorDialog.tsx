@@ -34,6 +34,7 @@ interface StackEditorDialogProps {
   project: ComposeProject | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  onTaskCreated?: (taskId: string) => void;
 }
 
 export function StackEditorDialog({
@@ -41,6 +42,7 @@ export function StackEditorDialog({
   project,
   open,
   onOpenChange,
+  onTaskCreated,
 }: StackEditorDialogProps) {
   // 编辑模式下拉取完整项目详情，确保拿到真实 YAML 内容
   const { data: detail, isLoading: isDetailLoading } = useComposeProject(
@@ -81,7 +83,8 @@ export function StackEditorDialog({
           content,
         },
         {
-          onSuccess: () => {
+          onSuccess: (response) => {
+            onTaskCreated?.(response.task_id);
             onOpenChange(false);
           },
         }
@@ -97,7 +100,8 @@ export function StackEditorDialog({
           description: updateDescription,
         },
         {
-          onSuccess: () => {
+          onSuccess: (response) => {
+            onTaskCreated?.(response.task_id);
             onOpenChange(false);
           },
         }

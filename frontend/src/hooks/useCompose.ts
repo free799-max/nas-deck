@@ -86,6 +86,14 @@ export interface ComposeActionRequest {
   action: "up" | "down" | "restart";
 }
 
+/** 部署/操作任务响应 */
+export interface ComposeDeployTaskResponse {
+  task_id: string;
+  project_id: number;
+  action: string;
+  status: string;
+}
+
 /**
  * 查询 Compose 项目列表
  *
@@ -115,17 +123,15 @@ export function useComposeProject(
 }
 
 /**
- * 创建 Compose 项目
+ * 创建 Compose 项目（异步）
  */
 export function useCreateComposeProject() {
-  const qc = useQueryClient();
   const toast = useToast();
   return useMutation({
     mutationFn: (data: ComposeProjectCreate) =>
-      api.post<ComposeProject>("/docker/compose", data).then((r) => r.data),
+      api.post<ComposeDeployTaskResponse>("/docker/compose", data).then((r) => r.data),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["compose", "projects"] });
-      toast.success("编排项目创建成功");
+      toast.success("创建部署任务已启动");
     },
     onError: (error: ApiError) => {
       toast.error(error.displayMessage || "创建编排项目失败");
@@ -154,41 +160,17 @@ export function useUpdateComposeProject(projectId: number) {
 }
 
 /**
- * 编辑 Compose 项目并自动部署
+ * 编辑 Compose 项目并自动部署（异步）
  */
 export function useEditComposeProject(projectId: number) {
-  const qc = useQueryClient();
   const toast = useToast();
   return useMutation({
     mutationFn: (data: ComposeEditRequest) =>
       api
-        .post<ComposeProject>(`/docker/compose/${projectId}/edit`, data)
+        .post<ComposeDeployTaskResponse>(`/docker/compose/${projectId}/edit`, data)
         .then((r) => r.data),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["compose", "projects"] });
-      qc.invalidateQueries({ queryKey: ["compose", "projects", projectId] });
-      qc.invalidateQueries({
-        queryKey: ["compose", "projects", projectId, "versions"],
-      });
-      qc.invalidateQueries({
-        queryKey: ["compose", "projects", projectId, "status"],
-      });
-      toast.success("保存成功并已部署");
-
-      // 短时轮询，让 Stack 状态尽快同步
-      let count = 0;
-      const maxPolls = 6;
-      const interval = 500;
-      const timer = setInterval(() => {
-        count += 1;
-        qc.refetchQueries({ queryKey: ["compose", "projects"] });
-        qc.refetchQueries({
-          queryKey: ["compose", "projects", projectId, "status"],
-        });
-        if (count >= maxPolls) {
-          clearInterval(timer);
-        }
-      }, interval);
+      toast.success("编辑部署任务已启动");
     },
     onError: (error: ApiError) => {
       toast.error(error.displayMessage || "保存并部署失败");
@@ -205,12 +187,24 @@ export function useDeleteComposeProject() {
   return useMutation({
     mutationFn: (projectId: number) =>
       api.delete(`/docker/compose/${projectId}`).then((r) => r.data),
+    onMutate: async (projectId) => {
+      await qc.cancelQueries({ queryKey: ["compose", "projects"] });
+      const previous = qc.getQueryData<ComposeProject[]>(["compose", "projects"]);
+      qc.setQueryData<ComposeProject[]>(
+        ["compose", "projects"],
+        (old) => old?.filter((p) => p.id !== projectId)
+      );
+      return { previous };
+    },
+    onError: (error: ApiError, _projectId: number, context) => {
+      if (context?.previous) {
+        qc.setQueryData<ComposeProject[]>(["compose", "projects"], context.previous);
+      }
+      toast.error(error.displayMessage || "删除编排项目失败");
+    },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["compose", "projects"] });
       toast.success("编排项目已删除");
-    },
-    onError: (error: ApiError) => {
-      toast.error(error.displayMessage || "删除编排项目失败");
     },
   });
 }
@@ -257,10 +251,9 @@ export function useRollbackComposeVersion(projectId: number) {
 }
 
 /**
- * 执行 Compose 操作（up/down/restart）
+ * 执行 Compose 操作（up/down/restart，异步）
  */
 export function useComposeAction() {
-  const qc = useQueryClient();
   const toast = useToast();
   return useMutation({
     mutationFn: ({
@@ -271,37 +264,15 @@ export function useComposeAction() {
       action: ComposeActionRequest["action"];
     }) =>
       api
-        .post(`/docker/compose/${projectId}/action`, { action })
+        .post<ComposeDeployTaskResponse>(`/docker/compose/${projectId}/action`, { action })
         .then((r) => r.data),
-    onSuccess: (_, { projectId, action }) => {
-      qc.invalidateQueries({ queryKey: ["compose", "projects"] });
-      qc.invalidateQueries({
-        queryKey: ["compose", "projects", projectId],
-      });
-      qc.invalidateQueries({
-        queryKey: ["compose", "projects", projectId, "status"],
-      });
+    onSuccess: (_, { action }) => {
       const actionMap: Record<string, string> = {
         up: "启动",
         down: "停止",
         restart: "重启",
       };
-      toast.success(`${actionMap[action] || action} 操作已执行`);
-
-      // 短时轮询，让状态尽快同步
-      let count = 0;
-      const maxPolls = 6;
-      const interval = 500;
-      const timer = setInterval(() => {
-        count += 1;
-        qc.refetchQueries({ queryKey: ["compose", "projects"] });
-        qc.refetchQueries({
-          queryKey: ["compose", "projects", projectId, "status"],
-        });
-        if (count >= maxPolls) {
-          clearInterval(timer);
-        }
-      }, interval);
+      toast.success(`${actionMap[action] || action} 任务已启动`);
     },
     onError: (error: ApiError) => {
       toast.error(error.displayMessage || "操作失败");

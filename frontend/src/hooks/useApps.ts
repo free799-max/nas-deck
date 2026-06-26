@@ -47,12 +47,9 @@ export interface DeployAppRequest {
 
 /** 部署响应 */
 export interface DeployAppResponse {
+  task_id: string;
   instance_id: number;
-  project_id: number;
-  project_name: string;
-  instance_name: string;
   status: string;
-  pending_config: Record<string, unknown>;
 }
 
 /** 预览请求 */
@@ -94,7 +91,9 @@ export function useApp(
 }
 
 /**
- * 一键部署应用
+ * 一键部署应用（异步）
+ *
+ * 后端立即返回任务 ID，调用方需自行监听部署进度。
  */
 export function useDeployApp() {
   const qc = useQueryClient();
@@ -106,10 +105,9 @@ export function useDeployApp() {
     }: {
       name: string;
       data: DeployAppRequest;
-    }) => api.post<DeployAppResponse>(`/apps/${name}/deploy`, data),
+    }) => api.post<DeployAppResponse>(`/apps/${name}/deploy`, data).then((r) => r.data),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["compose", "projects"] });
-      toast.success("部署成功");
     },
     onError: (error: ApiError) => {
       toast.error(error.displayMessage || "部署失败");

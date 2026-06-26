@@ -126,7 +126,7 @@ async def test_create_project_deploy_fails_still_saved(compose_manager, tmp_path
             "stderr": "no such image",
         }
 
-        with pytest.raises(RuntimeError, match="创建后部署失败"):
+        with pytest.raises(RuntimeError, match="no such image"):
             await compose_manager.create_project(
                 db,
                 project_name="fail-stack",

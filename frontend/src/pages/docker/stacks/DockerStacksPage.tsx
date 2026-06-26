@@ -15,6 +15,7 @@ import {
   useDeleteComposeProject,
 } from "@/hooks/useCompose";
 import type { ComposeProject } from "@/hooks/useCompose";
+import { useDeployTasks } from "@/hooks/useDeployTasks";
 import { StackGrid } from "./StackGrid";
 import { StackEditorDialog } from "./StackEditorDialog";
 import { StackVersionDialog } from "./StackVersionDialog";
@@ -29,6 +30,8 @@ export function DockerStacksPage() {
     refetch,
     isRefetching,
   } = useComposeProjects();
+
+  const { startTask } = useDeployTasks();
 
   const [editorMode, setEditorMode] = useState<"create" | "edit" | null>(null);
   const [editProject, setEditProject] = useState<ComposeProject | null>(null);
@@ -49,6 +52,9 @@ export function DockerStacksPage() {
     actionMutation.mutate(
       { projectId: project.id, action },
       {
+        onSuccess: (response) => {
+          startTask(response.task_id);
+        },
         onSettled: () => setPendingProjectId(null),
       }
     );
@@ -59,10 +65,11 @@ export function DockerStacksPage() {
   };
 
   const handleConfirmDelete = () => {
-    if (deleteProject) {
-      deleteMutation.mutate(deleteProject.id);
-      setDeleteProject(null);
-    }
+    if (!deleteProject) return;
+    deleteMutation.mutate(deleteProject.id, {
+      onSuccess: () => setDeleteProject(null),
+      onError: () => setDeleteProject(null),
+    });
   };
 
   const handleCreate = () => {
@@ -112,6 +119,9 @@ export function DockerStacksPage() {
         project={editProject}
         open={editorMode !== null}
         onOpenChange={handleEditorClose}
+        onTaskCreated={(taskId) => {
+          startTask(taskId);
+        }}
       />
 
       <StackVersionDialog
@@ -142,6 +152,7 @@ export function DockerStacksPage() {
       <ConfirmDialog
         open={!!deleteProject}
         onOpenChange={(open) => {
+          if (!open && deleteMutation.isPending) return;
           if (!open) setDeleteProject(null);
         }}
         title="删除编排项目"
