@@ -12,7 +12,6 @@ import { useState, useEffect } from "react";
 import { Link, useLocation } from "react-router-dom";
 import {
   LayoutDashboard,
-  Server,
   Store,
   Film,
   BookImage,
@@ -40,9 +39,7 @@ interface NavItemConfig {
 // 顶部独立项：核心入口
 const topItems: NavItemConfig[] = [
   { path: "/", label: "服务概览", icon: LayoutDashboard },
-  { path: "/services", label: "服务编排", icon: Server },
   { path: "/appstore", label: "应用市场", icon: Store },
-  { path: "/orchestrations", label: "应用编排", icon: Layers },
 ];
 
 // AUTOMATION 分组：按媒体类型划分的自动化配置

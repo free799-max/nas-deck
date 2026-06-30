@@ -1,6 +1,6 @@
 """应用编排 API 路由模块。
 
-提供应用编排的浏览与一键部署接口。
+提供自动化分类组合模板的浏览与组合部署接口。
 """
 
 from pathlib import Path
@@ -55,16 +55,10 @@ async def get_orchestration(
         "icon": orchestration.icon,
         "website": orchestration.website,
         "source_url": orchestration.source_url,
-        "architectures": orchestration.architectures,
-        "config_schema": orchestration.config_schema,
         "version": orchestration.version,
         "is_builtin": orchestration.is_builtin,
-        "type": orchestration.type,
-        "changelog": orchestration.changelog,
-        "backup_paths": orchestration.backup_paths,
-        "source_dir": orchestration.source_dir,
-        "readme": orchestration.readme,
-        "suggested_plugins": orchestration.suggested_plugins or [],
+        "app_composition": orchestration.app_composition or [],
+        "shared_config_schema": orchestration.shared_config_schema or {},
     }
 
 
@@ -72,9 +66,8 @@ async def get_orchestration(
 async def get_orchestration_icon(
     name: str,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
 ):
-    """获取应用编排图标。"""
+    """获取应用编排图标（公开访问）。"""
     orchestration = await orchestration_service.get_orchestration(db, name)
     if not orchestration.icon:
         raise APIException("编排无图标", 404)
@@ -96,26 +89,20 @@ async def deploy_orchestration(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """一键部署应用编排。"""
-    instance = await orchestration_service.deploy(
+    """组合部署应用编排。"""
+    group, task_ids = await orchestration_service.deploy(
         db,
         orchestration_name=name,
         instance_name=data.instance_name,
-        config=data.config,
+        selected_apps=data.selected_apps,
+        app_configs=data.app_configs,
+        shared_config=data.shared_config,
         user_id=current_user.id,
     )
 
-    project = instance.project
-    stack = project.stack
-    status_text = stack.status if stack else "unknown"
-
-    pending = getattr(instance, "_pending_config", {})
-
     return OrchestrationDeployResponse(
-        instance_id=instance.id,
-        project_id=project.id,
-        project_name=project.project_name,
-        instance_name=instance.instance_name,
-        status=status_text,
-        pending_config=pending,
+        group_id=group.id,
+        instance_name=group.instance_name,
+        status=group.status,
+        task_ids=task_ids,
     )

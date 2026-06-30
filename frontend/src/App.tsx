@@ -12,9 +12,9 @@ import { useAuth } from "./hooks/useAuth";
 import { AppLayout } from "./layouts/AppLayout";
 import { LoginPage } from "./pages/auth/LoginPage";
 import { DashboardPage } from "./pages/dashboard/DashboardPage";
-import { PluginsPage } from "./pages/services/PluginsPage";
 import { AppsPage } from "./pages/apps/AppsPage";
-import { OrchestrationsPage } from "./pages/orchestrations/OrchestrationsPage";
+import { AutomationCategoriesPage } from "./pages/automation/AutomationCategoriesPage";
+import { AutomationCategoryPage } from "./pages/automation/AutomationCategoryPage";
 import { DockerPage } from "./pages/docker/containers/DockerPage";
 import { DockerHostPage } from "./pages/docker/host/DockerHostPage";
 import { DockerImagesPage } from "./pages/docker/images/DockerImagesPage";
@@ -55,18 +55,6 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
-/** 占位页面组件 */
-function PlaceholderPage({ title }: { title: string }) {
-  return (
-    <div className="flex items-center justify-center h-full">
-      <div className="text-center">
-        <h2 className="text-xl font-semibold text-foreground">{title}</h2>
-        <p className="text-sm text-muted-foreground mt-2">Coming soon...</p>
-      </div>
-    </div>
-  );
-}
-
 export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
@@ -85,38 +73,13 @@ export default function App() {
                 >
                   {/* 核心入口 */}
                   <Route path="/" element={<DashboardPage />} />
-                  <Route path="/services" element={<PluginsPage />} />
                   <Route path="/appstore" element={<AppsPage />} />
-                  <Route path="/orchestrations" element={<OrchestrationsPage />} />
 
                   {/* 自动化管理 */}
+                  <Route path="/automation" element={<AutomationCategoriesPage />} />
                   <Route
-                    path="/automation/media"
-                    element={<PlaceholderPage title="影视" />}
-                  />
-                  <Route
-                    path="/automation/comics"
-                    element={<PlaceholderPage title="漫画" />}
-                  />
-                  <Route
-                    path="/automation/books"
-                    element={<PlaceholderPage title="书籍" />}
-                  />
-                  <Route
-                    path="/automation/music"
-                    element={<PlaceholderPage title="音乐" />}
-                  />
-                  <Route
-                    path="/automation/games"
-                    element={<PlaceholderPage title="游戏" />}
-                  />
-                  <Route
-                    path="/automation/gallery"
-                    element={<PlaceholderPage title="图库" />}
-                  />
-                  <Route
-                    path="/automation/news"
-                    element={<PlaceholderPage title="资讯" />}
+                    path="/automation/:category"
+                    element={<AutomationCategoryPage />}
                   />
 
                   {/* Docker 管理 */}
@@ -135,10 +98,6 @@ export default function App() {
                   <Route
                     path="/docker"
                     element={<Navigate to="/docker/containers" replace />}
-                  />
-                  <Route
-                    path="/plugins"
-                    element={<Navigate to="/services" replace />}
                   />
                 </Route>
               </Routes>

@@ -1,122 +1,26 @@
 """应用编排业务服务。"""
 
-import re
-
-import docker
-import yaml
-from jinja2 import Environment, BaseLoader
-from jsonschema import validate, ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.exceptions import APIException
+from app.models.app_store import App
 from app.models.docker import DockerComposeProject
-from app.models.orchestration import AppInstance, AppOrchestration
-from app.services.compose import compose_manager
-from app.services.system_config_service import (
-    StoragePathResolver,
-    system_config_service,
+from app.models.orchestration import (
+    AppInstance,
+    AppOrchestration,
+    AppOrchestrationInstance,
 )
-
-
-def _extract_default_values(config_schema: dict) -> dict:
-    """从 JSON Schema 的 properties 中提取各字段的 default 值。"""
-    defaults: dict = {}
-    for key, prop in (config_schema.get("properties") or {}).items():
-        if "default" in prop:
-            defaults[key] = prop["default"]
-    return defaults
-
-
-def _render_yaml_template(
-    yaml_template: str,
-    config_schema: dict,
-    config: dict,
-    project_name: str,
-    orchestration_name: str = "",
-    resolver: StoragePathResolver | None = None,
-) -> str:
-    """使用 Jinja2 渲染 Compose YAML 模板。
-
-    合并 Schema 默认值与用户配置后渲染，并校验结果为合法 YAML。
-    同时注入宿主机/容器挂载基础路径变量及路径转换函数。
-    """
-    default_values = _extract_default_values(config_schema or {})
-    merged = {**default_values, **(config or {})}
-    merged["project_name"] = project_name
-    merged["orchestration_name"] = orchestration_name
-
-    if resolver is not None:
-        merged["host_mount_base"] = resolver.host_mount_base
-        merged["container_mount_base"] = resolver.container_mount_base
-
-    try:
-        env = Environment(loader=BaseLoader(), autoescape=False)
-        if resolver is not None:
-            env.globals["make_host_path"] = resolver.make_host_path
-            env.globals["make_container_path"] = resolver.make_container_path
-            env.globals["to_host_path"] = resolver.to_host_path
-            env.globals["to_container_path"] = resolver.to_container_path
-        rendered = env.from_string(yaml_template).render(merged)
-    except Exception as e:
-        raise ValueError(f"编排模板渲染失败: {e}") from e
-
-    try:
-        yaml.safe_load(rendered)
-    except yaml.YAMLError as e:
-        raise ValueError(f"渲染结果不是合法 YAML: {e}") from e
-
-    return rendered
-
-
-def _slugify(name: str) -> str:
-    """将实例名称转换为合法 Compose 项目名。"""
-    name = name.lower().strip()
-    name = re.sub(r"[^a-z0-9_-]+", "-", name)
-    name = re.sub(r"-+", "-", name).strip("-")
-    if not name:
-        raise ValueError("实例名称无法生成有效项目名")
-    return name[:50]
-
-
-def _extract_orchestration_ports(config_schema: dict) -> list[str]:
-    """从 JSON Schema 中提取类型为 integer 且命名包含 port 的字段名。"""
-    ports = []
-    for key, prop in (config_schema.get("properties") or {}).items():
-        if "port" in key.lower() and prop.get("type") == "integer":
-            ports.append(key)
-    return ports
-
-
-def _get_used_ports() -> set[int]:
-    """获取宿主机上已被容器占用的端口。"""
-    used = set()
-    try:
-        client = docker.from_env()
-        for container in client.containers.list(all=True):
-            host_config = container.attrs.get("HostConfig") or {}
-            bindings = (host_config.get("PortBindings") or {})
-            for container_port, binding_list in bindings.items():
-                if not isinstance(binding_list, list):
-                    continue
-                for binding in binding_list:
-                    host_port = binding.get("HostPort")
-                    if host_port:
-                        try:
-                            used.add(int(host_port))
-                        except ValueError:
-                            pass
-    except Exception:
-        # Docker 不可用时跳过端口预检
-        pass
-    return used
+from app.services.app_store import app_service
 
 
 class OrchestrationService:
     """应用编排服务。
 
-    负责编排查询与一键部署。
+    负责自动化分类组合模板的查询与组合部署。
+    一个编排对应一组应用商店 App 的组合关系，部署时拆分为多个独立的
+    Docker Compose 项目。
     """
 
     async def list_orchestrations(
@@ -150,115 +54,167 @@ class OrchestrationService:
         db: AsyncSession,
         orchestration_name: str,
         instance_name: str,
-        config: dict,
+        selected_apps: list[str],
+        app_configs: dict[str, dict],
+        shared_config: dict,
         user_id: int | None = None,
-    ) -> AppInstance:
-        """一键部署编排实例。"""
+    ) -> tuple[AppOrchestrationInstance, list[str]]:
+        """组合部署：按 AppOrchestration.app_composition 的定义，批量部署多个独立 App。
+
+        返回组合部署记录和每个 App 对应的部署任务 ID 列表。
+        """
         db_orchestration = await self.get_orchestration(db, orchestration_name)
 
-        # 0. 读取并校验系统存储配置
-        system_config = await system_config_service.get_or_create(db)
-        resolver = StoragePathResolver(
-            system_config.storage_host_root_dir,
-            system_config.storage_docker_mount_dir,
+        composition = db_orchestration.app_composition or []
+        self._validate_composition(
+            composition=composition,
+            selected_apps=selected_apps,
         )
-        resolver.validate()
 
-        # 1. JSON Schema 校验
-        schema = db_orchestration.config_schema or {}
-        if schema:
-            try:
-                validate(instance=config, schema=schema)
-            except ValidationError as e:
-                raise APIException(f"配置校验失败: {e.message}", 400) from e
+        # 校验所选 App 是否存在于应用商店
+        app_map = await self._load_apps(db, selected_apps)
+        missing = [name for name in selected_apps if name not in app_map]
+        if missing:
+            raise APIException(f"应用不存在: {', '.join(missing)}", 400)
 
-        # 2. 端口冲突预检
-        used_ports = _get_used_ports()
-        port_keys = _extract_orchestration_ports(schema)
-        for key in port_keys:
-            value = config.get(key)
-            if value is not None and int(value) in used_ports:
-                raise APIException(
-                    f"端口 {value} 已被其他容器占用，请修改 {key}", 409
+        # 全局互斥检测
+        await self._check_global_conflicts(db, composition, selected_apps)
+
+        # 创建组合部署记录
+        group = AppOrchestrationInstance(
+            orchestration_id=db_orchestration.id,
+            instance_name=instance_name,
+            shared_config=shared_config or {},
+            status="deploying",
+        )
+        db.add(group)
+        await db.flush()
+        await db.refresh(group)
+        await db.commit()
+
+        task_ids: list[str] = []
+
+        try:
+            for app_name in selected_apps:
+                app_config = app_configs.get(app_name) or {}
+                # 注入共享配置，让各 App 的 yaml_template 可以引用
+                merged_config = {**(shared_config or {}), **app_config}
+                sub_instance_name = f"{instance_name}-{app_name}"
+
+                instance, task_id = await app_service.deploy(
+                    db,
+                    app_name=app_name,
+                    instance_name=sub_instance_name,
+                    config=merged_config,
+                    user_id=user_id,
                 )
 
-        # 3. 生成项目名
-        project_name = _slugify(instance_name)
+                # 关联到组合部署组
+                instance.orchestration_id = db_orchestration.id
+                instance.orchestration_group_id = group.id
+                await db.commit()
 
-        # 4. 检查项目名是否已存在
-        existing_project = await db.execute(
-            select(DockerComposeProject).where(
-                DockerComposeProject.project_name == project_name
-            )
-        )
-        if existing_project.scalar_one_or_none():
-            raise APIException(
-                f"项目名 {project_name} 已存在，请更换实例名称", 409
-            )
+                task_ids.append(task_id)
 
-        # 5. 渲染 YAML
-        rendered_yaml = self._render_orchestration(
-            db_orchestration=db_orchestration,
-            config=config,
-            project_name=project_name,
-            resolver=resolver,
-        )
+            group.status = "running"
+            await db.commit()
+        except Exception:
+            group.status = "error"
+            await db.commit()
+            raise
 
-        # 6. 创建 Compose 项目并部署
-        try:
-            project = await compose_manager.create_project(
-                db,
-                project_name=project_name,
-                content=rendered_yaml,
-                user_id=user_id,
-                description=f"由编排 {db_orchestration.display_name} 部署",
-            )
-        except Exception as e:
-            raise APIException(f"部署失败: {e}", 500) from e
+        return group, task_ids
 
-        # 7. 创建 AppInstance 记录
-        instance = AppInstance(
-            orchestration_id=db_orchestration.id,
-            project_id=project.id,
-            instance_name=instance_name,
-            config=config,
-            orchestration_version=db_orchestration.version,
-            status="running",
-        )
-        db.add(instance)
-        await db.flush()
-        await db.refresh(instance)
-
-        await db.commit()
-        return await self.get_instance(db, instance.id)
-
-    def _render_orchestration(
+    def _validate_composition(
         self,
-        db_orchestration: AppOrchestration,
-        config: dict,
-        project_name: str,
-        resolver: StoragePathResolver,
-    ) -> str:
-        """渲染编排为 Compose YAML。"""
-        if not db_orchestration.yaml_template:
-            raise APIException("编排模板为空，无法渲染", 500)
+        composition: list[dict],
+        selected_apps: list[str],
+    ) -> None:
+        """校验用户选择的应用是否满足组合关系。"""
+        selected_set = set(selected_apps)
+        composition_by_name = {item.get("app_name"): item for item in composition}
 
-        try:
-            return _render_yaml_template(
-                db_orchestration.yaml_template,
-                db_orchestration.config_schema,
-                config,
-                project_name,
-                db_orchestration.name,
-                resolver,
+        # 1. 必选应用必须选中
+        for item in composition:
+            if item.get("relation") == "required":
+                app_name = item.get("app_name")
+                if app_name not in selected_set:
+                    raise APIException(
+                        f"应用 {app_name} 为必选应用，必须部署", 400
+                    )
+
+        # 2. 所选应用必须在组合定义中
+        for app_name in selected_apps:
+            if app_name not in composition_by_name:
+                raise APIException(
+                    f"应用 {app_name} 不在当前编排组合中", 400
+                )
+
+        # 3. 组合内互斥检测
+        for item in composition:
+            app_name = item.get("app_name")
+            if app_name not in selected_set:
+                continue
+            conflict_with = item.get("conflict_with") or []
+            for conflict_app in conflict_with:
+                if conflict_app in selected_set:
+                    raise APIException(
+                        f"应用 {app_name} 与 {conflict_app} 互斥，不能同时部署", 409
+                    )
+
+    async def _load_apps(
+        self,
+        db: AsyncSession,
+        app_names: list[str],
+    ) -> dict[str, App]:
+        """批量加载应用商店应用。"""
+        if not app_names:
+            return {}
+        result = await db.execute(
+            select(App).where(App.name.in_(app_names))
+        )
+        apps = result.scalars().all()
+        return {app.name: app for app in apps}
+
+    async def _check_global_conflicts(
+        self,
+        db: AsyncSession,
+        composition: list[dict],
+        selected_apps: list[str],
+    ) -> None:
+        """检测已部署实例中是否存在与本次部署应用互斥的运行中实例。"""
+        selected_set = set(selected_apps)
+        conflict_map: dict[str, set[str]] = {}
+
+        for item in composition:
+            app_name = item.get("app_name")
+            if app_name not in selected_set:
+                continue
+            for conflict_app in item.get("conflict_with") or []:
+                conflict_map.setdefault(conflict_app, set()).add(app_name)
+
+        if not conflict_map:
+            return
+
+        result = await db.execute(
+            select(AppInstance, App.name)
+            .join(App, AppInstance.app_id == App.id)
+            .where(
+                App.name.in_(conflict_map.keys()),
+                AppInstance.status == "running",
             )
-        except ValueError as e:
-            raise APIException(str(e), 500) from e
+        )
+        rows = result.all()
+        if rows:
+            conflict_app = rows[0][1]
+            conflicting_selected = conflict_map[conflict_app]
+            raise APIException(
+                f"应用 {conflict_app} 已在运行，与 {', '.join(conflicting_selected)} 互斥",
+                409,
+            )
 
     async def get_instance(self, db: AsyncSession, instance_id: int) -> AppInstance:
         """获取单个编排实例（携带编排、项目及 Stack 关系）。"""
-        from app.models.docker import DockerComposeProject
-
         result = await db.execute(
             select(AppInstance)
             .where(AppInstance.id == instance_id)
@@ -273,6 +229,25 @@ class OrchestrationService:
         if instance is None:
             raise APIException("编排实例不存在", 404)
         return instance
+
+    async def get_group(
+        self,
+        db: AsyncSession,
+        group_id: int,
+    ) -> AppOrchestrationInstance:
+        """获取组合部署记录及其关联实例。"""
+        result = await db.execute(
+            select(AppOrchestrationInstance)
+            .where(AppOrchestrationInstance.id == group_id)
+            .options(
+                selectinload(AppOrchestrationInstance.orchestration),
+                selectinload(AppOrchestrationInstance.instances),
+            )
+        )
+        group = result.scalar_one_or_none()
+        if group is None:
+            raise APIException("组合部署记录不存在", 404)
+        return group
 
 
 # 全局单例

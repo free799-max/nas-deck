@@ -12,6 +12,15 @@ from app.schemas.orchestration.deploy_task import (
 )
 
 
+class AppCompositionItem(BaseModel):
+    """组合中的应用定义。"""
+
+    app_name: str
+    relation: str  # required / optional / suggested / conflicting
+    group: str | None = None
+    conflict_with: list[str] = []
+
+
 class OrchestrationOut(BaseModel):
     """应用编排列表/详情响应模型。"""
 
@@ -24,46 +33,40 @@ class OrchestrationOut(BaseModel):
     icon: str | None
     website: str | None
     source_url: str | None
-    architectures: list[str]
-    config_schema: dict
     version: str
     is_builtin: bool
-    type: str
-    changelog: str | None
-    backup_paths: list[str]
-    source_dir: str | None
+    app_composition: list[AppCompositionItem]
+    shared_config_schema: dict
 
     model_config = ConfigDict(from_attributes=True)
 
 
 class OrchestrationDetailOut(OrchestrationOut):
-    """应用编排详情响应模型，包含完整 README。"""
-
-    readme: str | None
-    suggested_plugins: list[str] = []
+    """应用编排详情响应模型。"""
 
     model_config = ConfigDict(from_attributes=True)
 
 
 class OrchestrationDeployRequest(BaseModel):
-    """一键部署编排请求模型。"""
+    """组合部署请求模型。"""
 
     instance_name: str
-    config: dict = {}
+    selected_apps: list[str]
+    app_configs: dict[str, dict] = {}
+    shared_config: dict = {}
 
 
 class OrchestrationDeployResponse(BaseModel):
-    """一键部署编排响应模型。"""
+    """组合部署响应模型。"""
 
-    instance_id: int
-    project_id: int
-    project_name: str
+    group_id: int
     instance_name: str
     status: str
-    pending_config: dict = {}
+    task_ids: list[str]
 
 
 __all__ = [
+    "AppCompositionItem",
     "ComposeDeployResponse",
     "DeployTaskCreateResponse",
     "DeployTaskProgress",

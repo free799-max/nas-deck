@@ -7,6 +7,7 @@
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { AppIcon } from "./AppIcon";
 import type { App } from "@/hooks/useApps";
 
 interface AppCardProps {
@@ -24,21 +25,10 @@ export function AppCard({ app, onDeploy, onDetail }: AppCardProps) {
       <CardContent className="p-0 h-full flex items-stretch gap-5">
         {/* 图标 */}
         <div className="shrink-0 self-center">
-          {app.icon ? (
-            <img
-              src={
-                app.icon.startsWith("http")
-                  ? app.icon
-                  : `/api/apps/${app.name}/icon`
-              }
-              alt={app.display_name}
-              className="h-16 w-16 rounded-xl object-contain bg-white border border-border/60"
-            />
-          ) : (
-            <div className="h-16 w-16 rounded-xl bg-muted flex items-center justify-center text-2xl border border-border/60">
-              🚀
-            </div>
-          )}
+          <AppIcon
+            app={app}
+            className="h-16 w-16 rounded-xl object-contain bg-white border border-border/60 text-2xl"
+          />
         </div>
 
         {/* 信息区 */}

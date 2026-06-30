@@ -17,7 +17,7 @@ import {
   useDirectories,
   useRenameDirectory,
 } from "@/hooks/useHost";
-import { Minus, Plus, ChevronUp, ChevronDown, FolderOpen, RefreshCw } from "lucide-react";
+import { Minus, Plus, ChevronUp, ChevronDown, FolderOpen, RefreshCw, Package } from "lucide-react";
 
 /** Schema 属性定义 */
 export interface SchemaProperty {
@@ -38,7 +38,7 @@ export interface SchemaProperty {
 
 /** 容器内设置块 */
 export interface ContainerSetting {
-  type: "ports" | "volumes" | "env";
+  type: "ports" | "volumes" | "env" | "devices" | "advanced";
   title: string;
   description?: string;
   fields: string[];
@@ -65,6 +65,12 @@ interface SchemaFormProps {
   onChange: (data: Record<string, unknown>) => void;
   /** 实例名，用于相对路径展示 */
   instanceName?: string;
+  /** 应用镜像名，用于渲染镜像标签选择 */
+  image?: string;
+  /** 可用镜像标签列表 */
+  imageTags?: string[];
+  /** 是否正在加载镜像标签 */
+  imageTagsLoading?: boolean;
 }
 interface FieldInputProps {
   propKey: string;
@@ -114,15 +120,27 @@ function FieldInput({
 
   if (prop.type === "boolean") {
     return (
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-2 pl-2">
         <input
           id={propKey}
           type="checkbox"
           checked={Boolean(value)}
           onChange={(e) => handleChange(e.target.checked)}
-          className="h-4 w-4 rounded border-input"
+          className="h-3.5 w-3.5 rounded border-input"
         />
-        {labelNode}
+        <Label
+          htmlFor={propKey}
+          className="text-[13px] font-medium"
+          aria-required={required}
+          title={required ? "必填" : undefined}
+        >
+          {label}
+          {required && (
+            <span className="ml-0.5 text-destructive" aria-hidden="true">
+              *
+            </span>
+          )}
+        </Label>
       </div>
     );
   }
@@ -401,11 +419,17 @@ function ContainerSchemaForm({
   data,
   onChange,
   instanceName,
+  image,
+  imageTags,
+  imageTagsLoading,
 }: {
   schema: SchemaFormProps["schema"];
   data: Record<string, unknown>;
   onChange: (data: Record<string, unknown>) => void;
   instanceName?: string;
+  image?: string;
+  imageTags?: string[];
+  imageTagsLoading?: boolean;
 }) {
   const properties = schema.properties || {};
   const requiredSet = new Set(schema.required || []);
@@ -427,6 +451,37 @@ function ContainerSchemaForm({
 
   const handleChange = (key: string, value: unknown) => {
     onChange({ ...data, [key]: value });
+  };
+
+  const renderImageTag = () => {
+    const value = String(data.image_tag || "");
+    return (
+      <div className="mb-3 flex items-center gap-2 text-sm">
+        <div className="flex items-center gap-1.5">
+          <Package className="h-3.5 w-3.5 text-muted-foreground" />
+          <span
+            className="max-w-[200px] truncate text-base font-medium"
+            title={image}
+          >
+            {image}
+          </span>
+        </div>
+        <select
+          value={value}
+          onChange={(e) => handleChange("image_tag", e.target.value)}
+          disabled={imageTagsLoading || !imageTags || imageTags.length === 0}
+          className="h-7 rounded-md border border-input bg-white px-2 py-0 text-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50"
+        >
+          <option value={value}>{value}</option>
+          {!imageTagsLoading &&
+            imageTags?.map((tag) => (
+              <option key={tag} value={tag}>
+                {tag}
+              </option>
+            ))}
+        </select>
+      </div>
+    );
   };
 
   const renderFields = (fields: string[]) => {
@@ -472,73 +527,105 @@ function ContainerSchemaForm({
 
   return (
     <div className="space-y-4">
-      {containers.map((container) => (
-        <section
-          key={container.name}
-          className="rounded-xl border bg-card p-4 shadow-sm"
-        >
-          <div className="mb-3">
-            <h3 className="text-sm font-semibold text-card-foreground">
-              {container.title}
-            </h3>
-            {container.description && (
-              <p className="text-xs text-muted-foreground leading-snug">
-                {container.description}
-              </p>
-            )}
-          </div>
+      {containers.map((container) => {
+        // 判断当前容器是否包含 image_tag 配置
+        const hasImageTag = container.settings.some(
+          (s) =>
+            s.type === "advanced" && s.fields && s.fields.includes("image_tag")
+        );
 
-          <div className="divide-y">
-            {container.settings
-              .filter(
-                (setting) =>
-                  setting.fields &&
-                  setting.fields.some((key) => properties[key])
-              )
-              .map((setting) => {
-                const sectionKey = `${container.name}-${setting.type}`;
-                const isExpanded = expanded.has(sectionKey);
-                return (
-                  <div
-                    key={sectionKey}
-                    className="py-3 first:pt-0 last:pb-0"
-                  >
-                    <button
-                      type="button"
-                      onClick={() => toggleSection(sectionKey)}
-                      className="flex items-center gap-1.5 text-left group"
+        return (
+          <section
+            key={container.name}
+            className="rounded-xl border bg-card p-4 shadow-sm"
+          >
+            <div className="mb-3">
+              <h3 className="text-sm font-semibold text-card-foreground">
+                {container.title}
+              </h3>
+              {container.description && (
+                <p className="text-xs text-muted-foreground leading-snug">
+                  {container.description}
+                </p>
+              )}
+            </div>
+
+            {hasImageTag && renderImageTag()}
+
+            <div className="divide-y">
+              {container.settings
+                .filter(
+                  (setting) =>
+                    setting.fields &&
+                    setting.fields.some((key) => properties[key])
+                )
+                .map((setting) => {
+                  // image_tag 已在容器顶部单独渲染，不再在 advanced 分组中重复渲染
+                  const fields = setting.fields.filter(
+                    (key) => key !== "image_tag"
+                  );
+                  if (fields.length === 0) return null;
+
+                  const sectionKey = `${container.name}-${setting.type}`;
+                  const isExpanded = expanded.has(sectionKey);
+                  return (
+                    <div
+                      key={sectionKey}
+                      className="py-3 first:pt-0 last:pb-0"
                     >
-                      {isExpanded ? (
-                        <ChevronUp className="h-3.5 w-3.5 text-primary transition-transform" />
-                      ) : (
-                        <ChevronDown className="h-3.5 w-3.5 text-primary transition-transform" />
-                      )}
-                      <h4 className="text-xs font-semibold text-primary group-hover:underline">
-                        {setting.title}
-                      </h4>
-                    </button>
-                    {isExpanded && (
-                      <div className="mt-2">
-                        {setting.description && (
-                          <p className="mb-2 text-xs text-muted-foreground leading-snug">
-                            {setting.description}
-                          </p>
+                      <button
+                        type="button"
+                        onClick={() => toggleSection(sectionKey)}
+                        className="flex items-center gap-1.5 text-left group"
+                      >
+                        {isExpanded ? (
+                          <ChevronUp className="h-3.5 w-3.5 text-primary transition-transform" />
+                        ) : (
+                          <ChevronDown className="h-3.5 w-3.5 text-primary transition-transform" />
                         )}
-                        {renderFields(setting.fields)}
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-          </div>
-        </section>
-      ))}
+                        <h4 className="text-xs font-semibold text-primary group-hover:underline">
+                          {setting.title}
+                        </h4>
+                      </button>
+                      {isExpanded && (
+                        <div className="mt-2">
+                          {setting.description && (
+                            <p className="mb-2 text-xs text-muted-foreground leading-snug">
+                              {setting.description}
+                            </p>
+                          )}
+                          {renderFields(fields)}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+            </div>
+          </section>
+        );
+      })}
     </div>
   );
 }
 
-export function SchemaForm({ schema, data, onChange, instanceName }: SchemaFormProps) {
+export function SchemaForm({
+  schema,
+  data,
+  onChange,
+  instanceName,
+  image,
+  imageTags,
+  imageTagsLoading,
+}: SchemaFormProps) {
   return (
-    <ContainerSchemaForm schema={schema} data={data} onChange={onChange} instanceName={instanceName} />
+    <ContainerSchemaForm
+      schema={schema}
+      data={data}
+      onChange={onChange}
+      instanceName={instanceName}
+      image={image}
+      imageTags={imageTags}
+      imageTagsLoading={imageTagsLoading}
+    />
   );
 }

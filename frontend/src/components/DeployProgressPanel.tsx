@@ -26,6 +26,7 @@ const stageMap: Record<string, string> = {
   creating_project: "创建项目",
   writing_compose: "写入配置",
   pulling_images: "拉取镜像",
+  preparing_packages: "准备依赖",
   starting_services: "启动服务",
   syncing_status: "同步状态",
   completed: "部署完成",

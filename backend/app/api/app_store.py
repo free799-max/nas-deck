@@ -1,9 +1,6 @@
 """应用商店 API 路由模块。"""
 
-from pathlib import Path
-
 from fastapi import APIRouter, Depends
-from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import APIException
@@ -64,30 +61,8 @@ async def get_app(
         "type": app.type,
         "changelog": app.changelog,
         "backup_paths": app.backup_paths,
-        "source_dir": app.source_dir,
         "readme": app.readme or "",
     }
-
-
-@router.get("/{name}/icon")
-async def get_app_icon(
-    name: str,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    """获取应用图标。"""
-    app = await app_service.get_app(db, name)
-    if not app.icon:
-        raise APIException("应用无图标", 404)
-
-    icon_path = Path(app.icon)
-    if not icon_path.is_absolute():
-        icon_path = Path(__file__).parent.parent.parent / icon_path
-
-    if not icon_path.exists():
-        raise APIException("图标文件不存在", 404)
-
-    return FileResponse(icon_path)
 
 
 @router.post("/{name}/preview", response_model=AppPreviewResponse)

@@ -432,11 +432,14 @@ class AppService:
         if not db_app.yaml_template:
             raise APIException("应用模板为空，无法渲染", 500)
 
+        # 把应用镜像名注入模板上下文，供 yaml_template 使用 {{ image }}
+        merged_config = {**(config or {}), "image": db_app.image}
+
         try:
             return _render_yaml_template(
                 db_app.yaml_template,
                 db_app.config_schema,
-                config,
+                merged_config,
                 project_name,
                 db_app.name,
                 resolver,

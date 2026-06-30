@@ -1,0 +1,19 @@
+services:
+  qbittorrent:
+    image: johngong/qbittorrent:5.2.2-5.2.1.10
+    container_name: qbittorrent
+    environment:
+    - QB_WEBUI_PORT=8016
+    - QB_EE_BIN=false
+    - UID=1000
+    - GID=1000
+    - UMASK=022
+    ports:
+    - 52001:52001/tcp
+    - 52001:52001/udp
+    - 8016:8016/tcp
+    volumes:
+    - /opt/docker/qbittorrent/config:/config:rw
+    restart: always
+    labels:
+    - nasdeck.compose.project=qbittorrent

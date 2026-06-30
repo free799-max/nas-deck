@@ -13,6 +13,7 @@ import { Badge } from "@/components/ui/badge";
 import { ExternalLink, Code, Cpu } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { AppIcon } from "./AppIcon";
 import type { App } from "@/hooks/useApps";
 
 interface AppDetailDialogProps {
@@ -38,21 +39,10 @@ export function AppDetailDialog({
         {/* 顶部 header */}
         <div className="bg-gradient-to-br from-primary/5 to-transparent p-5 flex-shrink-0">
           <div className="flex items-start gap-5">
-            {app.icon ? (
-              <img
-                src={
-                  app.icon.startsWith("http")
-                    ? app.icon
-                    : `/api/apps/${app.name}/icon`
-                }
-                alt={app.display_name}
-                className="h-20 w-20 rounded-2xl object-contain bg-white border border-border/60 shadow-sm"
-              />
-            ) : (
-              <div className="h-20 w-20 rounded-2xl bg-white flex items-center justify-center text-3xl border border-border/60 shadow-sm">
-                🚀
-              </div>
-            )}
+            <AppIcon
+              app={app}
+              className="h-20 w-20 rounded-2xl object-contain bg-white border border-border/60 shadow-sm text-3xl"
+            />
 
             <div className="flex-1 min-w-0">
               <DialogTitle className="text-2xl font-semibold tracking-tight">

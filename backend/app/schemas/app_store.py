@@ -24,7 +24,6 @@ class AppOut(BaseModel):
     type: str
     changelog: str | None
     backup_paths: list[str]
-    source_dir: str | None
 
     model_config = ConfigDict(from_attributes=True)
 

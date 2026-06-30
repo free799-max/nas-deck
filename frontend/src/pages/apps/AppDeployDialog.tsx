@@ -193,14 +193,49 @@ export function AppDeployDialog({
   // 打开时随应用变化重置表单
   const [instanceName, setInstanceName] = useState("");
   const [config, setConfig] = useState<Record<string, unknown>>({});
+  const [imageTags, setImageTags] = useState<string[]>([]);
+  const [imageTagsLoading, setImageTagsLoading] = useState(false);
+
+  const appDisplayName = app?.display_name || "";
+  const appConfigSchema = app?.config_schema || {};
 
   useEffect(() => {
-    if (app) {
-      setInstanceName(slugify(app.display_name));
-      const defaults = extractDefaults(app.config_schema);
-      setConfig(fillEmptyPasswords(app.config_schema, defaults));
+    setInstanceName(slugify(appDisplayName));
+    const defaults = extractDefaults(appConfigSchema);
+    setConfig(fillEmptyPasswords(appConfigSchema, defaults));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [appDisplayName, JSON.stringify(appConfigSchema)]);
+
+  // 获取镜像可用标签列表
+  const appImage = app?.image;
+  useEffect(() => {
+    if (!appImage) {
+      setImageTags([]);
+      return;
     }
-  }, [app?.name, JSON.stringify(app?.config_schema)]);
+
+    const controller = new AbortController();
+    setImageTagsLoading(true);
+
+    api
+      .get<{ name: string }[]>("/docker/images/tags", {
+        params: { image: appImage },
+        signal: controller.signal,
+      })
+      .then((response) => {
+        setImageTags(response.data.map((tag) => tag.name));
+      })
+      .catch(() => {
+        setImageTags([]);
+      })
+      .finally(() => {
+        setImageTagsLoading(false);
+      });
+
+    return () => {
+      controller.abort();
+    };
+  }, [appImage]);
 
   const toast = useToast();
 
@@ -283,6 +318,9 @@ export function AppDeployDialog({
                 data={config}
                 onChange={setConfig}
                 instanceName={instanceName}
+                image={app.image || ""}
+                imageTags={imageTags}
+                imageTagsLoading={imageTagsLoading}
               />
             </div>
 

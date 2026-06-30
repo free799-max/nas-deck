@@ -19,11 +19,6 @@ async def client():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
-    # 加载插件，供 /api/plugins 相关接口使用
-    from app.core.plugin_loader import plugin_loader
-
-    plugin_loader.discover()
-
     # 跳过应用默认 lifespan 中的 alembic 迁移与外部数据库初始化
     @asynccontextmanager
     async def _noop_lifespan(app):

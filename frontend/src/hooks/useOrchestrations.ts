@@ -1,5 +1,5 @@
 /**
- * 应用编排相关 React Query hooks
+ * 应用编排（自动化组合模板）相关 React Query hooks
  */
 
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -9,6 +9,14 @@ import { useToast } from "@/components/ui/toast";
 /** API 错误对象 */
 interface ApiError {
   displayMessage?: string;
+}
+
+/** 组合中的应用定义 */
+export interface AppCompositionItem {
+  app_name: string;
+  relation: "required" | "optional" | "suggested" | "conflicting";
+  group?: string | null;
+  conflict_with?: string[];
 }
 
 /** 应用编排信息 */
@@ -22,47 +30,37 @@ export interface AppOrchestration {
   icon: string | null;
   website: string | null;
   source_url: string | null;
-  architectures: string[];
-  config_schema: Record<string, unknown>;
   version: string;
   is_builtin: boolean;
-  type: "compose" | "container";
-  changelog: string | null;
-  backup_paths: string[];
-  source_dir: string | null;
-}
-
-/** 应用编排详情 */
-export interface AppOrchestrationDetail extends AppOrchestration {
-  readme: string | null;
-  suggested_plugins: string[];
+  app_composition: AppCompositionItem[];
+  shared_config_schema: Record<string, unknown>;
 }
 
 /** 部署请求 */
 export interface DeployOrchestrationRequest {
   instance_name: string;
-  config: Record<string, unknown>;
+  selected_apps: string[];
+  app_configs: Record<string, Record<string, unknown>>;
+  shared_config: Record<string, unknown>;
 }
 
 /** 部署响应 */
 export interface DeployOrchestrationResponse {
-  instance_id: number;
-  project_id: number;
-  project_name: string;
+  group_id: number;
   instance_name: string;
   status: string;
-  pending_config: Record<string, unknown>;
+  task_ids: string[];
 }
 
 /**
- * 查询所有应用编排
+ * 查询应用编排列表，支持分类筛选
  */
-export function useOrchestrations(category?: string, tag?: string) {
+export function useOrchestrations(category?: string) {
   return useQuery<AppOrchestration[]>({
-    queryKey: ["orchestrations", { category, tag }],
+    queryKey: ["orchestrations", { category }],
     queryFn: () =>
       api
-        .get("/orchestrations", { params: { category, tag } })
+        .get("/orchestrations", { params: { category } })
         .then((r) => r.data),
   });
 }
@@ -71,7 +69,7 @@ export function useOrchestrations(category?: string, tag?: string) {
  * 查询单个应用编排详情
  */
 export function useOrchestration(name: string) {
-  return useQuery<AppOrchestrationDetail>({
+  return useQuery<AppOrchestration>({
     queryKey: ["orchestrations", name],
     queryFn: () => api.get(`/orchestrations/${name}`).then((r) => r.data),
     enabled: !!name,
@@ -79,7 +77,7 @@ export function useOrchestration(name: string) {
 }
 
 /**
- * 一键部署应用编排
+ * 组合部署应用编排
  */
 export function useDeployOrchestration() {
   const qc = useQueryClient();
@@ -91,10 +89,12 @@ export function useDeployOrchestration() {
     }: {
       name: string;
       data: DeployOrchestrationRequest;
-    }) => api.post<DeployOrchestrationResponse>(`/orchestrations/${name}/deploy`, data),
+    }) =>
+      api.post<DeployOrchestrationResponse>(`/orchestrations/${name}/deploy`, data).then((r) => r.data as DeployOrchestrationResponse),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["compose", "projects"] });
-      toast.success("部署成功");
+      qc.invalidateQueries({ queryKey: ["apps", "instances"] });
+      toast.success("组合部署已启动");
     },
     onError: (error: ApiError) => {
       toast.error(error.displayMessage || "部署失败");

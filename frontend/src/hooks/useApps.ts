@@ -31,7 +31,6 @@ export interface App {
   type: "compose" | "container";
   changelog: string | null;
   backup_paths: string[];
-  source_dir: string | null;
 }
 
 /** 应用详情 */

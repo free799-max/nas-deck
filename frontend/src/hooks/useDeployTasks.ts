@@ -107,13 +107,39 @@ function translateStatusWord(line: string): string {
   return tokens.join(" ");
 }
 
+const ANSI_ESC = String.fromCharCode(27);
+
+function stripAnsi(text: string): string {
+  // 移除 ANSI 转义序列（颜色、光标移动、清行等）
+  return text.replace(
+    new RegExp(`${ANSI_ESC}(?:[@-Z\\\\-_]|\\[[0-?]*[ -/]*[@-~])`, "g"),
+    ""
+  );
+}
+
 function cleanDetailLine(detail: string): string {
   // 把 docker compose 输出里的 Network/Container 翻译成中文，并去掉前置空格、翻译状态词
-  const translatedPrefix = detail
+  const translatedPrefix = stripAnsi(detail)
     .trimStart()
     .replace(/^Network\s+/, "网络 ")
     .replace(/^Container\s+/, "容器 ");
   return translateStatusWord(translatedPrefix);
+}
+
+/**
+ * 判断一行日志是否属于单个包的下载/安装进度条。
+ * 例如："click ------------------------------ 94.81 KiB/116.45 KiB"
+ */
+function isProgressLine(line: string): boolean {
+  return /\d+(\.\d+)?\s*(KiB|MiB|GiB)\s*\/\s*\d+(\.\d+)?\s*(KiB|MiB|GiB)/.test(line);
+}
+
+/**
+ * 提取进度条行的包名/标识前缀，用于判断是否可以覆盖上一条同类进度。
+ */
+function progressLineKey(line: string): string | null {
+  const match = line.match(/^(\S+)/);
+  return match ? match[1] : null;
 }
 
 function appendDeployLogs(
@@ -133,6 +159,17 @@ function appendDeployLogs(
     const cleaned = cleanDetailLine(detail);
     const lastCleaned = lastDetail ? cleanDetailLine(lastDetail) : undefined;
     if (cleaned && cleaned !== lastCleaned) {
+      // 对单个包的进度条进行覆盖：相同包名的进度只保留最新一帧，避免刷屏
+      if (isProgressLine(cleaned)) {
+        const key = progressLineKey(cleaned);
+        if (key && logs.length > 0) {
+          const lastLog = logs[logs.length - 1];
+          if (isProgressLine(lastLog) && progressLineKey(lastLog) === key) {
+            logs[logs.length - 1] = cleaned;
+            return logs;
+          }
+        }
+      }
       logs.push(cleaned);
     }
   }

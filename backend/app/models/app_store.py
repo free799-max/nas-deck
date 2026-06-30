@@ -47,8 +47,6 @@ class App(Base):
     changelog: Mapped[str | None] = mapped_column(Text, nullable=True)
     # 默认需要备份的路径列表（相对于宿主机或容器内）
     backup_paths: Mapped[list[str]] = mapped_column(JSON, default=list)
-    # 模板源码目录，便于定位图标、README 等资源
-    source_dir: Mapped[str | None] = mapped_column(String(500), nullable=True)
     is_builtin: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(

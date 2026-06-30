@@ -7,8 +7,8 @@
 - **多源订阅**：支持 Jellyfin（影视）、Komga（漫画）、MoviePilot（自动化）等内容源
 - **自动更新检测**：每 30 分钟轮询检查订阅内容更新
 - **多渠道通知**：支持 Telegram、钉钉、企业微信推送
+- **应用商店**：内置常用 NAS 应用模板，支持一键部署
 - **Docker 管理**：集成 Docker 容器管理（可选，无 Docker 环境时自动降级）
-- **插件化架构**：基于 `BasePlugin` 抽象基类，新内容源可通过插件扩展
 - **统一 API 响应**：所有接口返回标准格式 `{success, data, message}`
 
 ## 技术栈
@@ -118,27 +118,6 @@ nas-deck/
 └── docker-compose.yml
 ```
 
-## 插件开发
-
-继承 `BasePlugin` 并实现 4 个抽象方法即可添加新内容源：
-
-```python
-from app.plugins.base import BasePlugin
-
-class MyPlugin(BasePlugin):
-    name = "my_plugin"
-    display_name = "My Plugin"
-    version = "1.0.0"
-    config_schema = {...}  # JSON Schema，前端据此渲染配置表单
-
-    async def test_connection(self, config) -> bool: ...
-    async def get_sources(self, config) -> list[Source]: ...
-    async def get_items(self, config, source_id) -> list[Item]: ...
-    async def check_updates(self, config, subscriptions) -> list[Update]: ...
-```
-
-将插件文件放入 `backend/app/plugins/` 目录，服务启动时自动发现加载。
-
 ## 配置
 
 通过环境变量或 `backend/.env` 文件配置：
@@ -149,14 +128,14 @@ class MyPlugin(BasePlugin):
 | `DATABASE_URL` | postgresql+asyncpg://nasdeck:nasdeck@localhost:5434/nasdeck | 数据库连接 |
 | `SECRET_KEY` | change-me-in-production | JWT 签名密钥 |
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | 1440 | Token 过期时间（分钟）|
-| `PLUGIN_DIR` | app/plugins | 插件目录 |
 
 ## 数据模型
 
 ```
-User 1--* Subscription *--1 PluginInstance 1--1 DockerContainer
+User 1--* AppInstance 1--1 DockerComposeProject
 User 1--* NotificationChannel
-Subscription 1--* UpdateLog（级联删除）
+DockerComposeProject 1--* DockerComposeVersion
+DockerComposeProject 1--1 DockerComposeStack
 ```
 
 ## API 规范

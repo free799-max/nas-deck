@@ -324,7 +324,10 @@ class ImageService(common.BaseDockerService):
         self._client.images.pull(image)
 
     def get_image_tags(self, image: str) -> list[dict]:
-        """获取指定镜像的可用标签列表。"""
+        """获取指定镜像的可用标签列表。
+
+        按最后更新时间倒序排列，最新的标签排在最前面。
+        """
         repo = image.strip()
         if "/" not in repo:
             repo = f"library/{repo}"
@@ -343,6 +346,8 @@ class ImageService(common.BaseDockerService):
                     "size": r.get("full_size", 0),
                     "digest": r.get("digest", ""),
                 })
+            # 按最后更新时间倒序，最新标签在前
+            tags.sort(key=lambda t: t.get("last_updated") or "", reverse=True)
             return tags
         except Exception:
             return []

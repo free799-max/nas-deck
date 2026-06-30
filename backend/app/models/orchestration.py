@@ -10,10 +10,10 @@ from app.database import Base
 
 
 class AppOrchestration(Base):
-    """应用编排模型。
+    """自动化分类组合模板模型。
 
-    定义系统内置或管理员上传的可一键部署组合应用方案，
-    包含元数据、配置 Schema、YAML 模板和 README。
+    定义某个自动化分类（如影视、漫画、书籍）下可一键部署的应用组合方案，
+    由多个应用商店 App 组成，支持必选、可选、互斥等关系定义。
     """
 
     __tablename__ = "app_orchestrations"
@@ -29,23 +29,19 @@ class AppOrchestration(Base):
     website: Mapped[str | None] = mapped_column(String(255), nullable=True)
     # 开源社区/源码仓库链接
     source_url: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    # 支持的架构列表，如 ["amd64", "arm64"]
-    architectures: Mapped[list[str]] = mapped_column(JSON, default=list)
-    readme: Mapped[str | None] = mapped_column(Text, nullable=True)
-    config_schema: Mapped[dict] = mapped_column(JSON, default=dict)
-    yaml_template: Mapped[str] = mapped_column(Text, nullable=False)
     version: Mapped[str] = mapped_column(String(20), default="1.0.0")
-    # 编排类型：compose 多容器 / container 单容器
-    type: Mapped[str] = mapped_column(String(20), default="compose")
-    # 版本变更日志
-    changelog: Mapped[str | None] = mapped_column(Text, nullable=True)
-    # 默认需要备份的路径列表（相对于宿主机或容器内）
-    backup_paths: Mapped[list[str]] = mapped_column(JSON, default=list)
-    # 编排源码目录，便于定位图标、README 等资源
-    source_dir: Mapped[str | None] = mapped_column(String(500), nullable=True)
-    # 部署后推荐用户创建的插件名称列表
-    suggested_plugins: Mapped[list[str]] = mapped_column(JSON, default=list)
     is_builtin: Mapped[bool] = mapped_column(Boolean, default=False)
+    # 组合定义：该编排由哪些应用商店 App 组成
+    # 示例：
+    # [
+    #   {"app_name": "moviepilot", "relation": "required"},
+    #   {"app_name": "qbittorrent", "relation": "required"},
+    #   {"app_name": "jellyfin", "relation": "optional", "group": "player"},
+    #   {"app_name": "emby", "relation": "optional", "group": "player"},
+    # ]
+    app_composition: Mapped[list[dict]] = mapped_column(JSON, default=list)
+    # 共享配置 Schema：用于让用户一次性配置跨应用的公共变量
+    shared_config_schema: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), onupdate=func.now()
@@ -55,6 +51,37 @@ class AppOrchestration(Base):
         "AppInstance",
         back_populates="orchestration",
         cascade="all, delete-orphan",
+    )
+    deployment_groups: Mapped[list["AppOrchestrationInstance"]] = relationship(
+        "AppOrchestrationInstance",
+        back_populates="orchestration",
+        cascade="all, delete-orphan",
+    )
+
+
+class AppOrchestrationInstance(Base):
+    """一次组合部署记录，关联多个 AppInstance。"""
+
+    __tablename__ = "app_orchestration_instances"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    orchestration_id: Mapped[int] = mapped_column(
+        ForeignKey("app_orchestrations.id"), nullable=False
+    )
+    instance_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    # 组合部署时由用户填写的共享配置
+    shared_config: Mapped[dict] = mapped_column(
+        MutableDict.as_mutable(JSON), default=dict
+    )
+    # 实例运行状态：running / stopped / error / deploying
+    status: Mapped[str] = mapped_column(String(20), default="deploying")
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+    orchestration: Mapped["AppOrchestration"] = relationship(
+        "AppOrchestration", back_populates="deployment_groups"
+    )
+    instances: Mapped[list["AppInstance"]] = relationship(
+        "AppInstance", back_populates="orchestration_group"
     )
 
 
@@ -76,6 +103,10 @@ class AppInstance(Base):
     app_id: Mapped[int | None] = mapped_column(
         ForeignKey("apps.id"), nullable=True
     )
+    # 组合部署时填充，标识属于同一次组合部署
+    orchestration_group_id: Mapped[int | None] = mapped_column(
+        ForeignKey("app_orchestration_instances.id"), nullable=True
+    )
     project_id: Mapped[int | None] = mapped_column(
         ForeignKey("docker_compose_projects.id"), nullable=True, unique=True
     )
@@ -96,6 +127,9 @@ class AppInstance(Base):
 
     orchestration: Mapped["AppOrchestration | None"] = relationship(
         "AppOrchestration", back_populates="instances"
+    )
+    orchestration_group: Mapped["AppOrchestrationInstance | None"] = relationship(
+        "AppOrchestrationInstance", back_populates="instances"
     )
     app: Mapped["App | None"] = relationship(
         "App", back_populates="instances"

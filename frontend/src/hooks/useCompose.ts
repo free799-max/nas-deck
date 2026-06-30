@@ -303,6 +303,21 @@ export function useComposeLogs(
   });
 }
 
+// eslint-disable-next-line no-control-regex
+const ANSI_PATTERN = /\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g;
+
+function stripAnsi(text: string): string {
+  return text.replace(ANSI_PATTERN, "");
+}
+
+function cleanLogLine(line: string): string {
+  const cleaned = stripAnsi(line).replace(/\r?\n$/, "");
+  if (cleaned.includes("\r")) {
+    return cleaned.split("\r").pop() ?? cleaned;
+  }
+  return cleaned;
+}
+
 /**
  * 流式获取 Compose 项目日志（SSE）
  *
@@ -349,7 +364,7 @@ export function useComposeLogsStream(
           return;
         }
         if (typeof data.line === "string") {
-          setLogs((prev) => [...prev, data.line]);
+          setLogs((prev) => [...prev, cleanLogLine(data.line)]);
         }
       } catch {
         // 忽略解析错误

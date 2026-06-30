@@ -25,6 +25,8 @@ logger = logging.getLogger(__name__)
 
 # 允许的项目名字符：小写字母、数字、下划线、连字符
 _PROJECT_NAME_PATTERN = re.compile(r"^[a-z0-9_-]+$")
+# ANSI 转义序列（颜色、光标移动、清行等），用于清理 compose 输出中的进度条控制符
+_ANSI_ESCAPE_PATTERN = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
 
 
 class ComposeService:
@@ -214,7 +216,9 @@ class ComposeService:
                 line = await stream.readline()
                 if not line:
                     break
-                text = line.decode("utf-8", errors="replace").rstrip("\n")
+                text = self._strip_ansi(
+                    line.decode("utf-8", errors="replace")
+                ).rstrip("\n")
                 if text:
                     collector.append(text)
                     if on_line:
@@ -243,12 +247,19 @@ class ComposeService:
         }
 
     @staticmethod
+    def _strip_ansi(text: str) -> str:
+        """移除 ANSI 转义序列，避免进度条控制符污染日志。"""
+        return _ANSI_ESCAPE_PATTERN.sub("", text)
+
+    @staticmethod
     def _detect_stage(line: str) -> str | None:
         """根据 compose 输出行推断当前阶段。"""
         lowered = line.lower()
         if any(k in lowered for k in ("pulling", "downloading", "extracting", "already exists", "pulled")):
             return "pulling_images"
-        if any(k in lowered for k in ("creating", "starting", "started", "container")):
+        if any(k in lowered for k in ("preparing packages", "preparing metadata", "building wheel", "installing")):
+            return "preparing_packages"
+        if any(k in lowered for k in ("creating", "starting", "started", "container", "running")):
             return "starting_services"
         return None
 
@@ -689,8 +700,8 @@ class ComposeService:
             args.extend(services)
         result = await self._run(project, *args, timeout=60)
         if result["returncode"] != 0:
-            raise RuntimeError(result["stderr"])
-        return result["stdout"]
+            raise RuntimeError(self._strip_ansi(result["stderr"]))
+        return self._strip_ansi(result["stdout"])
 
     async def stream_logs(
         self,
@@ -722,15 +733,28 @@ class ComposeService:
             stderr=asyncio.subprocess.PIPE,
             cwd=str(working_dir),
         )
+
+        def _clean_log_line(raw: str) -> str:
+            """清理日志行：移除 ANSI 转义序列并处理进度条的 \\r 覆盖。"""
+            cleaned = self._strip_ansi(raw)
+            # 先统一去掉行尾换行符，避免 \\r\\n 被当成行内覆盖
+            cleaned = cleaned.rstrip("\r\n")
+            # 进度条通常使用 \\r 回到行首覆盖旧内容，只保留最后一次覆盖后的文本
+            if "\r" in cleaned:
+                cleaned = cleaned.rsplit("\r", 1)[-1]
+            return cleaned
+
         try:
             while True:
                 line = await proc.stdout.readline()
                 if not line:
                     break
-                yield line.decode("utf-8", errors="replace").rstrip("\n")
+                yield _clean_log_line(line.decode("utf-8", errors="replace"))
 
             stderr_data = await proc.stderr.read()
-            stderr = stderr_data.decode("utf-8", errors="replace").strip()
+            stderr = self._strip_ansi(
+                stderr_data.decode("utf-8", errors="replace")
+            ).strip()
             if stderr:
                 logger.warning("compose 日志流 stderr: %s", stderr)
         finally:
