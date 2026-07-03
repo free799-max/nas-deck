@@ -73,6 +73,15 @@ class AppOrchestrationInstance(Base):
     shared_config: Mapped[dict] = mapped_column(
         MutableDict.as_mutable(JSON), default=dict
     )
+    # 导入/部署时每个应用自身的配置，如访问地址、账号密码、API Key 等
+    # 结构示例：
+    # {
+    #   "moviepilot": {"url": "http://...", "username": "...", "password": "..."},
+    #   "qbittorrent": {"url": "http://...", "username": "...", "password": "..."}
+    # }
+    app_configs: Mapped[dict] = mapped_column(
+        MutableDict.as_mutable(JSON), default=dict
+    )
     # 实例运行状态：running / stopped / error / deploying
     status: Mapped[str] = mapped_column(String(20), default="deploying")
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())

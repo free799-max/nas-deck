@@ -4,20 +4,31 @@
  * 展示某个分类（如影视）下的应用组合模板列表。
  */
 
-import { Fragment, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
-import { Card, CardContent } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { AppIcon } from "../apps/AppIcon";
 import { AutomationDeployWizard } from "./AutomationDeployWizard";
+import { AutomationImportDialog } from "./AutomationImportDialog";
+import { OrchestrationInstanceManager } from "./OrchestrationInstanceManager";
+import { AppInstanceGrid } from "./AppInstanceGrid";
+import { AppConfigPanel } from "./AppConfigPanel";
 import {
   useOrchestrations,
+  useOrchestrationInstances,
+  useOrchestrationInstanceDetail,
+  useUpdateOrchestrationInstance,
+  useDeleteOrchestrationInstance,
   type AppOrchestration,
   type AppCompositionItem,
+  type OrchestrationInstanceApp,
 } from "@/hooks/useOrchestrations";
 import { useApps, type App } from "@/hooks/useApps";
+import { cn } from "@/lib/utils";
 import {
   ArrowRight,
+  BookImage,
   BookOpen,
   Film,
   Gamepad2,
@@ -64,7 +75,7 @@ const CATEGORY_EMPTY_CONFIG: Record<string, EmptyConfig> = {
       "全流程影视自动化：搜索、下载、刮削、播放一体化，打造专属私人影库。",
   },
   comics: {
-    icon: Images,
+    icon: BookImage,
     description:
       "漫画自动化可以帮你抓取、整理、阅读漫画资源，让书架始终保持最新。",
   },
@@ -218,86 +229,62 @@ function OrchestrationShowcase({
   label,
   category,
   orchestrations,
-  onDeploy,
 }: {
   label: string;
   category: string;
   orchestrations: AppOrchestration[];
-  onDeploy: (orchestration: AppOrchestration) => void;
 }) {
   const config = CATEGORY_EMPTY_CONFIG[category] ?? CATEGORY_EMPTY_CONFIG.media;
   const Icon = config.icon;
   const { data: allApps = [] } = useApps();
   const appMap = Object.fromEntries(allApps.map((app) => [app.name, app]));
   const multiple = orchestrations.length > 1;
+  const isEmpty = orchestrations.length === 0;
 
   return (
-    <div className="relative flex-1 flex flex-col px-6 py-8 overflow-y-auto">
+    <div className="relative flex-1 flex flex-col px-6 pt-20 pb-8 overflow-y-auto">
       <div className="absolute inset-0 pointer-events-none">
         <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[360px] h-[360px] rounded-full bg-primary/[0.04] blur-3xl" />
       </div>
 
-      <div className="relative z-10 mx-auto mt-16 mb-auto flex flex-col items-center text-center max-w-3xl w-full">
+      <div className="relative z-10 mx-auto mt-16 flex flex-col items-center text-center max-w-3xl w-full">
         <div className="h-20 w-20 rounded-2xl bg-gradient-to-br from-primary/15 to-primary/5 flex items-center justify-center mb-5 shadow-sm ring-1 ring-primary/10">
           <Icon className="h-10 w-10 text-primary" />
         </div>
 
         <h3 className="text-lg font-semibold text-foreground">{label}自动化</h3>
         <p className="text-sm text-muted-foreground mt-2 leading-relaxed max-w-lg">
-          {config.description}
+          {isEmpty ? `暂无 ${label} 自动化组合模板` : config.description}
         </p>
 
-        <div className="mt-8 w-full flex flex-col items-center gap-10">
-          {orchestrations.map((orchestration) => (
-            <div
-              key={orchestration.name}
-              className="group w-full flex flex-col items-center gap-5"
-            >
-              {multiple && (
-                <div className="space-y-1">
-                  <h4 className="text-sm font-semibold text-foreground">
-                    {orchestration.display_name}
-                  </h4>
-                  {orchestration.description && (
-                    <p className="text-xs text-muted-foreground max-w-md">
-                      {orchestration.description}
-                    </p>
-                  )}
-                </div>
-              )}
+        {!isEmpty && (
+          <div className="mt-8 w-full flex flex-col items-center gap-10">
+            {orchestrations.map((orchestration) => (
+              <div
+                key={orchestration.name}
+                className="group w-full flex flex-col items-center gap-5"
+              >
+                {multiple && (
+                  <div className="space-y-1">
+                    <h4 className="text-sm font-semibold text-foreground">
+                      {orchestration.display_name}
+                    </h4>
+                    {orchestration.description && (
+                      <p className="text-xs text-muted-foreground max-w-md">
+                        {orchestration.description}
+                      </p>
+                    )}
+                  </div>
+                )}
 
-              <StageFlow
-                composition={orchestration.app_composition}
-                appMap={appMap}
-              />
-
-              <div className="flex items-center justify-between w-full max-w-lg mt-2 px-8">
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() =>
-                    // TODO: 接入已有 Docker 部署
-                    console.log("导入已有部署", orchestration.name)
-                  }
-                  className="gap-2 rounded-lg px-5 h-10 text-sm font-medium border-primary/30 text-primary hover:bg-primary/5 hover:border-primary/50 transition-colors"
-                >
-                  <Import className="h-4 w-4 transition-transform group-hover/button:-translate-y-0.5" />
-                  导入
-                </Button>
-
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => onDeploy(orchestration)}
-                  className="gap-2 rounded-lg px-5 h-10 text-sm font-medium border-primary/30 text-primary hover:bg-primary/5 hover:border-primary/50 transition-colors"
-                >
-                  部署
-                  <Rocket className="h-4 w-4 transition-transform group-hover/button:-translate-y-0.5" />
-                </Button>
+                <StageFlow
+                  composition={orchestration.app_composition}
+                  appMap={appMap}
+                />
               </div>
-            </div>
-          ))}
-        </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -306,30 +293,149 @@ function OrchestrationShowcase({
 export function AutomationCategoryPage() {
   const { category } = useParams<{ category: string }>();
   const { data: orchestrations = [], isLoading } = useOrchestrations(category);
+  const { data: instances = [] } = useOrchestrationInstances(category);
   const [deployOrchestration, setDeployOrchestration] =
     useState<AppOrchestration | null>(null);
+  const [importOrchestration, setImportOrchestration] =
+    useState<AppOrchestration | null>(null);
+  const [selectedInstanceId, setSelectedInstanceId] = useState<number | null>(
+    null
+  );
+  const [selectedApp, setSelectedApp] =
+    useState<OrchestrationInstanceApp | null>(null);
+  const [displayInstanceId, setDisplayInstanceId] = useState<number | null>(
+    null
+  );
+  const [isSwitching, setIsSwitching] = useState(false);
+  const switchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const label = CATEGORY_LABELS[category || ""] || category || "自动化";
+
+  useEffect(() => {
+    setSelectedInstanceId((prev) => {
+      const stillExists = instances.some((i) => i.id === prev);
+      if (stillExists) return prev;
+      return instances.length > 0 ? instances[0].id : null;
+    });
+  }, [instances]);
+
+  useEffect(() => {
+    setSelectedApp(null);
+  }, [selectedInstanceId]);
+
+  useEffect(() => {
+    setDisplayInstanceId(selectedInstanceId);
+  }, [selectedInstanceId]);
+
+  useEffect(() => {
+    return () => {
+      if (switchTimerRef.current) {
+        clearTimeout(switchTimerRef.current);
+      }
+    };
+  }, []);
+
+  const { data: selectedDetail } = useOrchestrationInstanceDetail(
+    displayInstanceId
+  );
+  const updateMutation = useUpdateOrchestrationInstance();
+  const deleteMutation = useDeleteOrchestrationInstance();
+
+  const hasInstances = instances.length > 0;
 
   return (
     <div className="h-full flex flex-col space-y-4">
       <Card className="rounded-xl flex-1 flex flex-col">
-        <CardContent className="flex-1 flex flex-col p-4">
+        <CardHeader className="flex flex-row items-start justify-between py-1 px-4 pb-0">
+          <CardTitle className="text-base font-medium">{label}自动化</CardTitle>
+          {orchestrations.length > 0 && (
+            <div className="flex items-center gap-2">
+              <OrchestrationInstanceManager
+                instances={instances}
+                selectedId={selectedInstanceId}
+                onSelect={(id) => {
+                  if (id === selectedInstanceId || isSwitching) return;
+                  setIsSwitching(true);
+                  if (switchTimerRef.current) {
+                    clearTimeout(switchTimerRef.current);
+                  }
+                  switchTimerRef.current = setTimeout(() => {
+                    setSelectedInstanceId(id);
+                    setIsSwitching(false);
+                  }, 120);
+                }}
+                onRename={(id, name) =>
+                  updateMutation.mutate({ id, data: { instance_name: name } })
+                }
+                onDelete={(id) => deleteMutation.mutate(id)}
+                isPending={
+                  updateMutation.isPending || deleteMutation.isPending
+                }
+              />
+              <div className="h-5 w-px bg-border" />
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => setImportOrchestration(orchestrations[0])}
+                className="gap-1.5 rounded-lg h-9"
+              >
+                <Import className="h-4 w-4" />
+                导入
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => setDeployOrchestration(orchestrations[0])}
+                className="gap-1.5 rounded-lg h-9"
+              >
+                <Rocket className="h-4 w-4" />
+                部署
+              </Button>
+            </div>
+          )}
+        </CardHeader>
+
+        <CardContent className="flex-1 flex flex-col px-4 pb-4 pt-0 overflow-y-auto">
           {isLoading ? (
             <div className="text-sm text-muted-foreground py-12 text-center">
-              加载中...
+              加载中…
             </div>
           ) : orchestrations.length === 0 ? (
-            <div className="text-sm text-muted-foreground py-12 text-center">
-              暂无 {label} 自动化组合模板
-            </div>
-          ) : (
+            <OrchestrationShowcase
+              label={label}
+              category={category || "media"}
+              orchestrations={[]}
+            />
+          ) : !hasInstances ? (
             <OrchestrationShowcase
               label={label}
               category={category || "media"}
               orchestrations={orchestrations}
-              onDeploy={setDeployOrchestration}
             />
+          ) : (
+            <div
+              key={displayInstanceId ?? "empty"}
+              className={cn(
+                "space-y-4 pt-1 transition-opacity duration-150 ease-out",
+                isSwitching ? "opacity-0" : "opacity-100"
+              )}
+            >
+              <AppInstanceGrid
+                apps={selectedDetail?.apps ?? []}
+                selectedAppId={selectedApp?.id ?? null}
+                onSelectApp={setSelectedApp}
+              />
+
+              <AppConfigPanel
+                app={selectedApp}
+                detail={selectedDetail}
+                onSave={(payload) => {
+                  if (!selectedInstanceId) return;
+                  updateMutation.mutate({ id: selectedInstanceId, data: payload });
+                }}
+                isPending={updateMutation.isPending}
+              />
+            </div>
           )}
         </CardContent>
       </Card>
@@ -338,6 +444,12 @@ export function AutomationCategoryPage() {
         orchestration={deployOrchestration}
         open={!!deployOrchestration}
         onOpenChange={(open) => !open && setDeployOrchestration(null)}
+      />
+
+      <AutomationImportDialog
+        orchestration={importOrchestration}
+        open={!!importOrchestration}
+        onOpenChange={(open) => !open && setImportOrchestration(null)}
       />
     </div>
   );

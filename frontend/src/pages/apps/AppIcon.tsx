@@ -23,18 +23,30 @@ export function AppIcon({ app, className }: AppIconProps) {
 
   if (failed) {
     return (
-      <div className={cn("flex items-center justify-center", className)}>
-        <span className="leading-none">🚀</span>
+      <div
+        className={cn(
+          "flex items-center justify-center rounded-[22%] bg-gradient-to-br from-primary/15 to-primary/5 text-2xl",
+          className
+        )}
+      >
+        🚀
       </div>
     );
   }
 
   return (
-    <img
-      src={src}
-      alt={app.display_name}
-      className={className}
-      onError={() => setFailed(true)}
-    />
+    <div
+      className={cn(
+        "relative flex items-center justify-center overflow-hidden rounded-[22%] bg-white",
+        className
+      )}
+    >
+      <img
+        src={src}
+        alt={app.display_name}
+        className="h-full w-full object-contain"
+        onError={() => setFailed(true)}
+      />
+    </div>
   );
 }

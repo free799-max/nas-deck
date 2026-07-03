@@ -5,7 +5,7 @@
 
 from pathlib import Path
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Response
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -13,10 +13,17 @@ from app.core.exceptions import APIException
 from app.core.security import get_current_user
 from app.database import get_db
 from app.models.user import User
+from app.models.orchestration import AppOrchestrationInstance
 from app.schemas.orchestration import (
     OrchestrationDeployRequest,
     OrchestrationDeployResponse,
     OrchestrationDetailOut,
+    OrchestrationImportRequest,
+    OrchestrationImportResponse,
+    OrchestrationInstanceAppOut,
+    OrchestrationInstanceDetailOut,
+    OrchestrationInstanceGroupOut,
+    OrchestrationInstanceUpdateRequest,
     OrchestrationOut,
 )
 from app.services.orchestration import orchestration_service
@@ -35,6 +42,105 @@ async def list_orchestrations(
 ):
     """列出所有应用编排。"""
     return await orchestration_service.list_orchestrations(db, category=category, tag=tag)
+
+
+@router.get("/instances", response_model=list[OrchestrationInstanceGroupOut])
+async def list_orchestration_instances(
+    category: str | None = None,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """列出当前用户的编排实例组（一次部署/导入记录）。"""
+    groups = await orchestration_service.list_instances(db, category=category)
+    return [
+        OrchestrationInstanceGroupOut(
+            id=g.id,
+            instance_name=g.instance_name,
+            orchestration_name=g.orchestration.name,
+            orchestration_display_name=g.orchestration.display_name,
+            status=g.status,
+            created_at=g.created_at,
+            apps=[
+                OrchestrationInstanceAppOut(
+                    id=inst.id,
+                    app_name=inst.app.name if inst.app else inst.instance_name,
+                    display_name=inst.app.display_name if inst.app else inst.instance_name,
+                    icon=inst.app.icon if inst.app else None,
+                    status=inst.status,
+                    config=inst.config or {},
+                )
+                for inst in g.instances
+            ],
+        )
+        for g in groups
+    ]
+
+
+def _build_instance_detail_out(
+    group: AppOrchestrationInstance,
+) -> dict:
+    """将 AppOrchestrationInstance 转换为详情响应字典。"""
+    return {
+        "id": group.id,
+        "instance_name": group.instance_name,
+        "orchestration_name": group.orchestration.name,
+        "orchestration_display_name": group.orchestration.display_name,
+        "status": group.status,
+        "created_at": group.created_at,
+        "shared_config": group.shared_config or {},
+        "app_configs": group.app_configs or {},
+        "apps": [
+            OrchestrationInstanceAppOut(
+                id=inst.id,
+                app_name=inst.app.name if inst.app else inst.instance_name,
+                display_name=inst.app.display_name if inst.app else inst.instance_name,
+                icon=inst.app.icon if inst.app else None,
+                status=inst.status,
+                config=inst.config or {},
+            )
+            for inst in group.instances
+        ],
+    }
+
+
+@router.get("/instances/{instance_id}", response_model=OrchestrationInstanceDetailOut)
+async def get_orchestration_instance(
+    instance_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """获取编排实例组详情。"""
+    group = await orchestration_service.get_instance_detail(db, instance_id)
+    return _build_instance_detail_out(group)
+
+
+@router.patch("/instances/{instance_id}", response_model=OrchestrationInstanceDetailOut)
+async def update_orchestration_instance(
+    instance_id: int,
+    data: OrchestrationInstanceUpdateRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """更新编排实例组信息。"""
+    group = await orchestration_service.update_instance(
+        db,
+        instance_id,
+        instance_name=data.instance_name,
+        shared_config=data.shared_config,
+        app_configs=data.app_configs,
+    )
+    return _build_instance_detail_out(group)
+
+
+@router.delete("/instances/{instance_id}", status_code=204)
+async def delete_orchestration_instance(
+    instance_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """删除编排实例组及其关联实例。"""
+    await orchestration_service.delete_instance(db, instance_id)
+    return Response(status_code=204)
 
 
 @router.get("/{name}", response_model=OrchestrationDetailOut)
@@ -105,4 +211,43 @@ async def deploy_orchestration(
         instance_name=group.instance_name,
         status=group.status,
         task_ids=task_ids,
+    )
+
+
+@router.get("/{name}/import-candidates")
+async def get_import_candidates(
+    name: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """扫描当前运行中的 Docker 容器，返回可导入的应用候选列表。"""
+    candidates = await orchestration_service.scan_import_candidates(db, name)
+    return [candidate.model_dump() for candidate in candidates]
+
+
+@router.post("/{name}/import", response_model=OrchestrationImportResponse)
+async def import_orchestration(
+    name: str,
+    data: OrchestrationImportRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """导入已有 Docker 部署为应用编排实例。"""
+    group, created_instance_ids = await orchestration_service.import_orchestration(
+        db,
+        orchestration_name=name,
+        instance_name=data.instance_name,
+        selected_apps=data.selected_apps,
+        app_configs={
+            app_name: config.model_dump(exclude_none=True)
+            for app_name, config in data.app_configs.items()
+        },
+        shared_config=data.shared_config,
+        user_id=current_user.id,
+    )
+    return OrchestrationImportResponse(
+        group_id=group.id,
+        instance_name=group.instance_name,
+        status=group.status,
+        created_app_instance_ids=created_instance_ids,
     )
