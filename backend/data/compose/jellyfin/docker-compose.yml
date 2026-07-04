@@ -4,7 +4,6 @@ services:
     container_name: jellyfin
     ports:
     - 8096:8096/tcp
-    - 7359:7359/udp
     volumes:
     - /opt/docker/jellyfin/jellyfin/config:/config:rw
     - /opt/docker/jellyfin/jellyfin/cache:/cache:rw

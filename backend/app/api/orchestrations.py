@@ -14,6 +14,10 @@ from app.core.security import get_current_user
 from app.database import get_db
 from app.models.user import User
 from app.models.orchestration import AppOrchestrationInstance
+from app.schemas.app_auth import (
+    AppAuthVerifyRequest,
+    AppAuthVerifyResponse,
+)
 from app.schemas.orchestration import (
     OrchestrationDeployRequest,
     OrchestrationDeployResponse,
@@ -141,6 +145,19 @@ async def delete_orchestration_instance(
     """删除编排实例组及其关联实例。"""
     await orchestration_service.delete_instance(db, instance_id)
     return Response(status_code=204)
+
+
+@router.post("/auth/verify", response_model=AppAuthVerifyResponse)
+async def verify_app_auth(
+    data: AppAuthVerifyRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """验证应用访问地址与认证信息。"""
+    result = await orchestration_service.verify_app_auth(
+        app_name=data.app_name,
+        config=data.model_dump(),
+    )
+    return AppAuthVerifyResponse(valid=result.valid, message=result.message)
 
 
 @router.get("/{name}", response_model=OrchestrationDetailOut)

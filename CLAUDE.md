@@ -168,6 +168,33 @@ DockerComposeProject 1--1 DockerComposeStack
 - 后端**不再提供** `/api/apps/{name}/icon` 图标文件接口；`apps.icon` 字段仅用于外部图标 URL。
 - 新增或替换图标时，无需修改数据库，只要按应用名放置/替换 svg 文件即可。
 
+## 应用客户端与认证检测
+
+应用在自动化编排（`orchestrations`）中的认证检测，由各应用专属客户端提供，不要写成独立的认证检测模块。
+
+### 后端
+
+- 应用客户端统一放在 `backend/app/services/apps/`，每个应用一个子包：
+
+  ```text
+  services/apps/
+  ├── base.py              # AppClient 抽象基类、AuthVerifyResult
+  ├── registry.py          # app_name -> client_class 注册表
+  └── <app>/
+      ├── __init__.py
+      └── client.py        # 继承 AppClient，实现 verify_auth，并 register_client
+  ```
+
+- `verify_auth(config: dict)` 接收编排实例中保存的认证配置（`url`、`auth_type`、`username`、`password`、`api_key` 等），返回 `AuthVerifyResult(valid, message)`。
+- 统一检测入口为 `POST /api/orchestrations/auth/verify`，由 `orchestration_service.verify_app_auth()` 根据 `app_name` 调度对应客户端。
+- 新增应用时，只需新增客户端子包并注册，无需修改 API 路由或 Service 调度逻辑。
+
+### 前端
+
+- 通用检测 Hook 为 `useVerifyAppAuth`，接口类型定义在 `frontend/src/hooks/useOrchestrations.ts`。
+- `AutomationImportDialog` 和 `AppConfigPanel` 已内置检测按钮，新增应用无需改动 UI。
+- 认证配置是否可检测，统一通过 `frontend/src/pages/automation/auth-config-utils.ts` 中的 `isAuthConfigReady()` 判断。
+
 ## 关键约定
 
 - **注释语言**：中文（docstring + `#` 行内注释）

@@ -279,6 +279,45 @@ export function useImportOrchestration() {
   });
 }
 
+/** 应用认证检测请求 */
+export interface AppAuthVerifyRequest {
+  app_name: string;
+  url: string;
+  auth_type: "none" | "basic" | "api_key";
+  username?: string;
+  password?: string;
+  api_key?: string;
+}
+
+/** 应用认证检测响应 */
+export interface AppAuthVerifyResponse {
+  valid: boolean;
+  message?: string;
+}
+
+/**
+ * 验证应用访问地址与认证信息
+ */
+export function useVerifyAppAuth() {
+  const toast = useToast();
+  return useMutation({
+    mutationFn: (data: AppAuthVerifyRequest) =>
+      api
+        .post<AppAuthVerifyResponse>("/orchestrations/auth/verify", data)
+        .then((r) => r.data as AppAuthVerifyResponse),
+    onSuccess: (data) => {
+      if (data.valid) {
+        toast.success(data.message || "认证检测通过");
+      } else {
+        toast.error(data.message || "认证检测失败");
+      }
+    },
+    onError: (error: ApiError) => {
+      toast.error(error.displayMessage || "认证检测请求失败");
+    },
+  });
+}
+
 /**
  * 组合部署应用编排
  */

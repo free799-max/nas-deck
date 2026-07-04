@@ -20,6 +20,7 @@ from app.schemas.orchestration import (
     ImportCandidateApp,
 )
 from app.services.app_store import app_service
+from app.services.apps import AuthVerifyResult, get_client
 
 
 class OrchestrationService:
@@ -55,6 +56,16 @@ class OrchestrationService:
         if orchestration is None:
             raise APIException("编排不存在", 404)
         return orchestration
+
+    async def verify_app_auth(
+        self,
+        app_name: str,
+        config: dict,
+    ) -> AuthVerifyResult:
+        """调用应用专属客户端验证认证信息。"""
+        client_cls = get_client(app_name)
+        client = client_cls()
+        return await client.verify_auth(config)
 
     async def deploy(
         self,
@@ -499,6 +510,41 @@ class OrchestrationService:
             return f"http://{network_ip}:{container_port}"
         return None
 
+    def _refresh_instance_status(self, instance: AppInstance) -> None:
+        """根据 Docker 容器实际运行状态刷新 AppInstance.status。
+
+        优先读取 instance.config 中的 container_id；未找到时尝试用
+        container_name 兜底。Docker 不可用时保持原状态不变。
+        """
+        config = instance.config or {}
+        container_id = config.get("container_id")
+        if not container_id:
+            container_name = config.get("container_name")
+            if not container_name:
+                return
+            container_id = container_name
+
+        try:
+            client = docker.from_env()
+            container = client.containers.get(container_id)
+            container.reload()
+        except docker.errors.NotFound:
+            instance.status = "stopped"
+            return
+        except docker.errors.DockerException:
+            return
+
+        state = container.attrs.get("State", {}) or {}
+        status = state.get("Status", container.status)
+        if status == "running":
+            instance.status = "running"
+        elif status in {"exited", "dead"}:
+            instance.status = "stopped"
+        elif status == "paused":
+            instance.status = "stopped"
+        else:
+            instance.status = status
+
     async def list_instances(
         self,
         db: AsyncSession,
@@ -506,6 +552,7 @@ class OrchestrationService:
     ) -> list[AppOrchestrationInstance]:
         """列出编排实例组（一次部署/导入记录）。
 
+        返回结果前会根据 Docker 实时刷新每个应用实例的状态。
         可选按分类筛选，返回结果按创建时间倒序排列。
         """
         stmt = (
@@ -522,7 +569,13 @@ class OrchestrationService:
             stmt = stmt.where(AppOrchestration.category == category)
         stmt = stmt.order_by(AppOrchestrationInstance.created_at.desc())
         result = await db.execute(stmt)
-        return list(result.scalars().all())
+        groups = list(result.scalars().all())
+
+        for group in groups:
+            for instance in group.instances:
+                self._refresh_instance_status(instance)
+
+        return groups
 
     async def get_instance(self, db: AsyncSession, instance_id: int) -> AppInstance:
         """获取单个编排实例（携带编排、项目及 Stack 关系）。"""
@@ -565,7 +618,10 @@ class OrchestrationService:
         db: AsyncSession,
         instance_id: int,
     ) -> AppOrchestrationInstance:
-        """获取编排实例组详情（含应用实例及应用信息）。"""
+        """获取编排实例组详情（含应用实例及应用信息）。
+
+        返回前会根据 Docker 实时刷新每个应用实例的状态。
+        """
         result = await db.execute(
             select(AppOrchestrationInstance)
             .where(AppOrchestrationInstance.id == instance_id)
@@ -579,6 +635,10 @@ class OrchestrationService:
         group = result.scalar_one_or_none()
         if group is None:
             raise APIException("编排实例组不存在", 404)
+
+        for instance in group.instances:
+            self._refresh_instance_status(instance)
+
         return group
 
     async def update_instance(

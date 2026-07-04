@@ -8,19 +8,20 @@ import { useEffect, useState } from "react";
 import {
   Dialog,
   DialogContent,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Loader2, Save, Settings, Shield } from "lucide-react";
+import { Loader2, Settings, Shield } from "lucide-react";
 import type {
   OrchestrationInstanceApp,
   OrchestrationInstanceDetail,
   OrchestrationInstanceUpdatePayload,
 } from "@/hooks/useOrchestrations";
+import { useVerifyAppAuth } from "@/hooks/useOrchestrations";
+import { isAuthConfigReady } from "./auth-config-utils";
 
 interface AppConfigPanelProps {
   app: OrchestrationInstanceApp | null;
@@ -82,6 +83,8 @@ export function AppConfigPanel({
   );
   const [dialogOpen, setDialogOpen] = useState(false);
   const [draft, setDraft] = useState<AppAuthConfig>(authConfig);
+  const [isVerifying, setIsVerifying] = useState(false);
+  const verifyMutation = useVerifyAppAuth();
 
   useEffect(() => {
     const next = getInitialAuthConfig(detail?.app_configs?.[app?.app_name ?? ""]);
@@ -96,6 +99,28 @@ export function AppConfigPanel({
   const handleOpen = () => {
     setDraft({ ...authConfig });
     setDialogOpen(true);
+  };
+
+  const handleVerify = () => {
+    if (!app || !isAuthConfigReady(draft)) return;
+
+    setIsVerifying(true);
+    verifyMutation.mutate(
+      {
+        app_name: app.app_name,
+        url: draft.url ?? "",
+        auth_type:
+          draft.auth_type === "apikey"
+            ? "api_key"
+            : draft.auth_type ?? "none",
+        username: draft.username ?? undefined,
+        password: draft.password ?? undefined,
+        api_key: draft.api_key ?? undefined,
+      },
+      {
+        onSettled: () => setIsVerifying(false),
+      }
+    );
   };
 
   const handleSave = () => {
@@ -158,9 +183,9 @@ export function AppConfigPanel({
             <DialogTitle>配置 {app.display_name}</DialogTitle>
           </DialogHeader>
 
-          <div className="space-y-4 py-2">
+          <div className="space-y-5 py-2">
             <div className="flex items-center gap-3">
-              <Label htmlFor="config-url" className="shrink-0 text-sm">访问地址</Label>
+              <Label htmlFor="config-url" className="shrink-0">访问地址</Label>
               <Input
                 id="config-url"
                 value={draft.url}
@@ -171,8 +196,9 @@ export function AppConfigPanel({
               />
             </div>
 
-            <div className="space-y-2">
-              <div className="flex flex-wrap gap-2">
+            <div className="flex items-center gap-3">
+              <Label className="shrink-0">认证方式</Label>
+              <div className="flex flex-1 flex-wrap gap-2">
                 {(
                   [
                     ["none", AUTH_TYPE_LABELS.none],
@@ -185,7 +211,7 @@ export function AppConfigPanel({
                     type="button"
                     variant={draft.auth_type === type ? "default" : "outline"}
                     size="sm"
-                    className="h-8 text-xs"
+                    className="h-8 min-w-[5.5rem] flex-1 text-xs sm:flex-none"
                     onClick={() =>
                       setDraft((prev) => ({
                         ...prev,
@@ -200,9 +226,9 @@ export function AppConfigPanel({
             </div>
 
             {draft.auth_type === "basic" && (
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 <div className="space-y-1.5">
-                  <Label htmlFor="config-username" className="text-sm">用户名</Label>
+                  <Label htmlFor="config-username">用户名</Label>
                   <Input
                     id="config-username"
                     value={draft.username}
@@ -216,7 +242,7 @@ export function AppConfigPanel({
                   />
                 </div>
                 <div className="space-y-1.5">
-                  <Label htmlFor="config-password" className="text-sm">密码</Label>
+                  <Label htmlFor="config-password">密码</Label>
                   <Input
                     id="config-password"
                     type="password"
@@ -235,7 +261,7 @@ export function AppConfigPanel({
 
             {draft.auth_type === "apikey" && (
               <div className="space-y-1.5">
-                <Label htmlFor="config-api-key" className="text-sm">API Key</Label>
+                <Label htmlFor="config-api-key">API Key</Label>
                 <Input
                   id="config-api-key"
                   type="password"
@@ -252,23 +278,40 @@ export function AppConfigPanel({
             )}
           </div>
 
-          <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => setDialogOpen(false)}
-              disabled={isPending}
-            >
-              取消
-            </Button>
-            <Button onClick={handleSave} disabled={isPending}>
-              {isPending ? (
-                <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <Save className="mr-1.5 h-3.5 w-3.5" />
-              )}
-              保存配置
-            </Button>
-          </DialogFooter>
+          <div className="-mx-4 -mb-4 flex flex-col-reverse gap-2 rounded-b-xl border-t bg-muted/50 p-2 sm:flex-row sm:items-center sm:justify-end">
+            {draft.auth_type !== "none" && (
+              <Button
+                type="button"
+                variant="outline"
+                onClick={handleVerify}
+                disabled={!isAuthConfigReady(draft) || isVerifying || isPending}
+              >
+                {isVerifying ? (
+                  <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Shield className="mr-1.5 h-3.5 w-3.5" />
+                )}
+                检测认证
+              </Button>
+            )}
+            <div className="flex flex-col-reverse gap-2 sm:flex-row">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setDialogOpen(false)}
+                disabled={isPending}
+              >
+                取消
+              </Button>
+              <Button
+                type="button"
+                onClick={handleSave}
+                disabled={isPending}
+              >
+                保存配置
+              </Button>
+            </div>
+          </div>
         </DialogContent>
       </Dialog>
     </>

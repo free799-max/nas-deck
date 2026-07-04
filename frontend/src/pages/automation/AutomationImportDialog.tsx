@@ -20,13 +20,15 @@ import { Badge } from "@/components/ui/badge";
 import {
   useImportCandidates,
   useImportOrchestration,
+  useVerifyAppAuth,
   type AppOrchestration,
   type AppCompositionItem,
   type ContainerMatch,
   type OrchestrationImportAppConfig,
 } from "@/hooks/useOrchestrations";
-import { AlertCircle, Check, Loader2 } from "lucide-react";
+import { AlertCircle, Check, Loader2, ShieldCheck } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { isAuthConfigReady } from "./auth-config-utils";
 
 interface AutomationImportDialogProps {
   orchestration: AppOrchestration | null;
@@ -189,6 +191,7 @@ export function AutomationImportDialog({
     orchestration?.name ?? ""
   );
   const importMutation = useImportOrchestration();
+  const verifyMutation = useVerifyAppAuth();
 
   const [instanceName, setInstanceName] = useState("");
   const [selectedApps, setSelectedApps] = useState<Set<string>>(new Set());
@@ -198,6 +201,7 @@ export function AutomationImportDialog({
   const [appConfigs, setAppConfigs] = useState<
     Record<string, OrchestrationImportAppConfig>
   >({});
+  const [verifyingApp, setVerifyingApp] = useState<string | null>(null);
 
   const candidateMap = useMemo(
     () => Object.fromEntries(candidates.map((c) => [c.app_name, c])),
@@ -269,6 +273,26 @@ export function AutomationImportDialog({
       ...prev,
       [appName]: { ...(prev[appName] ?? {}), ...patch },
     }));
+  };
+
+  const handleVerify = (appName: string) => {
+    const config = appConfigs[appName];
+    if (!config || !isAuthConfigReady(config)) return;
+
+    setVerifyingApp(appName);
+    verifyMutation.mutate(
+      {
+        app_name: appName,
+        url: config.url ?? "",
+        auth_type: config.auth_type ?? "none",
+        username: config.username ?? undefined,
+        password: config.password ?? undefined,
+        api_key: config.api_key ?? undefined,
+      },
+      {
+        onSettled: () => setVerifyingApp(null),
+      }
+    );
   };
 
   const handleSubmit = async () => {
@@ -464,7 +488,7 @@ export function AutomationImportDialog({
                           </div>
 
                           {appConfigs[item.app_name]?.auth_type === "basic" && (
-                            <div className="grid grid-cols-2 gap-2">
+                            <div className="grid grid-cols-[1fr_1fr_auto] gap-2 items-end">
                               <div className="space-y-1">
                                 <Label className="text-xs">用户名</Label>
                                 <Input
@@ -492,23 +516,65 @@ export function AutomationImportDialog({
                                   className="h-7 text-xs"
                                 />
                               </div>
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                className="h-7 text-xs"
+                                disabled={
+                                  !isAuthConfigReady(appConfigs[item.app_name] ?? {}) ||
+                                  verifyingApp === item.app_name
+                                }
+                                onClick={() => handleVerify(item.app_name)}
+                              >
+                                {verifyingApp === item.app_name ? (
+                                  <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+                                ) : (
+                                  <ShieldCheck className="mr-1 h-3 w-3" />
+                                )}
+                                检测认证
+                              </Button>
                             </div>
                           )}
 
                           {appConfigs[item.app_name]?.auth_type === "api_key" && (
-                            <div className="space-y-1">
-                              <Label className="text-xs">API Key</Label>
-                              <Input
-                                value={appConfigs[item.app_name]?.api_key ?? ""}
-                                onChange={(e) =>
-                                  updateConfig(item.app_name, {
-                                    api_key: e.target.value,
-                                  })
-                                }
-                                placeholder="可选"
+                            <div className="flex items-end gap-2">
+                              <div className="flex-1 space-y-1">
+                                <Label className="text-xs">API Key</Label>
+                                <Input
+                                  value={appConfigs[item.app_name]?.api_key ?? ""}
+                                  onChange={(e) =>
+                                    updateConfig(item.app_name, {
+                                      api_key: e.target.value,
+                                    })
+                                  }
+                                  placeholder="可选"
+                                  className="h-7 text-xs"
+                                />
+                              </div>
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
                                 className="h-7 text-xs"
-                              />
+                                disabled={
+                                  !isAuthConfigReady(appConfigs[item.app_name] ?? {}) ||
+                                  verifyingApp === item.app_name
+                                }
+                                onClick={() => handleVerify(item.app_name)}
+                              >
+                                {verifyingApp === item.app_name ? (
+                                  <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+                                ) : (
+                                  <ShieldCheck className="mr-1 h-3 w-3" />
+                                )}
+                                检测认证
+                              </Button>
                             </div>
+                          )}
+
+                          {appConfigs[item.app_name]?.auth_type === "none" && (
+                            <div className="h-7" />
                           )}
                         </div>
                       </div>
