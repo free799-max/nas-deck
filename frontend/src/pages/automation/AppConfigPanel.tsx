@@ -245,7 +245,6 @@ export function AppConfigPanel({
                   <Label htmlFor="config-password">密码</Label>
                   <Input
                     id="config-password"
-                    type="password"
                     value={draft.password}
                     onChange={(e) =>
                       setDraft((prev) => ({
@@ -264,7 +263,6 @@ export function AppConfigPanel({
                 <Label htmlFor="config-api-key">API Key</Label>
                 <Input
                   id="config-api-key"
-                  type="password"
                   value={draft.api_key}
                   onChange={(e) =>
                     setDraft((prev) => ({
