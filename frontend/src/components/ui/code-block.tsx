@@ -6,6 +6,8 @@
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { yaml } from "@codemirror/lang-yaml";
+import CodeMirror from "@uiw/react-codemirror";
 import { Check, Copy } from "lucide-react";
 import { useState } from "react";
 
@@ -14,6 +16,7 @@ interface CodeBlockProps {
   className?: string;
   showCopy?: boolean;
   emptyText?: string;
+  language?: string;
 }
 
 export function CodeBlock({
@@ -21,6 +24,7 @@ export function CodeBlock({
   className,
   showCopy = true,
   emptyText = "暂无内容",
+  language,
 }: CodeBlockProps) {
   const [copied, setCopied] = useState(false);
   const [copyError, setCopyError] = useState(false);
@@ -75,10 +79,35 @@ export function CodeBlock({
           </Button>
         </div>
       )}
-      <div className="relative flex-1 overflow-auto">
+      <div
+        className={cn(
+          "relative",
+          language === "yaml" ? "overflow-visible" : "flex-1 overflow-auto"
+        )}
+      >
         {isEmpty ? (
           <div className="flex h-full items-center justify-center p-4 text-sm text-muted-foreground">
             {emptyText}
+          </div>
+        ) : language === "yaml" ? (
+          <div
+            className="[&_.cm-editor]:!bg-transparent [&_.cm-gutters]:!bg-muted/50 [&_.cm-gutters]:!border-r-border [&_.cm-content]:!py-3 [&_.cm-line]:!px-1"
+          >
+            <CodeMirror
+              value={code}
+              height="auto"
+              extensions={[yaml()]}
+              editable={false}
+              readOnly={true}
+              theme="light"
+              basicSetup={{
+                lineNumbers: true,
+                highlightActiveLineGutter: false,
+                highlightActiveLine: false,
+                foldGutter: false,
+              }}
+              onChange={() => {}}
+            />
           </div>
         ) : (
           <pre className="min-w-full p-4 text-xs leading-relaxed">

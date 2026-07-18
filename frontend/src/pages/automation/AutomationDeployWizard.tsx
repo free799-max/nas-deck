@@ -16,29 +16,23 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import { Card, CardContent } from "@/components/ui/card";
 import { SchemaForm } from "@/components/SchemaForm";
+import { CodeBlock } from "@/components/ui/code-block";
 import { useToast } from "@/components/ui/toast";
+import { previewApp } from "@/api/apps";
 import { useDeployOrchestration, type AppOrchestration } from "@/hooks/useOrchestrations";
 import { useApps } from "@/hooks/useApps";
 import { useDeployTasks } from "@/hooks/useDeployTasks";
-import { Check, ChevronRight, ChevronLeft } from "lucide-react";
+import { cn, sanitizeInstanceName, slugify } from "@/lib/utils";
+import {
+  extractDefaults,
+  fillEmptyPasswords,
+} from "@/lib/schema-utils";
+import { AppIcon } from "../apps/AppIcon";
+import { Check, ChevronRight, ChevronLeft, ChevronUp, ChevronDown } from "lucide-react";
 
 type Step = "select" | "shared" | "apps" | "confirm";
-
-function extractDefaults(schema: Record<string, unknown>): Record<string, unknown> {
-  const defaults: Record<string, unknown> = {};
-  const properties = schema?.properties as
-    | Record<string, { default?: unknown }>
-    | undefined;
-  if (properties) {
-    for (const [key, prop] of Object.entries(properties)) {
-      if (prop && "default" in prop) {
-        defaults[key] = prop.default;
-      }
-    }
-  }
-  return defaults;
-}
 
 interface AutomationDeployWizardProps {
   orchestration: AppOrchestration | null;
@@ -62,6 +56,13 @@ export function AutomationDeployWizard({
   const [appConfigs, setAppConfigs] = useState<
     Record<string, Record<string, unknown>>
   >({});
+  const [previews, setPreviews] = useState<
+    Record<string, { yaml: string; error: string | null }>
+  >({});
+  const [previewsLoading, setPreviewsLoading] = useState(false);
+  const [expandedPreviews, setExpandedPreviews] = useState<Set<string>>(
+    new Set()
+  );
 
   // 重置状态当 orchestration 变化
   useEffect(() => {
@@ -75,22 +76,44 @@ export function AutomationDeployWizard({
     }
 
     setStep("select");
-    setInstanceName(orchestration.display_name || "");
+    setInstanceName(slugify(orchestration.display_name || ""));
     setSharedConfig(extractDefaults(orchestration.shared_config_schema));
 
     const initialSelected = new Set<string>();
-    const initialAppConfigs: Record<string, Record<string, unknown>> = {};
-
     for (const item of orchestration.app_composition) {
       if (item.relation === "required" || item.relation === "suggested") {
         initialSelected.add(item.app_name);
       }
-      initialAppConfigs[item.app_name] = {};
     }
 
     setSelectedApps(initialSelected);
-    setAppConfigs(initialAppConfigs);
   }, [orchestration]);
+
+  // 获取所有应用商店应用，用于渲染选中应用的配置表单
+  const { data: allApps = [], isLoading: appsLoading } = useApps();
+  const appDetailsMap = useMemo(() => {
+    return Object.fromEntries(allApps.map((app) => [app.name, app]));
+  }, [allApps]);
+
+  // 应用商店应用加载完成后，为各应用生成默认配置（含密码自动生成）
+  useEffect(() => {
+    if (!orchestration || appsLoading || allApps.length === 0) return;
+
+    setAppConfigs((prev) => {
+      const next = { ...prev };
+      let changed = false;
+      for (const item of orchestration.app_composition) {
+        if (next[item.app_name] !== undefined) continue;
+        const app = appDetailsMap[item.app_name];
+        if (!app) continue;
+        const defaults = extractDefaults(app.config_schema);
+        next[item.app_name] = fillEmptyPasswords(app.config_schema, defaults);
+        changed = true;
+      }
+      // 无新增时返回原引用，避免下游预览 effect 因引用变化而不必要地重跑
+      return changed ? next : prev;
+    });
+  }, [orchestration, appsLoading, allApps, appDetailsMap]);
 
   const compositionByName = useMemo(() => {
     if (!orchestration) return {};
@@ -104,11 +127,74 @@ export function AutomationDeployWizard({
     [selectedApps]
   );
 
-  // 获取所有应用商店应用，用于渲染选中应用的配置表单
-  const { data: allApps = [], isLoading: appsLoading } = useApps();
-  const appDetailsMap = useMemo(() => {
-    return Object.fromEntries(allApps.map((app) => [app.name, app]));
-  }, [allApps]);
+  // 进入确认步骤后，并发加载各选中的应用 Compose YAML 预览
+  useEffect(() => {
+    if (step !== "confirm") return;
+
+    const projectName = slugify(instanceName);
+    if (!projectName || selectedAppList.length === 0) return;
+
+    const controller = new AbortController();
+    // 标记当前批次是否已被取消（依赖变化触发的 cleanup），
+    // 避免被 abort 的旧批次在网络返回前写回空结果并提前关闭 loading
+    let cancelled = false;
+    setPreviewsLoading(true);
+    setPreviews({});
+
+    Promise.all(
+      selectedAppList.map(async (appName) => {
+        const app = appDetailsMap[appName];
+        if (!app) {
+          return { appName, yaml: "", error: "未找到应用信息" };
+        }
+        const config = appConfigs[appName] || {};
+        const mergedConfig = { ...sharedConfig, ...config };
+        const subInstanceName = `${projectName}-${appName}`;
+        try {
+          const res = await previewApp(
+            appName,
+            {
+              instance_name: subInstanceName,
+              config: mergedConfig,
+            },
+            controller.signal
+          );
+          return {
+            appName,
+            yaml: res.yaml || "",
+            error: res.error || null,
+          };
+        } catch (err) {
+          const errorObj = err as { code?: string; displayMessage?: string; message?: string } | undefined;
+          if (errorObj?.code === "ERR_CANCELED") {
+            return { appName, yaml: "", error: null };
+          }
+          return {
+            appName,
+            yaml: "",
+            error: errorObj?.displayMessage || errorObj?.message || "预览加载失败",
+          };
+        }
+      })
+    )
+      .then((results) => {
+        if (cancelled) return;
+        const next: Record<string, { yaml: string; error: string | null }> = {};
+        for (const r of results) {
+          next[r.appName] = { yaml: r.yaml, error: r.error };
+        }
+        setPreviews(next);
+      })
+      .finally(() => {
+        if (cancelled) return;
+        setPreviewsLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [step, instanceName, selectedAppList, appDetailsMap, appConfigs, sharedConfig]);
 
   if (!orchestration) return null;
 
@@ -143,8 +229,9 @@ export function AutomationDeployWizard({
 
   const validateStep = (): boolean => {
     if (step === "select") {
-      if (!instanceName.trim()) {
-        toast.error("请输入实例名称");
+      const projectName = slugify(instanceName);
+      if (!projectName) {
+        toast.error("请输入有效的实例名称");
         return false;
       }
       // 校验必选应用都已选中
@@ -178,8 +265,9 @@ export function AutomationDeployWizard({
   };
 
   const handleDeploy = () => {
-    if (!instanceName.trim()) {
-      toast.error("请输入实例名称");
+    const projectName = slugify(instanceName);
+    if (!projectName) {
+      toast.error("请输入有效的实例名称");
       return;
     }
 
@@ -192,7 +280,7 @@ export function AutomationDeployWizard({
       {
         name: orchestration.name,
         data: {
-          instance_name: instanceName.trim(),
+          instance_name: projectName,
           selected_apps: Array.from(selectedApps),
           app_configs: filteredAppConfigs,
           shared_config: sharedConfig,
@@ -210,6 +298,15 @@ export function AutomationDeployWizard({
     );
   };
 
+  const togglePreview = (appName: string) => {
+    setExpandedPreviews((prev) => {
+      const next = new Set(prev);
+      if (next.has(appName)) next.delete(appName);
+      else next.add(appName);
+      return next;
+    });
+  };
+
   const renderSelectStep = () => (
     <div className="space-y-4">
       <div className="space-y-1">
@@ -217,65 +314,88 @@ export function AutomationDeployWizard({
         <Input
           id="instance-name"
           value={instanceName}
-          onChange={(e) => setInstanceName(e.target.value)}
-          placeholder="如：我的影视媒体栈"
+          onChange={(e) => setInstanceName(sanitizeInstanceName(e.target.value))}
+          onBlur={() => setInstanceName(slugify(instanceName))}
+          placeholder="如：my-media-stack"
         />
       </div>
 
       <div className="space-y-2">
         <Label>选择要部署的应用</Label>
-        <div className="space-y-2">
+        <div className="grid grid-cols-2 gap-3">
           {orchestration.app_composition.map((item) => {
+            const app = appDetailsMap[item.app_name];
             const selected = selectedApps.has(item.app_name);
             const disabled = item.relation === "required";
             return (
-              <div
+              <Card
                 key={item.app_name}
-                className={`flex items-center justify-between p-3 rounded-lg border transition-colors ${
+                onClick={() => !disabled && toggleApp(item.app_name)}
+                className={cn(
+                  "rounded-xl p-3 border transition-all",
                   selected
-                    ? "border-primary bg-primary/5"
-                    : "border-border bg-white hover:bg-muted/30"
-                } ${disabled ? "opacity-80" : "cursor-pointer"}`}
-                onClick={() => toggleApp(item.app_name)}
+                    ? "border-primary bg-primary/5 ring-1 ring-primary/20"
+                    : "border-border bg-white hover:bg-muted/30",
+                  disabled ? "opacity-80 cursor-default" : "cursor-pointer"
+                )}
               >
-                <div className="flex items-center gap-3">
+                <CardContent className="p-0 flex items-center gap-3">
+                  {app ? (
+                    <AppIcon
+                      app={app}
+                      className="h-12 w-12 rounded-[22%] bg-white border border-border/60 shrink-0"
+                    />
+                  ) : (
+                    <div className="h-12 w-12 rounded-[22%] bg-gradient-to-br from-primary/15 to-primary/5 flex items-center justify-center text-2xl shrink-0">
+                      🚀
+                    </div>
+                  )}
+
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-medium truncate">
+                        {app?.display_name || item.app_name}
+                      </span>
+                      <Badge
+                        variant={
+                          item.relation === "required"
+                            ? "default"
+                            : item.relation === "suggested"
+                            ? "secondary"
+                            : "outline"
+                        }
+                        className="text-[10px] px-1.5 py-0 h-4 shrink-0"
+                      >
+                        {item.relation === "required"
+                          ? "必选"
+                          : item.relation === "suggested"
+                          ? "推荐"
+                          : item.relation === "conflicting"
+                          ? "互斥"
+                          : "可选"}
+                      </Badge>
+                    </div>
+                    {app?.description && (
+                      <p className="text-xs text-muted-foreground line-clamp-1 mt-0.5">
+                        {app.description}
+                      </p>
+                    )}
+                    {item.group && (
+                      <p className="text-[11px] text-muted-foreground mt-0.5">
+                        分组：{item.group}
+                      </p>
+                    )}
+                  </div>
+
                   <input
                     type="checkbox"
                     checked={selected}
                     disabled={disabled}
                     readOnly
-                    className="h-4 w-4 rounded border-input"
+                    className="h-4 w-4 rounded border-input shrink-0"
                   />
-                  <div>
-                    <div className="text-sm font-medium">{item.app_name}</div>
-                    {item.group && (
-                      <div className="text-xs text-muted-foreground">
-                        分组：{item.group}
-                      </div>
-                    )}
-                  </div>
-                </div>
-                <div className="flex items-center gap-2">
-                  <Badge
-                    variant={
-                      item.relation === "required"
-                        ? "default"
-                        : item.relation === "suggested"
-                        ? "secondary"
-                        : "outline"
-                    }
-                    className="text-xs"
-                  >
-                    {item.relation === "required"
-                      ? "必选"
-                      : item.relation === "suggested"
-                      ? "推荐"
-                      : item.relation === "conflicting"
-                      ? "互斥"
-                      : "可选"}
-                  </Badge>
-                </div>
-              </div>
+                </CardContent>
+              </Card>
             );
           })}
         </div>
@@ -283,18 +403,30 @@ export function AutomationDeployWizard({
     </div>
   );
 
-  const renderSharedStep = () => (
-    <div className="space-y-4">
-      <div className="text-sm text-muted-foreground">
-        以下配置会共享给所有选中的应用，可在各应用配置中覆盖
+  const renderSharedStep = () => {
+    const hasSchema = Object.keys(
+      (orchestration.shared_config_schema as Record<string, unknown>)?.properties || {}
+    ).length > 0;
+
+    return (
+      <div className="space-y-4">
+        <div className="text-sm text-muted-foreground">
+          以下配置会共享给所有选中的应用，可在各应用配置中覆盖
+        </div>
+        {hasSchema ? (
+          <SchemaForm
+            schema={orchestration.shared_config_schema as never}
+            data={sharedConfig}
+            onChange={setSharedConfig}
+          />
+        ) : (
+          <div className="rounded-xl border border-dashed p-8 text-center">
+            <div className="text-sm text-muted-foreground">当前组合没有公共配置项</div>
+          </div>
+        )}
       </div>
-      <SchemaForm
-        schema={orchestration.shared_config_schema as never}
-        data={sharedConfig}
-        onChange={setSharedConfig}
-      />
-    </div>
-  );
+    );
+  };
 
   const renderAppsStep = () => (
     <div className="space-y-4 max-h-[50vh] overflow-y-auto pr-1">
@@ -331,26 +463,95 @@ export function AutomationDeployWizard({
   );
 
   const renderConfirmStep = () => (
-    <div className="space-y-4">
-      <div className="rounded-lg bg-muted/50 p-4 space-y-2">
-        <div className="flex justify-between text-sm">
-          <span className="text-muted-foreground">实例名称</span>
-          <span className="font-medium">{instanceName}</span>
-        </div>
-        <div className="flex justify-between text-sm">
-          <span className="text-muted-foreground">部署应用数</span>
-          <span className="font-medium">{selectedApps.size} 个</span>
-        </div>
-        <div className="pt-2">
-          <div className="text-sm text-muted-foreground mb-1.5">应用列表</div>
-          <div className="flex flex-wrap gap-1.5">
-            {Array.from(selectedApps).map((appName) => (
-              <Badge key={appName} variant="secondary" className="text-xs">
-                {appName}
-              </Badge>
-            ))}
+    <div className="space-y-4 pr-1">
+      <div className="rounded-xl border border-border bg-card p-4 shadow-sm space-y-4">
+        <div className="grid grid-cols-2 gap-4">
+          <div className="space-y-1">
+            <div className="text-xs text-muted-foreground">实例名称</div>
+            <div className="text-sm font-medium truncate">{instanceName}</div>
+          </div>
+          <div className="space-y-1">
+            <div className="text-xs text-muted-foreground">部署应用数</div>
+            <div className="text-sm font-medium">{selectedApps.size} 个</div>
           </div>
         </div>
+
+        <div className="space-y-2">
+          <div className="text-xs text-muted-foreground">应用列表</div>
+          <div className="flex flex-wrap items-start gap-4">
+            {Array.from(selectedApps).map((appName) => {
+              const app = appDetailsMap[appName];
+              return (
+                <div
+                  key={appName}
+                  className="flex flex-col items-center gap-1.5 w-16"
+                >
+                  {app ? (
+                    <AppIcon
+                      app={app}
+                      className="h-12 w-12 rounded-[22%] bg-white border border-border/60 shadow-sm"
+                    />
+                  ) : (
+                    <div className="h-12 w-12 rounded-[22%] bg-gradient-to-br from-primary/15 to-primary/5 flex items-center justify-center text-xl">
+                      🚀
+                    </div>
+                  )}
+                  <span className="text-xs font-medium text-center line-clamp-2 leading-tight">
+                    {app?.display_name || appName}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+
+      <div className="space-y-2">
+        <h4 className="text-sm font-semibold">docker-compose.yml 预览</h4>
+        {previewsLoading ? (
+          <div className="text-sm text-muted-foreground py-4">加载预览中…</div>
+        ) : (
+          selectedAppList.map((appName) => {
+            const app = appDetailsMap[appName];
+            const preview = previews[appName];
+            const expanded = expandedPreviews.has(appName);
+            return (
+              <div
+                key={appName}
+                className="rounded-lg border border-border overflow-hidden"
+              >
+                <button
+                  type="button"
+                  onClick={() => togglePreview(appName)}
+                  className="flex w-full items-center justify-between px-4 py-2.5 text-left text-sm font-medium hover:bg-muted/50 transition-colors"
+                >
+                  <span>{app?.display_name || appName}</span>
+                  {expanded ? (
+                    <ChevronUp className="h-4 w-4 text-muted-foreground" />
+                  ) : (
+                    <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                  )}
+                </button>
+                {expanded && (
+                  <div className="border-t">
+                    {preview?.error ? (
+                      <div className="p-4 text-xs text-destructive">
+                        预览生成失败：{preview.error}
+                      </div>
+                    ) : (
+                      <CodeBlock
+                        code={preview?.yaml || ""}
+                        emptyText="暂无预览内容"
+                        showCopy={false}
+                        language="yaml"
+                      />
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })
+        )}
       </div>
     </div>
   );
@@ -406,7 +607,7 @@ export function AutomationDeployWizard({
           )}
         </div>
 
-        <div className="flex-1 overflow-y-auto min-h-0 py-2">
+        <div className="overflow-y-auto max-h-[calc(90vh-12rem)] py-2 scrollbar-thin -mr-4 pr-2">
           {step === "select" && renderSelectStep()}
           {step === "shared" && renderSharedStep()}
           {step === "apps" && renderAppsStep()}

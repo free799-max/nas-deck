@@ -413,6 +413,49 @@ function ArrayField({
   );
 }
 
+/** 镜像标签选择：镜像名 + 标签下拉 */
+function ImageTagField({
+  image,
+  value,
+  imageTags,
+  imageTagsLoading,
+  onChange,
+}: {
+  image?: string;
+  value: string;
+  imageTags?: string[];
+  imageTagsLoading?: boolean;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <div className="mb-3 flex items-center gap-2 text-sm">
+      <div className="flex items-center gap-1.5">
+        <Package className="h-3.5 w-3.5 text-muted-foreground" />
+        <span
+          className="max-w-[200px] truncate text-base font-medium"
+          title={image}
+        >
+          {image}
+        </span>
+      </div>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        disabled={imageTagsLoading || !imageTags || imageTags.length === 0}
+        className="h-7 rounded-md border border-input bg-white px-2 py-0 text-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50"
+      >
+        <option value={value}>{value}</option>
+        {!imageTagsLoading &&
+          imageTags?.map((tag) => (
+            <option key={tag} value={tag}>
+              {tag}
+            </option>
+          ))}
+      </select>
+    </div>
+  );
+}
+
 /** 新格式：按容器分组渲染 */
 function ContainerSchemaForm({
   schema,
@@ -453,36 +496,15 @@ function ContainerSchemaForm({
     onChange({ ...data, [key]: value });
   };
 
-  const renderImageTag = () => {
-    const value = String(data.image_tag || "");
-    return (
-      <div className="mb-3 flex items-center gap-2 text-sm">
-        <div className="flex items-center gap-1.5">
-          <Package className="h-3.5 w-3.5 text-muted-foreground" />
-          <span
-            className="max-w-[200px] truncate text-base font-medium"
-            title={image}
-          >
-            {image}
-          </span>
-        </div>
-        <select
-          value={value}
-          onChange={(e) => handleChange("image_tag", e.target.value)}
-          disabled={imageTagsLoading || !imageTags || imageTags.length === 0}
-          className="h-7 rounded-md border border-input bg-white px-2 py-0 text-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50"
-        >
-          <option value={value}>{value}</option>
-          {!imageTagsLoading &&
-            imageTags?.map((tag) => (
-              <option key={tag} value={tag}>
-                {tag}
-              </option>
-            ))}
-        </select>
-      </div>
-    );
-  };
+  const renderImageTag = () => (
+    <ImageTagField
+      image={image}
+      value={String(data.image_tag || "")}
+      imageTags={imageTags}
+      imageTagsLoading={imageTagsLoading}
+      onChange={(v) => handleChange("image_tag", v)}
+    />
+  );
 
   const renderFields = (fields: string[]) => {
     // 端口/存储空间：3 字段，协议/权限列占 90px，按钮在 auto 列
@@ -608,6 +630,99 @@ function ContainerSchemaForm({
   );
 }
 
+/** 无容器分组时按 properties 平铺渲染 */
+function PlainSchemaForm({
+  schema,
+  data,
+  onChange,
+  instanceName,
+  image,
+  imageTags,
+  imageTagsLoading,
+}: {
+  schema: SchemaFormProps["schema"];
+  data: Record<string, unknown>;
+  onChange: (data: Record<string, unknown>) => void;
+  instanceName?: string;
+  image?: string;
+  imageTags?: string[];
+  imageTagsLoading?: boolean;
+}) {
+  const properties = schema.properties || {};
+  const requiredSet = new Set(schema.required || []);
+
+  const handleChange = (key: string, value: unknown) => {
+    onChange({ ...data, [key]: value });
+  };
+
+  // image_tag 在表单顶部以镜像名 + 标签下拉的形式单独渲染
+  const hasImageTag = Boolean(properties.image_tag) && Boolean(image);
+
+  return (
+    <div className="space-y-4">
+      {hasImageTag && (
+        <ImageTagField
+          image={image}
+          value={String(data.image_tag || "")}
+          imageTags={imageTags}
+          imageTagsLoading={imageTagsLoading}
+          onChange={(v) => handleChange("image_tag", v)}
+        />
+      )}
+      {Object.entries(properties)
+        .filter(([key]) => key !== "image_tag" || !hasImageTag)
+        .map(([key, prop]) => {
+          // 数组类型（如环境变量、端口映射）走 ArrayField，避免被当成普通文本渲染
+          if (prop.type === "array" && prop.items) {
+            const required = requiredSet.has(key);
+            return (
+              <div key={key} className="space-y-1">
+                <Label
+                  className="text-xs font-medium"
+                  aria-required={required}
+                  title={required ? "必填" : undefined}
+                >
+                  {prop.title || key}
+                  {required && (
+                    <span className="ml-0.5 text-destructive" aria-hidden="true">
+                      *
+                    </span>
+                  )}
+                </Label>
+                {prop.description && (
+                  <p className="text-xs text-muted-foreground leading-snug">
+                    {prop.description}
+                  </p>
+                )}
+                <div className="grid grid-cols-[1fr_1fr_90px_auto] gap-2">
+                  <ArrayField
+                    propKey={key}
+                    prop={prop}
+                    value={data[key]}
+                    required={required}
+                    onChange={handleChange}
+                    instanceName={instanceName}
+                  />
+                </div>
+              </div>
+            );
+          }
+          return (
+            <FieldInput
+              key={key}
+              propKey={key}
+              prop={prop}
+              value={data[key]}
+              required={requiredSet.has(key)}
+              onChange={handleChange}
+              instanceName={instanceName}
+            />
+          );
+        })}
+    </div>
+  );
+}
+
 export function SchemaForm({
   schema,
   data,
@@ -617,6 +732,22 @@ export function SchemaForm({
   imageTags,
   imageTagsLoading,
 }: SchemaFormProps) {
+  const hasContainers = schema?.containers && schema.containers.length > 0;
+
+  if (!hasContainers) {
+    return (
+      <PlainSchemaForm
+        schema={schema}
+        data={data}
+        onChange={onChange}
+        instanceName={instanceName}
+        image={image}
+        imageTags={imageTags}
+        imageTagsLoading={imageTagsLoading}
+      />
+    );
+  }
+
   return (
     <ContainerSchemaForm
       schema={schema}

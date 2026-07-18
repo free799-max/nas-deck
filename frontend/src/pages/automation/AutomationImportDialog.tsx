@@ -27,7 +27,7 @@ import {
   type OrchestrationImportAppConfig,
 } from "@/hooks/useOrchestrations";
 import { AlertCircle, Check, Loader2, ShieldCheck } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { cn, sanitizeInstanceName, slugify } from "@/lib/utils";
 import { isAuthConfigReady } from "./auth-config-utils";
 
 interface AutomationImportDialogProps {
@@ -235,7 +235,7 @@ export function AutomationImportDialog({
       }
     }
 
-    setInstanceName(orchestration.display_name);
+    setInstanceName(slugify(orchestration.display_name || ""));
     setSelectedApps(initialSelected);
     setSelectedContainer(initialContainer);
     setAppConfigs(initialConfigs);
@@ -298,10 +298,13 @@ export function AutomationImportDialog({
   const handleSubmit = async () => {
     if (!orchestration) return;
 
+    const projectName = slugify(instanceName);
+    if (!projectName) return;
+
     await importMutation.mutateAsync({
       name: orchestration.name,
       data: {
-        instance_name: instanceName,
+        instance_name: projectName,
         selected_apps: Array.from(selectedApps),
         app_configs: Object.fromEntries(
           Array.from(selectedApps).map((name) => [
@@ -317,7 +320,7 @@ export function AutomationImportDialog({
   };
 
   const canSubmit =
-    instanceName.trim().length > 0 &&
+    slugify(instanceName).length > 0 &&
     selectedApps.size > 0 &&
     !importMutation.isPending;
 
@@ -334,8 +337,9 @@ export function AutomationImportDialog({
             <Input
               id="instance-name"
               value={instanceName}
-              onChange={(e) => setInstanceName(e.target.value)}
-              placeholder="例如：影视自动化"
+              onChange={(e) => setInstanceName(sanitizeInstanceName(e.target.value))}
+              onBlur={() => setInstanceName(slugify(instanceName))}
+              placeholder="例如：my-media-stack"
             />
           </div>
 
