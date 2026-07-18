@@ -97,7 +97,7 @@ async def search_images(
         )
         config = result.scalar_one_or_none()
         if config:
-            return docker_manager.search_images(
+            return await docker_manager.search_images(
                 q,
                 page=page,
                 api_url=config.search_api_url,
@@ -105,7 +105,7 @@ async def search_images(
                 username=config.username,
                 password=config.password,
             )
-        return docker_manager.search_images(q, page=page)
+        return await docker_manager.search_images(q, page=page)
     except RuntimeError as e:
         raise APIException(str(e), 503) from e
     except Exception as e:
@@ -118,7 +118,7 @@ async def get_image_tags(
     current_user: User = Depends(get_current_user),
 ):
     """获取指定镜像的可用标签列表。"""
-    return docker_manager.get_image_tags(image)
+    return await docker_manager.get_image_tags(image)
 
 
 @router.post("/images/pull", response_model=PullTaskResponse)

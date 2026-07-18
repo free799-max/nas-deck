@@ -174,7 +174,7 @@ class ImageService(common.BaseDockerService):
                 failed.append({"id": image_id, "reason": str(e)})
         return {"deleted": deleted, "failed": failed}
 
-    def search_images(
+    async def search_images(
         self,
         query: str,
         page: int = 1,
@@ -204,12 +204,13 @@ class ImageService(common.BaseDockerService):
                 "is_automated": _get("is_automated", False),
             }
 
-        def _do_search(url: str, is_docker_hub: bool = False) -> dict:
+        async def _do_search(url: str, is_docker_hub: bool = False) -> dict:
             try:
                 common.logger.info("镜像搜索请求: %s", url)
-                resp = httpx.get(url, timeout=10, auth=auth)
-                resp.raise_for_status()
-                data = resp.json()
+                async with httpx.AsyncClient() as client:
+                    resp = await client.get(url, timeout=10, auth=auth)
+                    resp.raise_for_status()
+                    data = resp.json()
                 if is_docker_hub:
                     results = data.get("results", [])
                     return {
@@ -323,7 +324,7 @@ class ImageService(common.BaseDockerService):
             raise RuntimeError("Docker not available")
         self._client.images.pull(image)
 
-    def get_image_tags(self, image: str) -> list[dict]:
+    async def get_image_tags(self, image: str) -> list[dict]:
         """获取指定镜像的可用标签列表。
 
         按最后更新时间倒序排列，最新的标签排在最前面。
@@ -334,9 +335,10 @@ class ImageService(common.BaseDockerService):
 
         url = f"https://hub.docker.com/v2/repositories/{repo}/tags/?page_size=100"
         try:
-            resp = httpx.get(url, timeout=15)
-            resp.raise_for_status()
-            data = resp.json()
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(url, timeout=15)
+                resp.raise_for_status()
+                data = resp.json()
             results = data.get("results", [])
             tags = []
             for r in results:

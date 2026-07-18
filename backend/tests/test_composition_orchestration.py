@@ -47,10 +47,51 @@ async def media_orchestration(db):
             {"app_name": "emby", "relation": "optional", "group": "player"},
         ],
         shared_config_schema={
+            "type": "object",
             "properties": {
-                "media_root": {"type": "string", "default": "media"},
-                "downloads_root": {"type": "string", "default": "downloads"},
-            }
+                "volumes": {
+                    "type": "array",
+                    "default": [
+                        {"mode": "rw", "host_path": "media", "container_path": "/media"},
+                        {"mode": "rw", "host_path": "downloads", "container_path": "/downloads"},
+                    ],
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "mode": {"type": "string", "enum": ["rw", "ro"], "default": "rw"},
+                            "host_path": {"type": "string", "format": "directory"},
+                            "container_path": {"type": "string"},
+                        },
+                        "required": ["host_path", "container_path", "mode"],
+                    },
+                },
+                "env": {
+                    "type": "array",
+                    "default": [
+                        {"key": "TZ", "value": "Asia/Shanghai"},
+                    ],
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "key": {"type": "string"},
+                            "value": {"type": "string"},
+                        },
+                        "required": ["key", "value"],
+                    },
+                },
+            },
+            "required": ["volumes", "env"],
+            "containers": [
+                {
+                    "name": "shared",
+                    "title": "公共配置",
+                    "description": "所有影视自动化应用共享的存储空间和环境变量",
+                    "settings": [
+                        {"type": "volumes", "title": "存储空间设置", "fields": ["volumes"]},
+                        {"type": "env", "title": "环境变量", "fields": ["env"]},
+                    ],
+                }
+            ],
         },
     )
     db.add(orchestration)

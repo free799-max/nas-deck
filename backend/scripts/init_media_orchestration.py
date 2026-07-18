@@ -20,22 +20,67 @@ MEDIA_COMPOSITION = [
 ]
 
 MEDIA_SHARED_CONFIG_SCHEMA = {
+    "type": "object",
     "properties": {
-        "media_root": {
-            "type": "string",
-            "title": "媒体库根目录",
-            "description": "所有媒体应用共享的媒体库根目录",
-            "format": "directory",
-            "default": "media",
+        "volumes": {
+            "type": "array",
+            "title": "存储空间设置",
+            "description": "影视自动化各应用共享的存储映射",
+            "default": [
+                {"mode": "rw", "host_path": "media", "container_path": "/media"},
+                {"mode": "rw", "host_path": "downloads", "container_path": "/downloads"},
+            ],
+            "items": {
+                "type": "object",
+                "properties": {
+                    "mode": {
+                        "type": "string",
+                        "title": "读写模式",
+                        "enum": ["rw", "ro"],
+                        "default": "rw",
+                    },
+                    "host_path": {
+                        "type": "string",
+                        "title": "本地路径",
+                        "format": "directory",
+                    },
+                    "container_path": {
+                        "type": "string",
+                        "title": "容器路径",
+                    },
+                },
+                "required": ["host_path", "container_path", "mode"],
+            },
         },
-        "downloads_root": {
-            "type": "string",
-            "title": "下载根目录",
-            "description": "下载工具保存资源的根目录",
-            "format": "directory",
-            "default": "downloads",
+        "env": {
+            "type": "array",
+            "title": "环境变量",
+            "description": "影视自动化各应用共享的环境变量",
+            "default": [
+                {"key": "TZ", "value": "Asia/Shanghai"},
+            ],
+            "items": {
+                "type": "object",
+                "properties": {
+                    "key": {"type": "string", "title": "变量名"},
+                    "value": {"type": "string", "title": "值"},
+                },
+                "required": ["key", "value"],
+            },
         },
     },
+    "required": ["volumes", "env"],
+    "containers": [
+        {
+            "name": "shared",
+            "title": "公共配置",
+            "description": "所有影视自动化应用共享的存储空间和环境变量",
+            "settings": [
+                {"type": "volumes", "title": "存储空间设置", "fields": ["volumes"]},
+                {"type": "env", "title": "环境变量", "fields": ["env"]},
+            ],
+        }
+    ],
 }
 
 
