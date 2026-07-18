@@ -30,9 +30,11 @@ api.interceptors.response.use(
     // 204 No Content 直接透传
     if (response.status === 204) return response;
     // 提取 data 字段（StandardResponse 包装层）
+    // 需同时具备 success 标识，避免误拆业务对象自身的顶层 data 字段
     if (
       response.data &&
       typeof response.data === "object" &&
+      "success" in response.data &&
       "data" in response.data
     ) {
       response.data = response.data.data;
@@ -49,8 +51,15 @@ api.interceptors.response.use(
         // 排除登录接口本身的 401（让用户界面处理错误提示）
         const isLoginRequest = error.config?.url?.includes("/auth/login");
         if (!isLoginRequest) {
-          localStorage.removeItem("token");
-          window.location.href = "/login";
+          // 仅当 401 请求携带的 token 与当前本地 token 一致时才清除并跳转，
+          // 避免过期 token 的旧请求（如启动时的 /auth/me）在竞态中
+          // 误清掉用户刚登录写入的新 token
+          const currentToken = localStorage.getItem("token");
+          const requestAuth = error.config?.headers?.Authorization;
+          if (!currentToken || requestAuth === `Bearer ${currentToken}`) {
+            localStorage.removeItem("token");
+            window.location.href = "/login";
+          }
         }
       }
     }

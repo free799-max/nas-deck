@@ -3,65 +3,28 @@
  */
 
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import api from "@/lib/api";
 import { useToast } from "@/components/ui/toast";
+import type { ApiError } from "@/api/types";
+import {
+  listApps,
+  getApp,
+  deployApp,
+  previewApp,
+  type App,
+  type AppDetail,
+  type DeployAppRequest,
+  type AppPreviewRequest,
+} from "@/api/apps";
 
-/** API 错误对象 */
-interface ApiError {
-  displayMessage?: string;
-}
-
-/** 应用商店应用信息 */
-export interface App {
-  id: number;
-  name: string;
-  display_name: string;
-  description: string | null;
-  category: string;
-  tags: string[];
-  icon: string | null;
-  website: string | null;
-  source_url: string | null;
-  architectures: string[];
-  image: string | null;
-  default_ports: { port: number; protocol?: string; description?: string }[];
-  config_schema: Record<string, unknown>;
-  version: string;
-  is_builtin: boolean;
-  type: "compose" | "container";
-  changelog: string | null;
-  backup_paths: string[];
-}
-
-/** 应用详情 */
-export interface AppDetail extends App {
-  readme: string | null;
-}
-
-/** 部署请求 */
-export interface DeployAppRequest {
-  instance_name: string;
-  config: Record<string, unknown>;
-}
-
-/** 部署响应 */
-export interface DeployAppResponse {
-  task_id: string;
-  instance_id: number;
-  status: string;
-}
-
-/** 预览请求 */
-export interface AppPreviewRequest {
-  instance_name: string;
-  config: Record<string, unknown>;
-}
-
-/** 预览响应 */
-export interface AppPreviewResponse {
-  yaml: string | null;
-  error: string | null;
-}
+// 保持既有导出，页面侧 import 路径无需变更
+export type {
+  App,
+  AppDetail,
+  DeployAppRequest,
+  DeployAppResponse,
+  AppPreviewRequest,
+  AppPreviewResponse,
+} from "@/api/apps";
 
 /**
  * 查询所有应用商店应用
@@ -69,7 +32,7 @@ export interface AppPreviewResponse {
 export function useApps(category?: string, tag?: string) {
   return useQuery<App[]>({
     queryKey: ["apps", { category, tag }],
-    queryFn: () => api.get("/apps", { params: { category, tag } }).then((r) => r.data),
+    queryFn: () => listApps({ category, tag }),
   });
 }
 
@@ -82,7 +45,7 @@ export function useApp(
 ) {
   return useQuery<AppDetail>({
     queryKey: ["apps", name],
-    queryFn: () => api.get(`/apps/${name}`).then((r) => r.data),
+    queryFn: () => getApp(name),
     enabled: options?.enabled ?? !!name,
     staleTime: options?.staleTime,
     refetchOnMount: "always",
@@ -98,13 +61,8 @@ export function useDeployApp() {
   const qc = useQueryClient();
   const toast = useToast();
   return useMutation({
-    mutationFn: ({
-      name,
-      data,
-    }: {
-      name: string;
-      data: DeployAppRequest;
-    }) => api.post<DeployAppResponse>(`/apps/${name}/deploy`, data).then((r) => r.data),
+    mutationFn: ({ name, data }: { name: string; data: DeployAppRequest }) =>
+      deployApp(name, data),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["compose", "projects"] });
     },
@@ -119,7 +77,6 @@ export function useDeployApp() {
  */
 export function useAppPreview(name: string) {
   return useMutation({
-    mutationFn: (data: AppPreviewRequest) =>
-      api.post<AppPreviewResponse>(`/apps/${name}/preview`, data).then((r) => r.data),
+    mutationFn: (data: AppPreviewRequest) => previewApp(name, data),
   });
 }

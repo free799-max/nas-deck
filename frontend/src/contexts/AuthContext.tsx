@@ -16,14 +16,7 @@ import {
   useCallback,
   useMemo,
 } from "react";
-import api from "@/lib/api";
-
-/** 用户信息类型 */
-interface User {
-  id: number;
-  username: string;
-  role: string;
-}
+import { getMe, type User } from "@/api/auth";
 
 /** AuthContext 提供的值 */
 interface AuthContextValue {
@@ -55,12 +48,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return;
     }
 
-    api
-      .get("/auth/me")
-      .then((resp) => setUser(resp.data))
+    getMe()
+      .then((user) => setUser(user))
       .catch(() => {
         // token 无效或过期，清除本地存储
-        localStorage.removeItem("token");
+        // 注意：仅当本地 token 未变更时才清除，避免竞态中误删新登录的 token
+        if (localStorage.getItem("token") === token) {
+          localStorage.removeItem("token");
+        }
       })
       .finally(() => setIsLoading(false));
   }, []);
@@ -70,8 +65,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
    */
   const login = useCallback(async (token: string) => {
     localStorage.setItem("token", token);
-    const resp = await api.get("/auth/me");
-    setUser(resp.data);
+    const user = await getMe();
+    setUser(user);
   }, []);
 
   /**

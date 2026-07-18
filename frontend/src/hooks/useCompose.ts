@@ -16,83 +16,31 @@
 
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState, useEffect, useRef, useCallback } from "react";
-import api from "@/lib/api";
 import { useToast } from "@/components/ui/toast";
-import type { ContainerInfo } from "./useDocker";
+import type { ApiError } from "@/api/types";
+import type { ContainerInfo } from "@/api/docker";
+import * as composeApi from "@/api/compose";
+import type {
+  ComposeVersion,
+  ComposeStackStatus,
+  ComposeProject,
+  ComposeProjectCreate,
+  ComposeProjectUpdate,
+  ComposeEditRequest,
+  ComposeActionRequest,
+} from "@/api/compose";
 
-/** API 错误对象 */
-interface ApiError {
-  displayMessage?: string;
-}
-
-/** Compose 版本信息 */
-export interface ComposeVersion {
-  id: number;
-  version_number: number;
-  content: string;
-  comment: string | null;
-  is_current: boolean;
-  created_by_user_id: number | null;
-  created_at: string;
-}
-
-/** Compose Stack 状态 */
-export interface ComposeStackStatus {
-  status: string;
-  service_count: number;
-  running_count: number;
-  ports: string[];
-  last_action: string | null;
-  last_action_at: string | null;
-  updated_at: string;
-}
-
-/** Compose 项目 */
-export interface ComposeProject {
-  id: number;
-  project_name: string;
-  description: string | null;
-  is_active: boolean;
-  current_version: ComposeVersion | null;
-  stack: ComposeStackStatus | null;
-  config_files: string[] | null;
-  working_dir: string | null;
-  created_at: string;
-  updated_at: string;
-}
-
-/** 创建项目请求 */
-export interface ComposeProjectCreate {
-  project_name: string;
-  description?: string | null;
-  content: string;
-}
-
-/** 更新项目请求 */
-export interface ComposeProjectUpdate {
-  description?: string | null;
-  is_active?: boolean | null;
-}
-
-/** 编辑项目并自动部署请求 */
-export interface ComposeEditRequest {
-  content: string;
-  comment?: string | null;
-  description?: string | null;
-}
-
-/** 操作请求 */
-export interface ComposeActionRequest {
-  action: "up" | "down" | "restart";
-}
-
-/** 部署/操作任务响应 */
-export interface ComposeDeployTaskResponse {
-  task_id: string;
-  project_id: number;
-  action: string;
-  status: string;
-}
+// 保持既有导出，页面侧 import 路径无需变更
+export type {
+  ComposeVersion,
+  ComposeStackStatus,
+  ComposeProject,
+  ComposeProjectCreate,
+  ComposeProjectUpdate,
+  ComposeEditRequest,
+  ComposeActionRequest,
+  ComposeDeployTaskResponse,
+} from "@/api/compose";
 
 /**
  * 查询 Compose 项目列表
@@ -102,7 +50,7 @@ export interface ComposeDeployTaskResponse {
 export function useComposeProjects() {
   return useQuery<ComposeProject[]>({
     queryKey: ["compose", "projects"],
-    queryFn: () => api.get("/docker/compose").then((r) => r.data),
+    queryFn: composeApi.listComposeProjects,
     refetchInterval: 10000,
   });
 }
@@ -116,7 +64,7 @@ export function useComposeProject(
 ) {
   return useQuery<ComposeProject>({
     queryKey: ["compose", "projects", projectId],
-    queryFn: () => api.get(`/docker/compose/${projectId}`).then((r) => r.data),
+    queryFn: () => composeApi.getComposeProject(projectId!),
     enabled: !!projectId,
     refetchInterval: options?.refetchInterval ?? false,
   });
@@ -126,11 +74,14 @@ export function useComposeProject(
  * 创建 Compose 项目（异步）
  */
 export function useCreateComposeProject() {
+  const qc = useQueryClient();
   const toast = useToast();
   return useMutation({
     mutationFn: (data: ComposeProjectCreate) =>
-      api.post<ComposeDeployTaskResponse>("/docker/compose", data).then((r) => r.data),
+      composeApi.createComposeProject(data),
     onSuccess: () => {
+      // 刷新项目列表，让新项目及时出现
+      qc.invalidateQueries({ queryKey: ["compose", "projects"] });
       toast.success("创建部署任务已启动");
     },
     onError: (error: ApiError) => {
@@ -147,7 +98,7 @@ export function useUpdateComposeProject(projectId: number) {
   const toast = useToast();
   return useMutation({
     mutationFn: (data: ComposeProjectUpdate) =>
-      api.put<ComposeProject>(`/docker/compose/${projectId}`, data).then((r) => r.data),
+      composeApi.updateComposeProject(projectId, data),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["compose", "projects"] });
       qc.invalidateQueries({ queryKey: ["compose", "projects", projectId] });
@@ -163,13 +114,15 @@ export function useUpdateComposeProject(projectId: number) {
  * 编辑 Compose 项目并自动部署（异步）
  */
 export function useEditComposeProject(projectId: number) {
+  const qc = useQueryClient();
   const toast = useToast();
   return useMutation({
     mutationFn: (data: ComposeEditRequest) =>
-      api
-        .post<ComposeDeployTaskResponse>(`/docker/compose/${projectId}/edit`, data)
-        .then((r) => r.data),
+      composeApi.editComposeProject(projectId, data),
     onSuccess: () => {
+      // 刷新项目列表与详情（含状态），避免展示旧版本信息
+      qc.invalidateQueries({ queryKey: ["compose", "projects"] });
+      qc.invalidateQueries({ queryKey: ["compose", "projects", projectId] });
       toast.success("编辑部署任务已启动");
     },
     onError: (error: ApiError) => {
@@ -186,7 +139,7 @@ export function useDeleteComposeProject() {
   const toast = useToast();
   return useMutation({
     mutationFn: (projectId: number) =>
-      api.delete(`/docker/compose/${projectId}`).then((r) => r.data),
+      composeApi.deleteComposeProject(projectId),
     onMutate: async (projectId) => {
       await qc.cancelQueries({ queryKey: ["compose", "projects"] });
       const previous = qc.getQueryData<ComposeProject[]>(["compose", "projects"]);
@@ -215,8 +168,7 @@ export function useDeleteComposeProject() {
 export function useComposeVersions(projectId: number | null) {
   return useQuery<ComposeVersion[]>({
     queryKey: ["compose", "projects", projectId, "versions"],
-    queryFn: () =>
-      api.get(`/docker/compose/${projectId}/versions`).then((r) => r.data),
+    queryFn: () => composeApi.listComposeVersions(projectId!),
     enabled: !!projectId,
   });
 }
@@ -229,11 +181,7 @@ export function useRollbackComposeVersion(projectId: number) {
   const toast = useToast();
   return useMutation({
     mutationFn: (versionId: number) =>
-      api
-        .post<ComposeVersion>(
-          `/docker/compose/${projectId}/versions/${versionId}/rollback`
-        )
-        .then((r) => r.data),
+      composeApi.rollbackComposeVersion(projectId, versionId),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["compose", "projects"] });
       qc.invalidateQueries({
@@ -254,6 +202,7 @@ export function useRollbackComposeVersion(projectId: number) {
  * 执行 Compose 操作（up/down/restart，异步）
  */
 export function useComposeAction() {
+  const qc = useQueryClient();
   const toast = useToast();
   return useMutation({
     mutationFn: ({
@@ -262,11 +211,11 @@ export function useComposeAction() {
     }: {
       projectId: number;
       action: ComposeActionRequest["action"];
-    }) =>
-      api
-        .post<ComposeDeployTaskResponse>(`/docker/compose/${projectId}/action`, { action })
-        .then((r) => r.data),
-    onSuccess: (_, { action }) => {
+    }) => composeApi.composeAction(projectId, action),
+    onSuccess: (_, { projectId, action }) => {
+      // 刷新项目列表与详情（含状态），及时反映 up/down/restart 结果
+      qc.invalidateQueries({ queryKey: ["compose", "projects"] });
+      qc.invalidateQueries({ queryKey: ["compose", "projects", projectId] });
       const actionMap: Record<string, string> = {
         up: "启动",
         down: "停止",
@@ -290,15 +239,7 @@ export function useComposeLogs(
 ) {
   return useQuery<{ logs: string }>({
     queryKey: ["compose", "projects", projectId, "logs", tail, services],
-    queryFn: () =>
-      api
-        .get(`/docker/compose/${projectId}/logs`, {
-          params: {
-            tail,
-            services: services?.join(","),
-          },
-        })
-        .then((r) => r.data),
+    queryFn: () => composeApi.getComposeLogs(projectId!, tail, services),
     enabled: !!projectId,
   });
 }
@@ -347,7 +288,7 @@ export function useComposeLogsStream(
 
     const token = localStorage.getItem("token") || "";
     const es = new EventSource(
-      `/api/docker/compose/${projectId}/logs/stream?tail=${tail}&follow=true&token=${token}`
+      `/api/docker/compose/${projectId}/logs/stream?tail=${tail}&follow=true&token=${encodeURIComponent(token)}`
     );
 
     es.onopen = () => {
@@ -391,8 +332,7 @@ export function useComposeLogsStream(
 export function useComposeStatus(projectId: number | null) {
   return useQuery<ComposeStackStatus>({
     queryKey: ["compose", "projects", projectId, "status"],
-    queryFn: () =>
-      api.get(`/docker/compose/${projectId}/status`).then((r) => r.data),
+    queryFn: () => composeApi.getComposeStatus(projectId!),
     enabled: !!projectId,
     refetchInterval: 30000,
   });
@@ -406,8 +346,7 @@ export function useComposeStatus(projectId: number | null) {
 export function useComposeProjectContainers(projectId: number | null) {
   return useQuery<ContainerInfo[]>({
     queryKey: ["compose", "projects", projectId, "containers"],
-    queryFn: () =>
-      api.get(`/docker/compose/${projectId}/containers`).then((r) => r.data),
+    queryFn: () => composeApi.getComposeProjectContainers(projectId!),
     enabled: !!projectId,
     refetchInterval: 10000,
   });

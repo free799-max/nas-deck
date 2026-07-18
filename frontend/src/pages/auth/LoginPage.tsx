@@ -19,7 +19,7 @@ import {
   ArrowRight,
   CheckCircle2,
 } from "lucide-react";
-import api from "@/lib/api";
+import * as authApi from "@/api/auth";
 import axios from "axios";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/components/ui/toast";
@@ -59,10 +59,9 @@ export function LoginPage() {
 
   /* 检查系统中是否已有用户 */
   useEffect(() => {
-    api
-      .get("/auth/has-users")
-      .then((resp) => {
-        const hasUsers = resp.data.has_users;
+    authApi
+      .hasUsers()
+      .then((hasUsers) => {
         setIsRegisterMode(!hasUsers);
       })
       .catch(() => {
@@ -87,8 +86,8 @@ export function LoginPage() {
 
     setIsLoading(true);
     try {
-      const resp = await api.post("/auth/login", { username, password });
-      await login(resp.data.access_token);
+      const resp = await authApi.login(username, password);
+      await login(resp.access_token);
       toast.success("登录成功，正在跳转...", { duration: 2000 });
       setTimeout(() => navigate("/"), 600);
     } catch {
@@ -117,10 +116,10 @@ export function LoginPage() {
     setIsLoading(true);
     try {
       // 注册
-      await api.post("/auth/register", { username, password });
+      await authApi.register(username, password);
       // 自动登录
-      const loginResp = await api.post("/auth/login", { username, password });
-      await login(loginResp.data.access_token);
+      const loginResp = await authApi.login(username, password);
+      await login(loginResp.access_token);
       toast.success("注册成功，正在进入系统...", { duration: 2000 });
       setTimeout(() => navigate("/"), 600);
     } catch (err) {

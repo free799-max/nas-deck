@@ -14,260 +14,65 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState, useEffect, useRef, useCallback } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
-import api from "@/lib/api";
 import { useToast } from "@/components/ui/toast";
 import { formatBytes } from "@/lib/utils";
 import { updatePullHistoryItem } from "@/lib/docker-progress";
+import type { ApiError } from "@/api/types";
+import * as dockerApi from "@/api/docker";
+import type {
+  BatchDeleteResult,
+  BatchImageDeleteRequest,
+  ContainerActionResponse,
+  ContainerBatchActionRequest,
+  ContainerCreateRequest,
+  ContainerDetail,
+  ContainerExecRequest,
+  ContainerInfo,
+  HostInfo,
+  ImageDetail,
+  ImageInfo,
+  ImagePruneResult,
+  ImageSearchPage,
+  ImageTag,
+  PullProgressEvent,
+  Registry,
+  RegistryCreate,
+  RegistryUpdate,
+} from "@/api/docker";
 
-/** API 错误对象 */
-interface ApiError {
-  displayMessage?: string;
-}
-
-/** 批量删除镜像响应 */
-interface BatchDeleteResult {
-  deleted: string[];
-  failed: { id: string; reason: string }[];
-}
-
-/** 清理未使用镜像响应 */
-interface PruneResult {
-  deleted: string[];
-  space_reclaimed: number;
-}
-
-/**
- * 镜像标签信息
- */
-export interface ImageTag {
-  name: string;
-  last_updated: string;
-  size: number;
-  digest: string;
-}
-
-/**
- * 拉取任务响应
- */
-export interface PullTaskResponse {
-  task_id: string;
-  image: string;
-  status: string;
-}
-
-/**
- * 单层拉取进度
- */
-export interface PullProgressLayer {
-  id: string;
-  status: string;
-  status_text: string;
-  current: number;
-  total: number;
-  progress_text: string;
-  percentage: number;
-  speed: number;
-}
-
-/**
- * 拉取进度事件
- */
-export interface PullProgressEvent {
-  total_layers: number;
-  completed_layers: number;
-  current_layer: string;
-  percentage: number;
-  status: string;
-  speed: number;
-  total_size: number;
-  downloaded_size: number;
-  size_text: string;
-  layers: PullProgressLayer[];
-}
-
-/**
- * 拉取任务完整状态
- */
-export interface PullTaskStatus {
-  task_id: string;
-  image: string;
-  status: "pulling" | "completed" | "failed";
-  progress: PullProgressEvent;
-  error: string | null;
-  created_at: string;
-  updated_at: string;
-  completed_at: string | null;
-}
-
-/**
- * 容器信息接口
- *
- * 描述 Docker 容器的基本信息，包括 ID、名称、状态、健康状态和使用的镜像。
- */
-export interface ContainerInfo {
-  /** 容器唯一标识 */
-  id: string;
-  /** 容器名称 */
-  name: string;
-  /** 容器运行状态（如 running、exited 等） */
-  status: string;
-  /** 状态中文摘要 */
-  state: string;
-  /** 容器健康状态（如 healthy、unhealthy 等） */
-  health: string;
-  /** 容器使用的镜像名称 */
-  image: string;
-  /** 端口映射摘要 */
-  ports: string;
-  /** 容器标签 */
-  labels: Record<string, string>;
-  /** 创建时间 */
-  created: string;
-}
-
-/** 容器端口绑定详情 */
-export interface ContainerPortBinding {
-  container_port: string;
-  host_ip: string;
-  host_port: string;
-}
-
-/** 容器挂载详情 */
-export interface ContainerMount {
-  type: string;
-  source: string;
-  destination: string;
-  mode: string;
-  rw: boolean;
-}
-
-/** 容器网络信息 */
-export interface ContainerNetwork {
-  name: string;
-  ip_address: string;
-  gateway: string;
-  mac_address: string;
-}
-
-/** 容器完整详情 */
-export interface ContainerDetail {
-  id: string;
-  name: string;
-  image: string;
-  status: string;
-  state: string;
-  health: string;
-  command: string[] | null;
-  entrypoint: string[] | null;
-  env: string[] | null;
-  working_dir: string | null;
-  user: string | null;
-  labels: Record<string, string> | null;
-  ports: ContainerPortBinding[];
-  mounts: ContainerMount[];
-  networks: ContainerNetwork[];
-  restart_policy: string;
-  network_mode: string;
-  privileged: boolean;
-  created: string;
-  started_at: string;
-  finished_at: string;
-  exit_code: number;
-  error: string;
-}
-
-/** 容器操作响应 */
-export interface ContainerActionResponse {
-  status: string;
-  error: string;
-}
-
-/** 创建容器请求 */
-export interface ContainerCreateRequest {
-  image: string;
-  name?: string | null;
-  command?: string | null;
-  entrypoint?: string | null;
-  ports?: { container: string; host: string }[];
-  environment?: { key: string; value: string }[];
-  volumes?: { host: string; container: string; mode?: "rw" | "ro" }[];
-  network?: string | null;
-  labels?: { key: string; value: string }[];
-  restart_policy?: "no" | "unless-stopped" | "always" | "on-failure";
-  auto_start?: boolean;
-}
-
-/** 批量容器操作请求 */
-export interface ContainerBatchActionRequest {
-  ids: string[];
-  action: "start" | "stop" | "restart" | "remove";
-}
-
-/** 容器执行命令请求 */
-export interface ContainerExecRequest {
-  command: string;
-  workdir?: string | null;
-  user?: string | null;
-  environment?: { key: string; value: string }[];
-}
-
-/** 容器执行命令响应 */
-export interface ContainerExecResponse {
-  exit_code: number;
-  output: string;
-}
-
-/** Docker 引擎版本信息 */
-export interface DockerVersionInfo {
-  version: string;
-  api_version: string;
-  go_version: string;
-  os: string;
-  arch: string;
-  kernel_version: string;
-  build_time: string;
-}
-
-/** 宿主机资源信息 */
-export interface ResourceInfo {
-  cpu_cores: number;
-  memory_total: number;
-  disk_total: number;
-  disk_used: number;
-  disk_free: number;
-  disk_usage_percent: number;
-}
-
-/** Docker 统计信息 */
-export interface DockerStatsInfo {
-  containers_total: number;
-  containers_running: number;
-  containers_paused: number;
-  containers_stopped: number;
-  images: number;
-}
-
-/** Docker 网络信息 */
-export interface NetworkInfo {
-  id: string;
-  name: string;
-  driver: string;
-  scope: string;
-}
-
-/** Docker 宿主机综合信息 */
-export interface HostInfo {
-  hostname: string;
-  os: string;
-  arch: string;
-  kernel_version: string;
-  docker_version: DockerVersionInfo;
-  resources: ResourceInfo;
-  stats: DockerStatsInfo;
-  storage_driver: string;
-  docker_root_dir: string;
-  networks: NetworkInfo[];
-}
+// 保持既有导出，页面侧 import 路径无需变更
+export type {
+  BatchImageDeleteRequest,
+  ContainerActionResponse,
+  ContainerBatchActionRequest,
+  ContainerCreateRequest,
+  ContainerDetail,
+  ContainerExecRequest,
+  ContainerExecResponse,
+  ContainerInfo,
+  ContainerMount,
+  ContainerNetwork,
+  ContainerPortBinding,
+  DockerStatsInfo,
+  DockerVersionInfo,
+  HostInfo,
+  ImageDetail,
+  ImageInfo,
+  ImageLayer,
+  ImagePruneResult,
+  ImageSearchPage,
+  ImageSearchResult,
+  ImageTag,
+  NetworkInfo,
+  PullProgressEvent,
+  PullProgressLayer,
+  PullTaskResponse,
+  PullTaskStatus,
+  Registry,
+  RegistryCreate,
+  RegistryUpdate,
+  ResourceInfo,
+} from "@/api/docker";
 
 /**
  * 查询 Docker 服务状态
@@ -279,7 +84,7 @@ export interface HostInfo {
 export function useDockerStatus() {
   return useQuery<{ available: boolean }>({
     queryKey: ["docker", "status"],
-    queryFn: () => api.get("/docker/status").then((r) => r.data),
+    queryFn: dockerApi.getDockerStatus,
   });
 }
 
@@ -293,7 +98,7 @@ export function useDockerStatus() {
 export function useContainers() {
   return useQuery<ContainerInfo[]>({
     queryKey: ["docker", "containers"],
-    queryFn: () => api.get("/docker/containers").then((r) => r.data),
+    queryFn: dockerApi.listContainers,
     refetchInterval: 10000,
   });
 }
@@ -310,26 +115,43 @@ export function useContainerAction() {
   // 获取 QueryClient 实例，用于手动刷新缓存
   const qc = useQueryClient();
   const toast = useToast();
+  // 短时轮询定时器引用，组件卸载时清理，避免无意义请求
+  const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  useEffect(
+    () => () => {
+      if (pollTimerRef.current) {
+        clearInterval(pollTimerRef.current);
+      }
+    },
+    []
+  );
   return useMutation({
-    // 向容器操作接口发送 POST 请求
-    mutationFn: ({ id, action }: { id: string; action: string }) =>
-      api
-        .post<ContainerActionResponse>(`/docker/containers/${id}/action`, { action })
-        .then((r) => r.data),
+    // 向容器操作接口发送 POST 请求（action 与后端 ContainerAction 保持一致）
+    mutationFn: ({
+      id,
+      action,
+    }: {
+      id: string;
+      action: "start" | "stop" | "restart";
+    }): Promise<ContainerActionResponse> => dockerApi.containerAction(id, action),
     // 操作成功后，使容器列表缓存失效以触发重新查询，并短时轮询确保状态稳定
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["docker", "containers"] });
       toast.success("操作成功");
 
       // 短时轮询：500ms 间隔，最多 6 次（3 秒），让容器状态尽快同步到最新
+      if (pollTimerRef.current) {
+        clearInterval(pollTimerRef.current);
+      }
       let count = 0;
       const maxPolls = 6;
       const interval = 500;
-      const timer = setInterval(() => {
+      pollTimerRef.current = setInterval(() => {
         count += 1;
         qc.refetchQueries({ queryKey: ["docker", "containers"] });
-        if (count >= maxPolls) {
-          clearInterval(timer);
+        if (count >= maxPolls && pollTimerRef.current) {
+          clearInterval(pollTimerRef.current);
+          pollTimerRef.current = null;
         }
       }, interval);
     },
@@ -349,7 +171,7 @@ export function useCreateContainer() {
   const toast = useToast();
   return useMutation({
     mutationFn: (data: ContainerCreateRequest) =>
-      api.post<ContainerInfo>("/docker/containers", data).then((r) => r.data),
+      dockerApi.createContainer(data),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["docker", "containers"] });
       toast.success("容器创建成功");
@@ -370,11 +192,8 @@ export function useBatchContainerAction() {
   const toast = useToast();
   return useMutation({
     mutationFn: (data: ContainerBatchActionRequest) =>
-      api.post<{ succeeded: string[]; failed: { id: string; reason: string }[] }>(
-        "/docker/containers/batch-action",
-        data
-      ),
-    onSuccess: (res, variables) => {
+      dockerApi.batchContainerAction(data),
+    onSuccess: (result, variables) => {
       qc.invalidateQueries({ queryKey: ["docker", "containers"] });
       const actionMap: Record<string, string> = {
         start: "启动",
@@ -383,8 +202,8 @@ export function useBatchContainerAction() {
         remove: "删除",
       };
       const actionText = actionMap[variables.action] || variables.action;
-      const succeeded = res.data?.succeeded?.length || 0;
-      const failed = res.data?.failed?.length || 0;
+      const succeeded = result.succeeded?.length || 0;
+      const failed = result.failed?.length || 0;
       if (succeeded > 0) {
         toast.success(`${actionText} ${succeeded} 个容器成功`);
       }
@@ -407,10 +226,7 @@ export function useBatchContainerAction() {
 export function useContainerDetail(container_id: string | null) {
   return useQuery<ContainerDetail>({
     queryKey: ["docker", "containers", "detail", container_id],
-    queryFn: () =>
-      api
-        .get<ContainerDetail>(`/docker/containers/${container_id}/detail`)
-        .then((r) => r.data),
+    queryFn: () => dockerApi.getContainerDetail(container_id!),
     enabled: !!container_id,
   });
 }
@@ -461,7 +277,7 @@ export function useContainerLogsStream(
 
     const token = localStorage.getItem("token") || "";
     const es = new EventSource(
-      `/api/docker/containers/${container_id}/logs/stream?tail=${tail}&follow=true&timestamps=true&token=${token}`
+      `/api/docker/containers/${container_id}/logs/stream?tail=${tail}&follow=true&timestamps=true&token=${encodeURIComponent(token)}`
     );
 
     es.onopen = () => {
@@ -512,16 +328,8 @@ export function useContainerLogsStream(
 export function useContainerExec() {
   const toast = useToast();
   return useMutation({
-    mutationFn: ({
-      id,
-      data,
-    }: {
-      id: string;
-      data: ContainerExecRequest;
-    }) =>
-      api
-        .post<ContainerExecResponse>(`/docker/containers/${id}/exec`, data)
-        .then((r) => r.data),
+    mutationFn: ({ id, data }: { id: string; data: ContainerExecRequest }) =>
+      dockerApi.containerExec(id, data),
     onSuccess: () => {
       toast.success("命令执行完成");
     },
@@ -610,7 +418,7 @@ export function useContainerTerminal(
 
     ws.onclose = () => {
       setConnected(false);
-      terminal.write("\r\n[33m[连接已关闭][0m\r\n");
+      terminal.write("\r\n\x1b[33m[连接已关闭]\x1b[0m\r\n");
     };
 
     ws.onerror = () => {
@@ -703,125 +511,11 @@ export function useContainerTerminal(
 export function useDockerHostInfo() {
   return useQuery<HostInfo>({
     queryKey: ["docker", "host", "info"],
-    queryFn: () => api.get("/docker/host/info").then((r) => r.data),
+    queryFn: dockerApi.getDockerHostInfo,
   });
 }
 
 /* ===================== 镜像管理 ===================== */
-
-/** 镜像搜索接口配置 */
-export interface Registry {
-  id: number;
-  name: string;
-  search_api_url: string;
-  mirror_url: string | null;
-  mirror_urls: string[] | null;
-  enable_mirror: boolean;
-  username: string | null;
-  trust_ssl_self_signed: boolean;
-  is_default: boolean;
-  created_at: string;
-  updated_at: string;
-}
-
-/** 创建镜像搜索接口配置请求 */
-export interface RegistryCreate {
-  name: string;
-  search_api_url: string;
-  mirror_url?: string | null;
-  mirror_urls?: string[] | null;
-  enable_mirror?: boolean;
-  username?: string | null;
-  password?: string | null;
-  trust_ssl_self_signed?: boolean;
-}
-
-/** 更新镜像搜索接口配置请求 */
-export interface RegistryUpdate {
-  name?: string;
-  search_api_url?: string;
-  mirror_url?: string | null;
-  mirror_urls?: string[] | null;
-  enable_mirror?: boolean;
-  username?: string | null;
-  password?: string | null;
-  trust_ssl_self_signed?: boolean;
-}
-
-/** 批量删除镜像请求 */
-export interface BatchImageDeleteRequest {
-  ids: string[];
-  force?: boolean;
-}
-
-/** 本地镜像信息（扁平化，每行对应一个 tag） */
-export interface ImageInfo {
-  id: string;
-  image_id: string;
-  name: string;
-  tag: string;
-  full_tag: string;
-  size: number;
-  created: string;
-  containers: number;
-}
-
-/** 镜像层表格数据 */
-export interface ImageLayer {
-  order: number;
-  size: number;
-  layer: string;
-}
-
-/** 镜像完整元数据 */
-export interface ImageDetail {
-  id: string;
-  name: string;
-  tag: string;
-  full_tag: string;
-  size: number;
-  created: string;
-  architecture: string;
-  os: string;
-  cmd: string[] | null;
-  entrypoint: string[] | null;
-  env: string[] | null;
-  exposed_ports: string[] | null;
-  volumes: string[] | null;
-  working_dir: string | null;
-  user: string | null;
-  labels: Record<string, string> | null;
-  layers: string[] | null;
-  history: string[] | null;
-  parent: string | null;
-  docker_version: string | null;
-  build: string | null;
-  layers_table: ImageLayer[] | null;
-}
-
-/** 移除未使用镜像结果 */
-export interface ImagePruneResult {
-  deleted: string[];
-  space_reclaimed: number;
-}
-
-/** Docker Hub 搜索结果 */
-export interface ImageSearchResult {
-  name: string;
-  description: string;
-  star_count: number;
-  pull_count: number;
-  official: boolean;
-  is_automated: boolean;
-}
-
-/** 镜像搜索分页结果 */
-export interface ImageSearchPage {
-  total: number;
-  page: number;
-  page_size: number;
-  results: ImageSearchResult[];
-}
 
 /**
  * 查询本地镜像列表
@@ -831,7 +525,7 @@ export interface ImageSearchPage {
 export function useImages() {
   return useQuery<ImageInfo[]>({
     queryKey: ["docker", "images"],
-    queryFn: () => api.get("/docker/images").then((r) => r.data),
+    queryFn: dockerApi.listImages,
   });
 }
 
@@ -845,7 +539,7 @@ export function useRemoveImage() {
   const toast = useToast();
   return useMutation({
     mutationFn: ({ id, force }: { id: string; force?: boolean }) =>
-      api.delete(`/docker/images/${id}`, { params: { force } }),
+      dockerApi.removeImage(id, force),
     onSuccess: (_, { id }) => {
       qc.setQueryData<ImageInfo[]>(["docker", "images"], (old) =>
         old?.filter((img) => img.image_id !== id) ?? []
@@ -869,10 +563,7 @@ export function useRemoveImage() {
 export function useSearchImages(q: string, page: number = 1) {
   return useQuery<ImageSearchPage>({
     queryKey: ["docker", "images", "search", q, page],
-    queryFn: () =>
-      api
-        .get("/docker/images/search", { params: { q, page } })
-        .then((r) => r.data),
+    queryFn: () => dockerApi.searchImages(q, page),
     enabled: !!q.trim(),
     staleTime: 60_000,
     placeholderData: (previousData) => previousData,
@@ -888,7 +579,7 @@ export function usePullImage() {
   const qc = useQueryClient();
   const toast = useToast();
   return useMutation({
-    mutationFn: (image: string) => api.post("/docker/images/pull", { image }),
+    mutationFn: (image: string) => dockerApi.pullImage(image),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["docker", "images"], exact: true });
       toast.success("镜像拉取成功");
@@ -907,7 +598,7 @@ export function usePullImage() {
 export function useRegistries() {
   return useQuery<Registry[]>({
     queryKey: ["docker", "registries"],
-    queryFn: () => api.get("/docker/registries").then((r) => r.data),
+    queryFn: dockerApi.listRegistries,
   });
 }
 
@@ -920,7 +611,7 @@ export function useCreateRegistry() {
   const qc = useQueryClient();
   const toast = useToast();
   return useMutation({
-    mutationFn: (data: RegistryCreate) => api.post("/docker/registries", data),
+    mutationFn: (data: RegistryCreate) => dockerApi.createRegistry(data),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["docker", "registries"] });
       toast.success("配置已创建");
@@ -941,7 +632,7 @@ export function useUpdateRegistry() {
   const toast = useToast();
   return useMutation({
     mutationFn: ({ id, data }: { id: number; data: RegistryUpdate }) =>
-      api.put(`/docker/registries/${id}`, data),
+      dockerApi.updateRegistry(id, data),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["docker", "registries"] });
       toast.success("配置已更新");
@@ -961,7 +652,7 @@ export function useDeleteRegistry() {
   const qc = useQueryClient();
   const toast = useToast();
   return useMutation({
-    mutationFn: (id: number) => api.delete(`/docker/registries/${id}`),
+    mutationFn: (id: number) => dockerApi.deleteRegistry(id),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["docker", "registries"] });
       toast.success("配置已删除");
@@ -981,8 +672,7 @@ export function useSetDefaultRegistry() {
   const qc = useQueryClient();
   const toast = useToast();
   return useMutation({
-    mutationFn: (id: number) =>
-      api.post(`/docker/registries/${id}/set-default`),
+    mutationFn: (id: number) => dockerApi.setDefaultRegistry(id),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["docker", "registries"] });
       toast.success("默认配置已切换");
@@ -1003,14 +693,14 @@ export function useBatchRemoveImages() {
   const toast = useToast();
   return useMutation({
     mutationFn: (data: BatchImageDeleteRequest) =>
-      api.post("/docker/images/batch-delete", data),
-    onSuccess: (res: { data?: BatchDeleteResult }) => {
-      const deletedTags: string[] = res.data?.deleted || [];
+      dockerApi.batchRemoveImages(data),
+    onSuccess: (result: BatchDeleteResult) => {
+      const deletedTags: string[] = result.deleted || [];
       qc.setQueryData<ImageInfo[]>(["docker", "images"], (old) =>
         old?.filter((img) => !deletedTags.includes(img.full_tag)) ?? []
       );
       qc.invalidateQueries({ queryKey: ["docker", "images"], exact: true });
-      const failed = res.data?.failed?.length || 0;
+      const failed = result.failed?.length || 0;
       if (deletedTags.length > 0) {
         toast.success(`已删除 ${deletedTags.length} 个镜像`);
       }
@@ -1033,8 +723,7 @@ export function useBatchRemoveImages() {
 export function useImageDetail(image_id: string | null) {
   return useQuery<ImageDetail>({
     queryKey: ["docker", "images", "detail", image_id],
-    queryFn: () =>
-      api.get(`/docker/images/${image_id}/detail`).then((r) => r.data),
+    queryFn: () => dockerApi.getImageDetail(image_id!),
     enabled: !!image_id,
   });
 }
@@ -1048,10 +737,7 @@ export function useImageDetail(image_id: string | null) {
 export function useImageTags(image: string) {
   return useQuery<ImageTag[]>({
     queryKey: ["docker", "images", "tags", image],
-    queryFn: () =>
-      api
-        .get("/docker/images/tags", { params: { image } })
-        .then((r) => r.data),
+    queryFn: () => dockerApi.getImageTags(image),
     enabled: !!image.trim(),
     staleTime: 60_000,
   });
@@ -1067,10 +753,7 @@ export function useImageTags(image: string) {
 export function usePullImageStream() {
   const toast = useToast();
   return useMutation({
-    mutationFn: (image: string) =>
-      api
-        .post<PullTaskResponse>("/docker/images/pull", { image })
-        .then((r) => r.data),
+    mutationFn: (image: string) => dockerApi.pullImage(image),
     onError: (error: unknown) => {
       const err = error as { displayMessage?: string };
       toast.error(err.displayMessage || "启动拉取失败");
@@ -1165,7 +848,7 @@ export function useAllPullProgress(taskIds: string[]) {
 
         const token = localStorage.getItem("token");
         const es = new EventSource(
-          `/api/docker/images/pull/${taskId}/events?token=${token || ""}`
+          `/api/docker/images/pull/${taskId}/events?token=${encodeURIComponent(token || "")}`
         );
         esMap[taskId] = es;
 
@@ -1228,11 +911,10 @@ export function useAllPullProgress(taskIds: string[]) {
       tryConnect();
 
       // 通过 REST API 获取当前状态（保底 + 恢复）
-      api
-        .get<PullTaskStatus>(`/docker/images/pull/${taskId}/status`)
-        .then((r) => {
+      dockerApi
+        .getPullTaskStatus(taskId)
+        .then((task) => {
           if (!mountedRef.current) return;
-          const task = r.data;
 
           setStates((prev) => {
             const existing = prev[taskId];
@@ -1397,14 +1079,14 @@ export function usePruneImages() {
   const qc = useQueryClient();
   const toast = useToast();
   return useMutation({
-    mutationFn: () => api.post("/docker/images/prune"),
-    onSuccess: (res: { data?: PruneResult }) => {
-      const deletedTags: string[] = res.data?.deleted || [];
+    mutationFn: () => dockerApi.pruneImages(),
+    onSuccess: (result: ImagePruneResult) => {
+      const deletedTags: string[] = result.deleted || [];
       qc.setQueryData<ImageInfo[]>(["docker", "images"], (old) =>
         old?.filter((img) => !deletedTags.includes(img.full_tag)) ?? []
       );
       qc.invalidateQueries({ queryKey: ["docker", "images"], exact: true });
-      const space = res.data?.space_reclaimed || 0;
+      const space = result.space_reclaimed || 0;
       if (deletedTags.length > 0) {
         toast.success(`已清理 ${deletedTags.length} 个未使用镜像，释放 ${formatBytes(space)}`);
       } else {

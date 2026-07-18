@@ -17,8 +17,13 @@ import { Label } from "@/components/ui/label";
 import { SchemaForm } from "@/components/SchemaForm";
 import { CodeBlock } from "@/components/ui/code-block";
 import { useToast } from "@/components/ui/toast";
-import api from "@/lib/api";
-import { generatePassword, sanitizeInstanceName, slugify } from "@/lib/utils";
+import { getApp } from "@/api/apps";
+import { getImageTags } from "@/api/docker";
+import { sanitizeInstanceName, slugify } from "@/lib/utils";
+import {
+  extractDefaults,
+  fillEmptyPasswords,
+} from "@/lib/schema-utils";
 import { useAppPreview, type AppPreviewRequest } from "@/hooks/useApps";
 import type { App } from "@/hooks/useApps";
 import type { SchemaProperty } from "@/components/SchemaForm";
@@ -32,79 +37,6 @@ interface AppDeployDialogProps {
     config: Record<string, unknown>;
   }) => void;
   isDeploying?: boolean;
-}
-
-function extractDefaults(schema: Record<string, unknown>): Record<string, unknown> {
-  const defaults: Record<string, unknown> = {};
-  const properties = schema?.properties as
-    | Record<string, { default?: unknown }>
-    | undefined;
-  const required = new Set((schema?.required as string[] | undefined) || []);
-  if (properties) {
-    for (const [key, prop] of Object.entries(properties)) {
-      if (prop && "default" in prop) {
-        defaults[key] = prop.default;
-      } else if (required.has(key)) {
-        // 必填项若无默认值，先用空字符串占位，避免 schema 校验立即失败
-        defaults[key] = "";
-      }
-    }
-  }
-  return defaults;
-}
-
-interface SchemaPropertyWithItems extends Record<string, unknown> {
-  format?: string;
-  type?: string;
-  items?: {
-    properties?: Record<string, SchemaPropertyWithItems>;
-  };
-  default?: unknown;
-}
-
-/** 遍历 defaults，为空密码字段自动生成密码 */
-function fillEmptyPasswords(
-  schema: Record<string, unknown>,
-  defaults: Record<string, unknown>
-): Record<string, unknown> {
-  const properties = schema?.properties as
-    | Record<string, SchemaPropertyWithItems>
-    | undefined;
-  if (!properties) return defaults;
-
-  const filled = structuredClone(defaults);
-
-  for (const [key, prop] of Object.entries(properties)) {
-    if (prop.format === "password") {
-      const value = filled[key];
-      if (value === "" || value === undefined || value === null) {
-        filled[key] = generatePassword();
-      }
-      continue;
-    }
-
-    if (
-      prop.type === "array" &&
-      prop.items?.properties &&
-      "key" in prop.items.properties &&
-      "value" in prop.items.properties
-    ) {
-      const rows = Array.isArray(filled[key]) ? filled[key] as Record<string, unknown>[] : [];
-      filled[key] = rows.map((row) => {
-        const keyValue = String(row?.key || "").toLowerCase();
-        const value = row?.value;
-        if (
-          (keyValue.includes("password") || keyValue.includes("pass")) &&
-          (value === "" || value === undefined || value === null)
-        ) {
-          return { ...row, value: generatePassword() };
-        }
-        return row;
-      });
-    }
-  }
-
-  return filled;
 }
 
 function useDebouncedPreview(
@@ -159,26 +91,32 @@ export function AppDeployDialog({
   const [app, setApp] = useState<App | null>(null);
   const [loading, setLoading] = useState(false);
   const [fetchError, setFetchError] = useState(false);
+  const [fetchErrorMessage, setFetchErrorMessage] = useState<string | null>(null);
 
   useEffect(() => {
     if (!open || !propApp?.name) {
       setApp(null);
       setFetchError(false);
+      setFetchErrorMessage(null);
       return;
     }
 
     const controller = new AbortController();
     setLoading(true);
     setFetchError(false);
+    setFetchErrorMessage(null);
 
-    api
-      .get<App>(`/apps/${propApp.name}`, { signal: controller.signal })
-      .then((response) => {
-        setApp(response.data);
+    getApp(propApp.name, controller.signal)
+      .then((appDetail) => {
+        setApp(appDetail);
       })
       .catch((err) => {
         if (err?.code !== "ERR_CANCELED") {
           setFetchError(true);
+          setFetchErrorMessage(
+            err?.displayMessage || err?.message || "请求失败"
+          );
+          console.error("获取应用详情失败:", err);
         }
       })
       .finally(() => {
@@ -217,13 +155,9 @@ export function AppDeployDialog({
     const controller = new AbortController();
     setImageTagsLoading(true);
 
-    api
-      .get<{ name: string }[]>("/docker/images/tags", {
-        params: { image: appImage },
-        signal: controller.signal,
-      })
-      .then((response) => {
-        setImageTags(response.data.map((tag) => tag.name));
+    getImageTags(appImage, controller.signal)
+      .then((tags) => {
+        setImageTags(tags.map((tag) => tag.name));
       })
       .catch(() => {
         setImageTags([]);
@@ -265,8 +199,13 @@ export function AppDeployDialog({
           <DialogHeader className="px-6 pt-5 pb-3 flex-shrink-0">
             <DialogTitle>加载失败</DialogTitle>
           </DialogHeader>
-          <div className="flex-1 min-h-0 px-6 py-8 flex items-center justify-center">
+          <div className="flex-1 min-h-0 px-6 py-8 flex flex-col items-center justify-center gap-2">
             <p className="text-sm text-muted-foreground">无法获取应用详情，请刷新页面重试</p>
+            {fetchErrorMessage && (
+              <p className="text-xs text-destructive max-w-md text-center break-all">
+                {fetchErrorMessage}
+              </p>
+            )}
           </div>
         </DialogContent>
       </Dialog>
@@ -335,6 +274,7 @@ export function AppDeployDialog({
               <CodeBlock
                 code={error || yaml}
                 emptyText="加载预览中…"
+                language="yaml"
               />
               {error && (
                 <p className="mt-2 text-xs text-destructive">
