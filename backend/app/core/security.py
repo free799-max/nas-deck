@@ -81,6 +81,18 @@ async def get_current_user(
     return user
 
 
+async def require_admin(
+    current_user=Depends(get_current_user),
+):
+    """FastAPI 依赖注入：要求当前用户为管理员。
+
+    非管理员时抛出 403 异常。
+    """
+    if current_user.role != "admin":
+        raise APIException("需要管理员权限", 403)
+    return current_user
+
+
 async def get_current_user_sse(
     credentials: HTTPAuthorizationCredentials | None = Depends(security_optional),
     token: str | None = Query(None),

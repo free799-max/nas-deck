@@ -172,10 +172,10 @@ DockerComposeProject 1--1 DockerComposeStack
 
 - 内置/本地应用图标统一放在 `frontend/public/icons/apps/<app-name>.svg`，Vite 构建时会自动复制到 `dist/icons/apps/`。
 - 前端统一使用 `frontend/src/pages/apps/AppIcon.tsx` 渲染图标：
-  - 仅当 `app.icon` 为 `http/https` 外链时直接使用；
-  - 其他情况（本地路径或空）一律回退到 `/icons/apps/${app.name}.svg`。
-- 后端**不再提供** `/api/apps/{name}/icon` 图标文件接口；`apps.icon` 字段仅用于外部图标 URL。
-- 新增或替换图标时，无需修改数据库，只要按应用名放置/替换 svg 文件即可。
+  - 当 `app.icon` 为 `http/https` 外链或以 `/` 开头的本地路径（如后端上传图标接口 `/api/apps/{name}/icon`）时直接使用；
+  - 其他情况（空值）一律回退到 `/icons/apps/${app.name}.svg`。
+- **用户上传的图标**例外：通过 `POST /api/apps/{name}/icon`（仅管理员）上传，后端保存到 `APP_ICON_DIR`（默认 `./data/app-icons/<name>.<ext>`），并由 `GET /api/apps/{name}/icon` 匿名提供（`<img>` 标签无法携带 Bearer token）；上传后 `apps.icon` 自动更新为该接口路径。内置图标仍不走后端接口。
+- 新增或替换内置图标时，无需修改数据库，只要按应用名放置/替换 svg 文件即可。
 
 ## 应用客户端与认证检测
 

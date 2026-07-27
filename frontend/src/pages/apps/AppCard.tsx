@@ -7,6 +7,7 @@
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Pencil } from "lucide-react";
 import { AppIcon } from "./AppIcon";
 import type { App } from "@/hooks/useApps";
 
@@ -14,9 +15,11 @@ interface AppCardProps {
   app: App;
   onDeploy: (app: App) => void;
   onDetail: (app: App) => void;
+  /** 编辑入口（仅管理员显示） */
+  onEdit?: (app: App) => void;
 }
 
-export function AppCard({ app, onDeploy, onDetail }: AppCardProps) {
+export function AppCard({ app, onDeploy, onDetail, onEdit }: AppCardProps) {
   return (
     <Card
       className="rounded-xl p-5 min-h-[140px] border border-border/80 shadow-sm hover:shadow-[0_4px_14px_rgba(0,0,0,0.08)] hover:border-border transition-all cursor-pointer"
@@ -55,17 +58,33 @@ export function AppCard({ app, onDeploy, onDetail }: AppCardProps) {
               ))}
             </div>
 
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={(e) => {
-                e.stopPropagation();
-                onDeploy(app);
-              }}
-              className="rounded-full px-4 h-7 text-xs border-primary/30 text-primary hover:bg-primary/5 hover:text-primary hover:border-primary/40"
-            >
-              安装
-            </Button>
+            <div className="flex items-center gap-1.5 shrink-0">
+              {onEdit && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onEdit(app);
+                  }}
+                  className="rounded-full h-7 w-7 p-0 text-muted-foreground hover:text-primary hover:bg-primary/5"
+                  title="编辑应用"
+                >
+                  <Pencil className="h-3.5 w-3.5" />
+                </Button>
+              )}
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onDeploy(app);
+                }}
+                className="rounded-full px-4 h-7 text-xs border-primary/30 text-primary hover:bg-primary/5 hover:text-primary hover:border-primary/40"
+              >
+                安装
+              </Button>
+            </div>
           </div>
         </div>
       </CardContent>

@@ -28,6 +28,7 @@ import { cn, sanitizeInstanceName, slugify } from "@/lib/utils";
 import {
   extractDefaults,
   fillEmptyPasswords,
+  mergeSharedConfig,
 } from "@/lib/schema-utils";
 import { AppIcon } from "../apps/AppIcon";
 import { Check, ChevronRight, ChevronLeft, ChevronUp, ChevronDown } from "lucide-react";
@@ -129,7 +130,7 @@ export function AutomationDeployWizard({
 
   // 进入确认步骤后，并发加载各选中的应用 Compose YAML 预览
   useEffect(() => {
-    if (step !== "confirm") return;
+    if (step !== "confirm" || !orchestration) return;
 
     const projectName = slugify(instanceName);
     if (!projectName || selectedAppList.length === 0) return;
@@ -148,7 +149,13 @@ export function AutomationDeployWizard({
           return { appName, yaml: "", error: "未找到应用信息" };
         }
         const config = appConfigs[appName] || {};
-        const mergedConfig = { ...sharedConfig, ...config };
+        const mergedConfig = mergeSharedConfig(
+          sharedConfig,
+          config,
+          orchestration.shared_config_schema as Record<string, unknown>,
+          app.config_schema as Record<string, unknown>,
+          appName
+        );
         const subInstanceName = `${projectName}-${appName}`;
         try {
           const res = await previewApp(
@@ -194,7 +201,7 @@ export function AutomationDeployWizard({
       cancelled = true;
       controller.abort();
     };
-  }, [step, instanceName, selectedAppList, appDetailsMap, appConfigs, sharedConfig]);
+  }, [step, instanceName, selectedAppList, appDetailsMap, appConfigs, sharedConfig, orchestration]);
 
   if (!orchestration) return null;
 

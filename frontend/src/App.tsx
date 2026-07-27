@@ -13,6 +13,7 @@ import { AppLayout } from "./layouts/AppLayout";
 import { LoginPage } from "./pages/auth/LoginPage";
 import { DashboardPage } from "./pages/dashboard/DashboardPage";
 import { AppsPage } from "./pages/apps/AppsPage";
+import { AppEditPage } from "./pages/apps/edit/AppEditPage";
 import { AutomationCategoriesPage } from "./pages/automation/AutomationCategoriesPage";
 import { AutomationCategoryPage } from "./pages/automation/AutomationCategoryPage";
 import { DockerPage } from "./pages/docker/containers/DockerPage";
@@ -74,6 +75,8 @@ export default function App() {
                   {/* 核心入口 */}
                   <Route path="/" element={<DashboardPage />} />
                   <Route path="/appstore" element={<AppsPage />} />
+                  <Route path="/appstore/create" element={<AppEditPage />} />
+                  <Route path="/appstore/:name/edit" element={<AppEditPage />} />
 
                   {/* 自动化管理 */}
                   <Route path="/automation" element={<AutomationCategoriesPage />} />

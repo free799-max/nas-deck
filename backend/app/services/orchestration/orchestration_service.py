@@ -21,6 +21,7 @@ from app.schemas.orchestration import (
 )
 from app.services.app_store import app_service
 from app.services.apps import AuthVerifyResult, get_client
+from app.services.orchestration.shared_config import merge_shared_config
 
 
 class OrchestrationService:
@@ -115,8 +116,14 @@ class OrchestrationService:
         try:
             for app_name in selected_apps:
                 app_config = app_configs.get(app_name) or {}
-                # 注入共享配置，让各 App 的 yaml_template 可以引用
-                merged_config = {**(shared_config or {}), **app_config}
+                # 注入共享配置：volumes/env 数组追加合并，标量字段应用配置优先
+                merged_config = merge_shared_config(
+                    shared_config=shared_config,
+                    app_config=app_config,
+                    shared_schema=db_orchestration.shared_config_schema,
+                    app_schema=app_map[app_name].config_schema,
+                    app_name=app_name,
+                )
                 sub_instance_name = f"{instance_name}-{app_name}"
 
                 instance, task_id = await app_service.deploy(

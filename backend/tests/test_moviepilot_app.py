@@ -50,7 +50,7 @@ SAMPLE_MOVIEPILOT_TEMPLATE = """services:
     hostname: {{ project_name }}
     volumes:
 {%- for vol in moviepilot_volumes %}
-      - {{ to_host_path(vol.host_path if vol.host_path.startswith('/') else project_name ~ '/' ~ vol.host_path) }}:{{ vol.container_path }}:{{ vol.mode }}
+      - {{ to_host_path(vol.host_path if (vol.host_path.startswith('/') or vol.shared) else project_name ~ '/' ~ vol.host_path) }}:{{ vol.container_path }}:{{ vol.mode }}
 {%- endfor %}
     environment:
 {%- for item in moviepilot_env %}
@@ -64,7 +64,7 @@ SAMPLE_MOVIEPILOT_TEMPLATE = """services:
     container_name: {{ project_name }}-redis
     volumes:
 {%- for vol in redis_volumes %}
-      - {{ to_host_path(vol.host_path if vol.host_path.startswith('/') else project_name ~ '/' ~ vol.host_path) }}:{{ vol.container_path }}:{{ vol.mode }}
+      - {{ to_host_path(vol.host_path if (vol.host_path.startswith('/') or vol.shared) else project_name ~ '/' ~ vol.host_path) }}:{{ vol.container_path }}:{{ vol.mode }}
 {%- endfor %}
     environment:
 {%- for item in redis_env %}
@@ -83,7 +83,7 @@ SAMPLE_MOVIEPILOT_TEMPLATE = """services:
 {%- endfor %}
     volumes:
 {%- for vol in postgresql_volumes %}
-      - {{ to_host_path(vol.host_path if vol.host_path.startswith('/') else project_name ~ '/' ~ vol.host_path) }}:{{ vol.container_path }}:{{ vol.mode }}
+      - {{ to_host_path(vol.host_path if (vol.host_path.startswith('/') or vol.shared) else project_name ~ '/' ~ vol.host_path) }}:{{ vol.container_path }}:{{ vol.mode }}
 {%- endfor %}
 """
 

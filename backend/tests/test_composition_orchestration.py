@@ -15,6 +15,7 @@ from app.models.orchestration import (
 )
 from app.services.app_store import app_service
 from app.services.orchestration import orchestration_service
+from app.services.orchestration.shared_config import merge_shared_config
 
 
 @pytest_asyncio.fixture(name="db")
@@ -232,3 +233,207 @@ async def test_deploy_composition_success(db, media_apps, media_orchestration, m
         "test-stack-qbittorrent",
         "test-stack-jellyfin",
     }
+
+
+# ---------- 共享配置合并 ----------
+
+
+JELLYFIN_SCHEMA = {
+    "containers": [
+        {
+            "name": "jellyfin",
+            "settings": [
+                {"type": "volumes", "fields": ["volumes"]},
+                {"type": "env", "fields": ["jellyfin_env"]},
+            ],
+        }
+    ]
+}
+
+SHARED_SCHEMA = {
+    "containers": [
+        {
+            "name": "shared",
+            "settings": [
+                {"type": "volumes", "fields": ["volumes"]},
+                {"type": "env", "fields": ["env"]},
+            ],
+        }
+    ]
+}
+
+SHARED_CONFIG = {
+    "volumes": [
+        {"mode": "rw", "host_path": "media", "container_path": "/media"},
+        {"mode": "rw", "host_path": "downloads", "container_path": "/downloads"},
+    ],
+    "env": [{"key": "TZ", "value": "Asia/Shanghai"}],
+}
+
+
+def test_merge_shared_config_appends_volumes_and_env():
+    """共享 volumes/env 应追加到应用主容器对应字段，而不是被覆盖。"""
+    app_config = {
+        "volumes": [
+            {"mode": "rw", "host_path": "jellyfin/config", "container_path": "/config"},
+        ],
+        "jellyfin_env": [{"key": "JELLYFIN_PublishedServerUrl", "value": "nas"}],
+    }
+    merged = merge_shared_config(
+        SHARED_CONFIG, app_config, SHARED_SCHEMA, JELLYFIN_SCHEMA, "jellyfin"
+    )
+
+    container_paths = [v["container_path"] for v in merged["volumes"]]
+    assert container_paths == ["/config", "/media", "/downloads"]
+    # 应用自身项不打标，共享项打 shared 标记（模板据此跳过 project_name 前缀）
+    assert "shared" not in merged["volumes"][0]
+    assert merged["volumes"][1]["shared"] is True
+    assert merged["volumes"][2]["shared"] is True
+
+    env_keys = [e["key"] for e in merged["jellyfin_env"]]
+    assert env_keys == ["JELLYFIN_PublishedServerUrl", "TZ"]
+
+
+def test_merge_shared_config_app_config_takes_priority():
+    """同一 container_path / key 冲突时应用自身配置优先。"""
+    app_config = {
+        "volumes": [
+            {"mode": "ro", "host_path": "custom", "container_path": "/media"},
+        ],
+        "jellyfin_env": [{"key": "TZ", "value": "UTC"}],
+    }
+    merged = merge_shared_config(
+        SHARED_CONFIG, app_config, SHARED_SCHEMA, JELLYFIN_SCHEMA, "jellyfin"
+    )
+
+    assert merged["volumes"] == [
+        {"mode": "ro", "host_path": "custom", "container_path": "/media"},
+        {"mode": "rw", "host_path": "downloads", "container_path": "/downloads", "shared": True},
+    ]
+    assert merged["jellyfin_env"] == [{"key": "TZ", "value": "UTC"}]
+
+
+def test_merge_shared_config_only_merges_main_container():
+    """多容器应用（如 moviepilot）只合并主容器的字段，不影响 redis 等附属容器。"""
+    app_schema = {
+        "containers": [
+            {
+                "name": "moviepilot",
+                "settings": [
+                    {"type": "volumes", "fields": ["volumes"]},
+                    {"type": "env", "fields": ["moviepilot_env"]},
+                ],
+            },
+            {
+                "name": "redis",
+                "settings": [
+                    {"type": "volumes", "fields": ["redis_volumes"]},
+                    {"type": "env", "fields": ["redis_env"]},
+                ],
+            },
+        ]
+    }
+    app_config = {
+        "volumes": [],
+        "moviepilot_env": [],
+        "redis_volumes": [
+            {"mode": "rw", "host_path": "redis/data", "container_path": "/data"},
+        ],
+        "redis_env": [{"key": "REDIS_PASSWORD", "value": "secret"}],
+    }
+    merged = merge_shared_config(
+        SHARED_CONFIG, app_config, SHARED_SCHEMA, app_schema, "moviepilot"
+    )
+
+    assert [v["container_path"] for v in merged["volumes"]] == ["/media", "/downloads"]
+    assert merged["moviepilot_env"] == [{"key": "TZ", "value": "Asia/Shanghai"}]
+    assert merged["redis_volumes"] == app_config["redis_volumes"]
+    assert merged["redis_env"] == app_config["redis_env"]
+
+
+def test_merge_shared_config_without_shared_config():
+    """无共享配置时保持浅合并语义。"""
+    app_config = {"volumes": [{"mode": "rw", "host_path": "a", "container_path": "/a"}]}
+    merged = merge_shared_config({}, app_config, SHARED_SCHEMA, JELLYFIN_SCHEMA, "jellyfin")
+    assert merged == app_config
+
+
+def test_shared_volume_render_skips_project_prefix():
+    """渲染时共享 volumes 的相对路径直接相对于 Docker 挂载目录，不加项目名前缀。"""
+    from app.services.app_store.app_service import _render_yaml_template
+    from app.services.system_config_service import StoragePathResolver
+
+    template = (
+        "services:\n"
+        "  app:\n"
+        "    image: test/app\n"
+        "    volumes:\n"
+        "{%- for vol in volumes %}\n"
+        "      - {{ to_host_path(vol.host_path if (vol.host_path.startswith('/') or vol.shared) else project_name ~ '/' ~ vol.host_path) }}:{{ vol.container_path }}:{{ vol.mode }}\n"
+        "{%- endfor %}\n"
+    )
+    config = {
+        "volumes": [
+            {"mode": "rw", "host_path": "emby/config", "container_path": "/config"},
+            {"mode": "rw", "host_path": "media", "container_path": "/media", "shared": True},
+        ],
+    }
+    resolver = StoragePathResolver("/opt", "/opt/docker")
+    rendered = _render_yaml_template(
+        template, {}, config, "movie-auto-emby", "emby", resolver
+    )
+    # 应用自身卷仍按项目目录隔离
+    assert "/opt/docker/movie-auto-emby/emby/config:/config:rw" in rendered
+    # 共享卷直接挂到 Docker 挂载目录下
+    assert "/opt/docker/media:/media:rw" in rendered
+
+
+@pytest.mark.asyncio
+async def test_deploy_composition_merges_shared_config(
+    db, media_apps, media_orchestration, monkeypatch
+):
+    """组合部署时共享 volumes/env 应合并进各应用配置后传给应用部署。"""
+    captured_configs: dict[str, dict] = {}
+
+    async def fake_deploy(db, app_name, instance_name, config, user_id=None):
+        captured_configs[app_name] = config
+        app_result = await db.execute(select(App).where(App.name == app_name))
+        app = app_result.scalar_one()
+        instance = AppInstance(
+            app_id=app.id,
+            instance_name=instance_name,
+            config=config,
+            status="running",
+        )
+        db.add(instance)
+        await db.commit()
+        await db.refresh(instance)
+        return instance, f"task-{app_name}"
+
+    monkeypatch.setattr(app_service, "deploy", fake_deploy)
+
+    # 为 jellyfin 补充带 containers 定义的 config_schema
+    result = await db.execute(select(App).where(App.name == "jellyfin"))
+    jellyfin = result.scalar_one()
+    jellyfin.config_schema = JELLYFIN_SCHEMA
+    await db.commit()
+
+    await orchestration_service.deploy(
+        db,
+        orchestration_name="media-stack",
+        instance_name="test-stack",
+        selected_apps=["moviepilot", "qbittorrent", "jellyfin"],
+        app_configs={
+            "jellyfin": {
+                "volumes": [
+                    {"mode": "rw", "host_path": "jellyfin/config", "container_path": "/config"},
+                ],
+            },
+        },
+        shared_config=SHARED_CONFIG,
+    )
+
+    jellyfin_config = captured_configs["jellyfin"]
+    container_paths = [v["container_path"] for v in jellyfin_config["volumes"]]
+    assert container_paths == ["/config", "/media", "/downloads"]
+    assert jellyfin_config["jellyfin_env"] == [{"key": "TZ", "value": "Asia/Shanghai"}]

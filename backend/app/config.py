@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     COMPOSE_WORKSPACE_DIR: str = "./data/compose"
     """Compose 项目工作目录，用于存放运行时 docker-compose.yml 文件。"""
 
+    APP_ICON_DIR: str = "./data/app-icons"
+    """用户上传的应用商店图标存储目录。"""
+
     model_config = {"env_file": ".env"}
     """指定 .env 文件路径用于加载环境变量。"""
 

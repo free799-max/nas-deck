@@ -5,13 +5,16 @@
  */
 
 import { useState, useMemo } from "react";
+import { useNavigate } from "react-router-dom";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
 import { AppCard } from "./AppCard";
 import { AppDeployDialog } from "./AppDeployDialog";
 import { AppDetailDialog } from "./AppDetailDialog";
 import { useToast } from "@/components/ui/toast";
 import { useDeployTasks } from "@/hooks/useDeployTasks";
+import { useAuth } from "@/hooks/useAuth";
 import {
   useApps,
   useApp,
@@ -19,7 +22,7 @@ import {
   type App,
   type AppDetail,
 } from "@/hooks/useApps";
-import { Search, ChevronLeft, ChevronRight } from "lucide-react";
+import { Search, ChevronLeft, ChevronRight, Plus } from "lucide-react";
 
 const PAGE_SIZE_OPTIONS = [20, 40, 60, 100];
 
@@ -38,6 +41,9 @@ export function AppsTab() {
   const deployMutation = useDeployApp();
   const toast = useToast();
   const { startTask } = useDeployTasks();
+  const { user } = useAuth();
+  const navigate = useNavigate();
+  const isAdmin = user?.role === "admin";
 
   const [search, setSearch] = useState("");
   const [selectedCategory, setSelectedCategory] = useState<string>("all");
@@ -167,14 +173,26 @@ export function AppsTab() {
               ))}
             </div>
 
-            <div className="relative w-52 order-1 sm:order-2">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-              <Input
-                placeholder="搜索"
-                value={search}
-                onChange={(e) => handleSearchChange(e.target.value)}
-                className="pl-9 rounded-lg border border-black/10 bg-white"
-              />
+            <div className="flex items-center gap-2 order-1 sm:order-2">
+              {isAdmin && (
+                <Button
+                  size="sm"
+                  onClick={() => navigate("/appstore/create")}
+                  className="rounded-lg shrink-0"
+                >
+                  <Plus className="h-4 w-4 mr-1" />
+                  添加应用
+                </Button>
+              )}
+              <div className="relative w-52">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                <Input
+                  placeholder="搜索"
+                  value={search}
+                  onChange={(e) => handleSearchChange(e.target.value)}
+                  className="pl-9 rounded-lg border border-black/10 bg-white"
+                />
+              </div>
             </div>
           </div>
 
@@ -195,6 +213,11 @@ export function AppsTab() {
                   app={app}
                   onDeploy={setDeployApp}
                   onDetail={setDetailApp}
+                  onEdit={
+                    isAdmin
+                      ? (target) => navigate(`/appstore/${target.name}/edit`)
+                      : undefined
+                  }
                 />
               ))}
             </div>

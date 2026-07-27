@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import re
+from pathlib import Path
 
 import docker
 import yaml
@@ -12,11 +13,17 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.config import settings
 from app.core.exceptions import APIException
 from app.database import async_session
 from app.models.app_store import App
 from app.models.docker import DockerComposeProject
 from app.models.orchestration import AppInstance
+from app.schemas.app_store import AppCreate, AppUpdate
+from app.services.app_store.app_validator import (
+    extract_default_values,
+    validate_app_definition,
+)
 from app.services.compose import compose_manager
 from app.services.orchestration.deploy_task_service import deploy_task_manager
 from app.services.system_config_service import (
@@ -26,14 +33,12 @@ from app.services.system_config_service import (
 
 logger = logging.getLogger(__name__)
 
+# 允许上传的图标扩展名与大小限制
+ALLOWED_ICON_EXTS = {".svg", ".png", ".jpg", ".jpeg", ".webp"}
+MAX_ICON_SIZE = 1024 * 1024  # 1MB
 
-def _extract_default_values(config_schema: dict) -> dict:
-    """从 JSON Schema 的 properties 中提取各字段的 default 值。"""
-    defaults: dict = {}
-    for key, prop in (config_schema.get("properties") or {}).items():
-        if "default" in prop:
-            defaults[key] = prop["default"]
-    return defaults
+# 应用 name 合法字符（小写字母数字、中划线、下划线），用于防止路径穿越
+APP_NAME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 
 
 def _render_yaml_template(
@@ -49,7 +54,7 @@ def _render_yaml_template(
     合并 Schema 默认值与用户配置后渲染，并校验结果为合法 YAML。
     同时注入宿主机/容器挂载基础路径变量及路径转换函数。
     """
-    default_values = _extract_default_values(config_schema or {})
+    default_values = extract_default_values(config_schema or {})
     merged = {**default_values, **(config or {})}
     merged["project_name"] = project_name
     merged["app_name"] = app_name
@@ -195,6 +200,164 @@ class AppService:
             raise APIException("应用不存在", 404)
         return app
 
+    async def _get_resolver(self, db: AsyncSession) -> StoragePathResolver:
+        """读取系统存储配置构建路径解析器；未配置时使用根目录默认值。"""
+        system_config = await system_config_service.get_or_create(db)
+        resolver = StoragePathResolver(
+            system_config.storage_host_root_dir,
+            system_config.storage_docker_mount_dir,
+        )
+        if not resolver.configured:
+            resolver = resolver.with_defaults()
+        return resolver
+
+    async def create_app(self, db: AsyncSession, data: AppCreate) -> App:
+        """创建应用商店应用。
+
+        校验 name 唯一性与格式、config_schema 与 yaml_template 合法性后落库。
+        """
+        if not APP_NAME_PATTERN.match(data.name):
+            raise APIException(
+                "应用标识 name 只能包含小写字母、数字、中划线和下划线，且以字母或数字开头",
+                400,
+            )
+
+        existing = await db.execute(select(App).where(App.name == data.name))
+        if existing.scalar_one_or_none():
+            raise APIException(f"应用 '{data.name}' 已存在", 409)
+
+        validate_app_definition(data.yaml_template, data.config_schema, data.image or "")
+
+        app = App(**data.model_dump())
+        db.add(app)
+        await db.commit()
+        await db.refresh(app)
+        return app
+
+    async def update_app(self, db: AsyncSession, name: str, data: AppUpdate) -> App:
+        """更新应用商店应用（name 不可修改，内置应用允许编辑）。
+
+        若更新了 yaml_template / config_schema / image，使用合并后的值重新校验。
+        """
+        app = await self.get_app(db, name)
+
+        update_data = data.model_dump(exclude_unset=True)
+        if not update_data:
+            return app
+
+        # 用合并后的值校验模板与 Schema 组合
+        merged_template = update_data.get("yaml_template", app.yaml_template)
+        merged_schema = update_data.get("config_schema", app.config_schema or {})
+        merged_image = update_data.get("image", app.image) or ""
+        if merged_template:
+            validate_app_definition(merged_template, merged_schema, merged_image)
+
+        for key, value in update_data.items():
+            setattr(app, key, value)
+        await db.commit()
+        await db.refresh(app)
+        return app
+
+    async def delete_app(self, db: AsyncSession, name: str) -> None:
+        """删除应用商店应用。
+
+        内置应用禁止删除；存在部署实例的应用禁止删除。
+        """
+        app = await self.get_app(db, name)
+
+        if app.is_builtin:
+            raise APIException("内置应用禁止删除", 400)
+
+        result = await db.execute(
+            select(AppInstance).where(AppInstance.app_id == app.id)
+        )
+        if result.scalars().first() is not None:
+            raise APIException("应用存在部署实例，请先删除相关实例", 409)
+
+        await db.delete(app)
+        await db.commit()
+
+        # 清理已上传的图标文件（忽略失败）
+        icon_dir = Path(settings.APP_ICON_DIR)
+        for ext in ALLOWED_ICON_EXTS:
+            icon_file = icon_dir / f"{name}{ext}"
+            try:
+                if icon_file.exists():
+                    icon_file.unlink()
+            except OSError:
+                logger.warning("删除应用图标文件失败: %s", icon_file)
+
+    async def preview_template(
+        self,
+        db: AsyncSession,
+        yaml_template: str,
+        config_schema: dict,
+        image: str | None = None,
+        app_name: str = "preview-app",
+    ) -> dict:
+        """预览未落库的应用模板渲染结果（创建/编辑页实时预览用）。
+
+        校验失败时返回包含错误信息的字典，而不是抛异常。
+        """
+        resolver = await self._get_resolver(db)
+
+        try:
+            validate_app_definition(yaml_template, config_schema, image or "")
+            rendered = _render_yaml_template(
+                yaml_template,
+                config_schema,
+                {"image": image or "example/image"},
+                "preview-project",
+                app_name,
+                resolver,
+            )
+        except (APIException, ValueError) as e:
+            return {"yaml": None, "error": str(e)}
+
+        return {"yaml": rendered, "error": None}
+
+    async def save_app_icon(
+        self, db: AsyncSession, name: str, filename: str, content: bytes
+    ) -> App:
+        """保存用户上传的应用图标，并更新 app.icon 为后端图标接口路径。"""
+        app = await self.get_app(db, name)
+
+        ext = Path(filename or "").suffix.lower()
+        if ext not in ALLOWED_ICON_EXTS:
+            raise APIException(
+                f"不支持的图标格式 {ext or '(无扩展名)'}，仅支持: {', '.join(sorted(ALLOWED_ICON_EXTS))}",
+                400,
+            )
+        if not content:
+            raise APIException("图标文件为空", 400)
+        if len(content) > MAX_ICON_SIZE:
+            raise APIException("图标文件大小不能超过 1MB", 400)
+
+        icon_dir = Path(settings.APP_ICON_DIR)
+        icon_dir.mkdir(parents=True, exist_ok=True)
+
+        # 删除旧的同名不同扩展名图标
+        for old_ext in ALLOWED_ICON_EXTS:
+            old_file = icon_dir / f"{name}{old_ext}"
+            if old_ext != ext and old_file.exists():
+                old_file.unlink()
+
+        (icon_dir / f"{name}{ext}").write_bytes(content)
+
+        app.icon = f"/api/apps/{name}/icon"
+        await db.commit()
+        await db.refresh(app)
+        return app
+
+    def get_app_icon_path(self, name: str) -> Path:
+        """获取已上传应用图标的文件路径，不存在时抛出 404。"""
+        icon_dir = Path(settings.APP_ICON_DIR)
+        for ext in ALLOWED_ICON_EXTS:
+            icon_file = icon_dir / f"{name}{ext}"
+            if icon_file.exists():
+                return icon_file
+        raise APIException("应用图标不存在", 404)
+
     async def preview(
         self,
         db: AsyncSession,
@@ -212,13 +375,7 @@ class AppService:
 
         # 0. 读取系统存储配置；未配置时使用根目录默认值继续预览，
         #    实际部署前仍需配置真实路径。
-        system_config = await system_config_service.get_or_create(db)
-        resolver = StoragePathResolver(
-            system_config.storage_host_root_dir,
-            system_config.storage_docker_mount_dir,
-        )
-        if not resolver.configured:
-            resolver = resolver.with_defaults()
+        resolver = await self._get_resolver(db)
 
         # 1. JSON Schema 校验与端口预检失败时，把错误返回给前端展示
         try:

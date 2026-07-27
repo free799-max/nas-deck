@@ -34,9 +34,6 @@ import json
 import sys
 from pathlib import Path
 
-import yaml
-from jinja2 import Environment, BaseLoader
-from jsonschema import validate as jsonschema_validate, ValidationError as JSONSchemaValidationError
 from pydantic import BaseModel, Field, ValidationError as PydanticValidationError
 from sqlalchemy import select
 
@@ -48,6 +45,7 @@ if str(BACKEND_DIR) not in sys.path:
 import app.models  # noqa: F401 — 注册所有模型到 Base.metadata
 from app.database import async_session
 from app.models.app_store import App
+from app.services.app_store.app_validator import validate_app_definition
 
 
 class AppImportInput(BaseModel):
@@ -74,65 +72,6 @@ class AppImportInput(BaseModel):
     is_builtin: bool = False
 
 
-from app.services.system_config_service import StoragePathResolver
-
-
-def _extract_default_values(config_schema: dict) -> dict:
-    """从 JSON Schema 的 properties 中提取各字段的 default 值。"""
-    defaults: dict = {}
-    for key, prop in (config_schema.get("properties") or {}).items():
-        if "default" in prop:
-            defaults[key] = prop["default"]
-    return defaults
-
-
-def _validate_yaml_template(yaml_template: str, config_schema: dict, image: str = "") -> None:
-    """先用默认值渲染 Jinja2 模板，再校验结果是否为合法 YAML。"""
-    default_values = _extract_default_values(config_schema or {})
-    merged = {
-        **default_values,
-        "project_name": "test-project",
-        "app_name": "test-app",
-        "image": image or "example/image",
-    }
-
-    resolver = StoragePathResolver(None, None).with_defaults()
-    try:
-        env = Environment(loader=BaseLoader(), autoescape=False)
-        env.globals["make_host_path"] = resolver.make_host_path
-        env.globals["make_container_path"] = resolver.make_container_path
-        env.globals["to_host_path"] = resolver.to_host_path
-        env.globals["to_container_path"] = resolver.to_container_path
-        rendered = env.from_string(yaml_template).render(merged)
-    except Exception as e:
-        raise ValueError(f"yaml_template Jinja2 渲染失败: {e}") from e
-
-    try:
-        yaml.safe_load(rendered)
-    except yaml.YAMLError as e:
-        raise ValueError(f"渲染后的结果不是合法 YAML: {e}") from e
-
-
-def _validate_config_schema(config_schema: dict) -> None:
-    """校验 config_schema 自身合法，且默认配置可通过校验。"""
-    if not config_schema:
-        return
-
-    if "type" not in config_schema:
-        raise ValueError("config_schema 必须包含 type 字段")
-
-    defaults: dict = {}
-    properties = config_schema.get("properties") or {}
-    for key, prop in properties.items():
-        if "default" in prop:
-            defaults[key] = prop["default"]
-
-    try:
-        jsonschema_validate(instance=defaults, schema=config_schema)
-    except JSONSchemaValidationError as e:
-        raise ValueError(f"config_schema 默认值校验失败: {e.message}") from e
-
-
 def _load_input(json_path: Path) -> AppImportInput:
     """从 JSON 文件加载并校验输入。"""
     if not json_path.exists():
@@ -153,8 +92,9 @@ async def import_app(json_path: Path) -> App:
     """将 JSON 描述的应用导入 apps 表。"""
     app_input = _load_input(json_path)
 
-    _validate_yaml_template(app_input.yaml_template, app_input.config_schema, app_input.image)
-    _validate_config_schema(app_input.config_schema)
+    validate_app_definition(
+        app_input.yaml_template, app_input.config_schema, app_input.image or ""
+    )
 
     async with async_session() as db:
         existing = await db.execute(select(App).where(App.name == app_input.name))
