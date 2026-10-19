@@ -2,13 +2,32 @@
 
 from contextlib import asynccontextmanager
 
+import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 import app.models  # noqa: F401 — 注册所有模型到 Base.metadata
+from app.config import settings
 from app.database import Base, get_db
 from app.main import app
+
+
+@pytest.fixture(autouse=True)
+def _open_registration(monkeypatch):
+    """测试环境默认开放注册（生产默认关闭，注册闸门测试会显式覆盖）。"""
+    monkeypatch.setattr(settings, "REGISTRATION_OPEN", True)
+
+
+@pytest.fixture(autouse=True)
+def _restore_docker_client():
+    """docker_manager 为全局单例且客户端惰性缓存，
+    测试间需还原缓存的客户端，避免 mock 泄漏到后续测试。"""
+    from app.services.docker import docker_manager
+
+    original = docker_manager._client_obj
+    yield
+    docker_manager._client_obj = original
 
 
 @pytest_asyncio.fixture

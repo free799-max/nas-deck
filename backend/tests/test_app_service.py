@@ -1,6 +1,6 @@
 """应用商店服务端口冲突检测单元测试。"""
 
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -70,12 +70,14 @@ class TestGetUsedPorts:
             }
         }
 
-        with patch("docker.from_env") as mock_docker:
-            mock_client = mock_docker.return_value
-            mock_client.containers.list.return_value = [
-                type("Container", (), {"attrs": fake_container})()
-            ]
+        from app.services.docker import docker_manager
 
+        mock_client = MagicMock()
+        mock_client.containers.list.return_value = [
+            type("Container", (), {"attrs": fake_container})()
+        ]
+
+        with patch.object(docker_manager, "_client_obj", mock_client):
             with patch(
                 "app.services.app_store.app_service._parse_proc_net_tcp"
             ) as mock_parse:
@@ -86,7 +88,12 @@ class TestGetUsedPorts:
 
     def test_skips_docker_when_unavailable(self):
         """Docker 不可用时仍能从 /proc/net/tcp 读取端口。"""
-        with patch("docker.from_env", side_effect=Exception("no docker")):
+        from app.services.docker import docker_manager
+
+        mock_client = MagicMock()
+        mock_client.containers.list.side_effect = Exception("no docker")
+
+        with patch.object(docker_manager, "_client_obj", mock_client):
             with patch(
                 "app.services.app_store.app_service._parse_proc_net_tcp"
             ) as mock_parse:

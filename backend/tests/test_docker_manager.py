@@ -1,7 +1,7 @@
 import pytest
 from unittest.mock import MagicMock, patch
 
-from app.core.docker_manager import DockerManager, ImagePullTaskManager
+from app.services.docker import DockerManager, ImagePullTaskManager
 
 
 @pytest.fixture

@@ -2,7 +2,7 @@ import pytest
 from unittest.mock import MagicMock, patch, AsyncMock
 from pathlib import Path
 
-from app.core.compose_manager import ComposeManager
+from app.services.compose import ComposeService as ComposeManager
 from app.models.docker import DockerComposeProject, DockerComposeVersion
 
 
@@ -36,7 +36,7 @@ async def test_discover_projects_creates_external_project(compose_manager, tmp_p
     compose_file.write_text("services:\n  web:\n    image: nginx:latest\n")
 
     with patch(
-        "app.core.compose_manager.docker_manager.list_containers",
+        "app.services.docker.manager.docker_manager.list_containers",
         return_value=[mock_container],
     ):
         # 模拟异步数据库会话

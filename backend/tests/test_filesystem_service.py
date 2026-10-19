@@ -145,3 +145,23 @@ class TestFilesystemService:
                 "/etc",
                 root_path=str(tmp_path),
             )
+
+    def test_delete_directory_root_path_itself_forbidden(self, tmp_path):
+        """删除允许访问的根目录本身应被禁止。"""
+        service = FilesystemService()
+        (tmp_path / "sub").mkdir()
+
+        with pytest.raises(APIException) as exc_info:
+            service.delete_directory(str(tmp_path), root_path=str(tmp_path))
+
+        assert exc_info.value.status_code == 403
+        assert (tmp_path / "sub").is_dir()  # 目录未被删除
+
+    def test_delete_filesystem_root_forbidden(self):
+        """删除文件系统根目录应被禁止。"""
+        service = FilesystemService()
+
+        with pytest.raises(APIException) as exc_info:
+            service.delete_directory("/", root_path="/")
+
+        assert exc_info.value.status_code == 403
