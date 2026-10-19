@@ -1,13 +1,48 @@
 services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: nasdeck
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?请在 .env 中设置 POSTGRES_PASSWORD（参考 .env.example）}
+      POSTGRES_DB: nasdeck
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nasdeck -d nasdeck"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
   backend:
     build: ./backend
     ports:
       - "5001:5001"
-    volumes:
-      - ./data:/app/data
-      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      DATABASE_URL: postgresql+asyncpg://nasdeck:${POSTGRES_PASSWORD}@postgres:5432/nasdeck
+      DATA_ROOT: /data
+      CORS_ORIGINS: ${CORS_ORIGINS:-}
+      REGISTRATION_OPEN: ${REGISTRATION_OPEN:-false}
+      SECRET_KEY: ${SECRET_KEY:-}
     env_file:
-      - .env
+      # .env 缺失时不报错，其余配置走 environment 默认值；生产密钥请在 .env 中配置
+      - path: .env
+        required: false
+    volumes:
+      - ./data:/data
+      # 挂载 docker.sock 用于容器/Compose 管理功能。
+      # 风险说明：拥有 docker.sock 即等同宿主机 root 权限，请仅在受信环境部署；
+      # 如不需要 Docker 管理功能可删除此挂载（相关功能会自动降级）。
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:5001/api/health')\""]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
     restart: unless-stopped
 
   frontend:
@@ -17,3 +52,6 @@ services:
     depends_on:
       - backend
     restart: unless-stopped
+
+volumes:
+  postgres_data:

@@ -1,0 +1,27 @@
+# Python 运行时产物
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+
+# 本地数据与数据库文件（运行时产物，容器内使用挂载卷）
+data/
+*.db
+*.db.bak
+*.db-shm
+*.db-wal
+
+# 环境配置与密钥
+.env
+.env.*
+
+# 测试与开发
+tests/
+Dockerfile
+.dockerignore
+
+# VCS / IDE
+.git/
+.idea/
+.vscode/
