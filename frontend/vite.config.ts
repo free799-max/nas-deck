@@ -10,6 +10,37 @@ export default defineConfig({
       "@": path.resolve(__dirname, "./src"),
     },
   },
+  build: {
+    rollupOptions: {
+      output: {
+        // vendor 分包：将大型依赖拆出主 chunk，利用浏览器缓存
+        manualChunks(id: string) {
+          if (!id.includes("node_modules")) return;
+          if (id.includes("@xterm")) return "xterm";
+          if (
+            id.includes("@codemirror") ||
+            id.includes("@uiw") ||
+            id.includes("@lezer")
+          ) {
+            return "codemirror";
+          }
+          if (
+            id.includes("react-markdown") ||
+            /(remark-|rehype-|micromark|mdast|hast|unified|vfile)/.test(id)
+          ) {
+            return "markdown";
+          }
+          if (
+            /node_modules[\\/](react|react-dom|scheduler)[\\/]/.test(id) ||
+            id.includes("react-router")
+          ) {
+            return "react";
+          }
+          if (id.includes("@tanstack") || id.includes("axios")) return "query";
+        },
+      },
+    },
+  },
   server: {
     host: "0.0.0.0",
     port: 5000,
