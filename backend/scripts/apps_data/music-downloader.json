@@ -1,0 +1,196 @@
+{
+  "name": "music-downloader",
+  "display_name": "音乐下载工具",
+  "description": "对应海报条目：音乐下载工具 下载各大平台音乐。Go Music DL 是全网音乐搜索与下载工具，内置网易云、QQ 音乐、酷狗、酷我、咪咕、Bilibili、汽水音乐等 10+ 平台音源，提供 Web 界面，支持单曲/歌单/专辑解析、无损音质下载与本地音乐管理。",
+  "category": "music",
+  "tags": [
+    "音乐",
+    "下载",
+    "聚合搜索",
+    "无损",
+    "开源"
+  ],
+  "source_url": "https://github.com/guohuiyuan/go-music-dl",
+  "architectures": [
+    "amd64",
+    "arm64"
+  ],
+  "image": "guohuiyuan/go-music-dl",
+  "default_ports": [
+    {
+      "port": 8080,
+      "protocol": "tcp",
+      "description": "Web 界面"
+    }
+  ],
+  "config_schema": {
+    "type": "object",
+    "required": [
+      "ports",
+      "volumes",
+      "music_downloader_env"
+    ],
+    "containers": [
+      {
+        "name": "music-downloader",
+        "title": "音乐下载工具",
+        "settings": [
+          {
+            "type": "ports",
+            "title": "端口设置",
+            "fields": [
+              "ports"
+            ]
+          },
+          {
+            "type": "volumes",
+            "title": "存储空间设置",
+            "fields": [
+              "volumes"
+            ]
+          },
+          {
+            "type": "env",
+            "title": "环境变量",
+            "fields": [
+              "music_downloader_env"
+            ]
+          },
+          {
+            "type": "advanced",
+            "title": "高级设置",
+            "fields": [
+              "privileged"
+            ]
+          }
+        ],
+        "description": "全网音乐搜索与下载工具（Go Music DL）"
+      }
+    ],
+    "properties": {
+      "ports": {
+        "type": "array",
+        "title": "端口设置",
+        "items": {
+          "type": "object",
+          "required": [
+            "local_port",
+            "container_port",
+            "protocol"
+          ],
+          "properties": {
+            "protocol": {
+              "enum": [
+                "tcp",
+                "udp"
+              ],
+              "type": "string",
+              "title": "协议",
+              "default": "tcp"
+            },
+            "local_port": {
+              "type": "integer",
+              "title": "本地端口",
+              "maximum": 65535,
+              "minimum": 1
+            },
+            "container_port": {
+              "type": "integer",
+              "title": "容器端口",
+              "maximum": 65535,
+              "minimum": 1
+            }
+          }
+        },
+        "default": [
+          {
+            "protocol": "tcp",
+            "local_port": 8080,
+            "container_port": 8080
+          }
+        ]
+      },
+      "volumes": {
+        "type": "array",
+        "title": "存储空间设置",
+        "items": {
+          "type": "object",
+          "required": [
+            "host_path",
+            "container_path",
+            "mode"
+          ],
+          "properties": {
+            "mode": {
+              "enum": [
+                "rw",
+                "ro"
+              ],
+              "type": "string",
+              "title": "权限",
+              "default": "rw"
+            },
+            "host_path": {
+              "type": "string",
+              "title": "本地路径",
+              "format": "directory"
+            },
+            "container_path": {
+              "type": "string",
+              "title": "容器路径"
+            }
+          }
+        },
+        "default": [
+          {
+            "mode": "rw",
+            "host_path": "music-downloader/data",
+            "container_path": "/home/appuser/data"
+          }
+        ]
+      },
+      "privileged": {
+        "type": "boolean",
+        "title": "特权模式",
+        "default": false,
+        "description": "以特权模式运行容器，可访问宿主机全部设备，一般无需开启"
+      },
+      "music_downloader_env": {
+        "type": "array",
+        "title": "环境变量",
+        "items": {
+          "type": "object",
+          "required": [
+            "key",
+            "value"
+          ],
+          "properties": {
+            "key": {
+              "type": "string",
+              "title": "变量名"
+            },
+            "value": {
+              "type": "string",
+              "title": "值"
+            }
+          }
+        },
+        "default": [
+          {
+            "key": "TZ",
+            "value": "Asia/Shanghai"
+          }
+        ]
+      }
+    }
+  },
+  "yaml_template": "services:\n  music-downloader:\n    image: {{ image }}\n    container_name: {{ project_name }}\n    command: [\"./music-dl\", \"web\", \"--port\", \"8080\", \"--no-browser\"]\n    ports:\n{%- for port in ports %}\n      - \"{{ port.local_port }}:{{ port.container_port }}/{{ port.protocol }}\"\n{%- endfor %}\n    volumes:\n{%- for vol in volumes %}\n      - {{ to_host_path(vol.host_path if (vol.host_path.startswith('/') or vol.shared) else project_name ~ '/' ~ vol.host_path) }}:{{ vol.container_path }}:{{ vol.mode }}\n{%- endfor %}\n    privileged: {{ privileged | lower }}\n    restart: unless-stopped\n    environment:\n{%- for item in music_downloader_env %}\n      - {{ item.key }}={{ item.value }}\n{%- endfor %}\n",
+  "readme": "# 音乐下载工具（Go Music DL）\n\n对应海报条目：音乐下载工具 下载各大平台音乐。本应用实际部署的是开源项目 Go Music DL。\n\nGo Music DL 是全网音乐搜索与下载工具，内置网易云、QQ 音乐、酷狗、酷我、咪咕、千千、汽水、Bilibili、Apple Music 等 10+ 平台音源，支持单曲/歌单/专辑搜索解析、在线试听、无损音质下载、逐字歌词与本地音乐管理。\n\n## 部署前准备\n\n1. `/home/appuser/data` 为统一数据目录，下载的歌曲、配置、Cookie 与自制歌单都保存在其中，可在「存储空间设置」中改为你的音乐目录。\n\n## 使用\n\n部署完成后访问 `http://<NAS-IP>:8080/music`。搜索、播放、下载等普通功能无需登录；进入「设置」保存系统配置时需要管理员登录，首次触发时查看容器日志获取一次性初始化令牌以创建管理员账号。在设置中配置各平台 Cookie（支持扫码登录）可解锁更高音质与个人歌单。\n\n> 免责声明：本项目仅供学习和技术交流使用，下载的音乐资源请在 24 小时内删除。",
+  "version": "1.0.0",
+  "type": "compose",
+  "changelog": "初始导入",
+  "backup_paths": [
+    "/home/appuser/data"
+  ],
+  "is_builtin": false
+}

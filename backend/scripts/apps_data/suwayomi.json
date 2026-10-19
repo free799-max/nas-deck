@@ -1,0 +1,197 @@
+{
+    "name": "suwayomi",
+    "display_name": "Suwayomi",
+    "description": "对应海报条目：漫画下载。Suwayomi（原 Tachidesk）是自托管漫画服务器，兼容 Tachiyomi 扩展源，可搜索、下载并在线阅读全网漫画。",
+    "category": "comic",
+    "tags": [
+        "漫画",
+        "漫画下载",
+        "Tachiyomi",
+        "在线阅读",
+        "开源"
+    ],
+    "website": "https://github.com/Suwayomi/Suwayomi-Server",
+    "source_url": "https://github.com/Suwayomi/Suwayomi-Server",
+    "architectures": [
+        "amd64",
+        "arm64"
+    ],
+    "image": "ghcr.io/suwayomi/suwayomi-server",
+    "default_ports": [
+        {
+            "port": 4567,
+            "protocol": "tcp",
+            "description": "Web 界面"
+        }
+    ],
+    "config_schema": {
+        "type": "object",
+        "required": [
+            "ports",
+            "volumes",
+            "suwayomi_env"
+        ],
+        "containers": [
+            {
+                "name": "suwayomi",
+                "title": "Suwayomi",
+                "settings": [
+                    {
+                        "type": "ports",
+                        "title": "端口设置",
+                        "fields": [
+                            "ports"
+                        ]
+                    },
+                    {
+                        "type": "volumes",
+                        "title": "存储空间设置",
+                        "fields": [
+                            "volumes"
+                        ]
+                    },
+                    {
+                        "type": "env",
+                        "title": "环境变量",
+                        "fields": [
+                            "suwayomi_env"
+                        ]
+                    },
+                    {
+                        "type": "advanced",
+                        "title": "高级设置",
+                        "fields": [
+                            "privileged"
+                        ]
+                    }
+                ],
+                "description": "Suwayomi 漫画服务器"
+            }
+        ],
+        "properties": {
+            "ports": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "required": [
+                        "local_port",
+                        "container_port",
+                        "protocol"
+                    ],
+                    "properties": {
+                        "protocol": {
+                            "enum": [
+                                "tcp",
+                                "udp"
+                            ],
+                            "type": "string",
+                            "title": "协议",
+                            "default": "tcp"
+                        },
+                        "local_port": {
+                            "type": "integer",
+                            "title": "本地端口",
+                            "maximum": 65535,
+                            "minimum": 1
+                        },
+                        "container_port": {
+                            "type": "integer",
+                            "title": "容器端口",
+                            "maximum": 65535,
+                            "minimum": 1
+                        }
+                    }
+                },
+                "title": "端口设置",
+                "default": [
+                    {
+                        "protocol": "tcp",
+                        "local_port": 4567,
+                        "container_port": 4567
+                    }
+                ]
+            },
+            "volumes": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "required": [
+                        "host_path",
+                        "container_path",
+                        "mode"
+                    ],
+                    "properties": {
+                        "mode": {
+                            "enum": [
+                                "rw",
+                                "ro"
+                            ],
+                            "type": "string",
+                            "title": "权限",
+                            "default": "rw"
+                        },
+                        "host_path": {
+                            "type": "string",
+                            "title": "本地路径",
+                            "format": "directory"
+                        },
+                        "container_path": {
+                            "type": "string",
+                            "title": "容器路径"
+                        }
+                    }
+                },
+                "title": "存储空间设置",
+                "default": [
+                    {
+                        "mode": "rw",
+                        "host_path": "suwayomi/data",
+                        "container_path": "/home/suwayomi/.local/share/Tachidesk"
+                    }
+                ]
+            },
+            "privileged": {
+                "type": "boolean",
+                "title": "特权模式",
+                "default": false,
+                "description": "一般情况下无需开启，仅当应用需要访问宿主机硬件设备时启用"
+            },
+            "suwayomi_env": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "required": [
+                        "key",
+                        "value"
+                    ],
+                    "properties": {
+                        "key": {
+                            "type": "string",
+                            "title": "变量名"
+                        },
+                        "value": {
+                            "type": "string",
+                            "title": "值"
+                        }
+                    }
+                },
+                "title": "环境变量",
+                "default": [
+                    {
+                        "key": "TZ",
+                        "value": "Asia/Shanghai"
+                    }
+                ]
+            }
+        }
+    },
+    "yaml_template": "services:\n  suwayomi:\n    image: {{ image }}\n    container_name: {{ project_name }}\n    ports:\n{%- for port in ports %}\n      - \"{{ port.local_port }}:{{ port.container_port }}/{{ port.protocol }}\"\n{%- endfor %}\n    volumes:\n{%- for vol in volumes %}\n      - {{ to_host_path(vol.host_path if (vol.host_path.startswith('/') or vol.shared) else project_name ~ '/' ~ vol.host_path) }}:{{ vol.container_path }}:{{ vol.mode }}\n{%- endfor %}\n    privileged: {{ privileged | lower }}\n    restart: unless-stopped\n    environment:\n{%- for item in suwayomi_env %}\n      - {{ item.key }}={{ item.value }}\n{%- endfor %}\n",
+    "readme": "# Suwayomi\n\nSuwayomi（原名 Tachidesk）是自托管漫画阅读服务器，兼容 Tachiyomi 的漫画源扩展：安装扩展后即可搜索、追更、下载并在线阅读漫画，自带 Web UI，也可对接 Suwayomi-VUI 等客户端。\n\n## 部署前准备\n\n1. 在「存储空间设置」中确认数据目录 `/home/suwayomi/.local/share/Tachidesk` 的本地路径，漫画下载、扩展与配置都保存在其中。\n2. 部署完成后访问 `http://<NAS-IP>:4567`，在「Extensions」中安装漫画源扩展即可开始阅读。\n\n## 提示\n\n部分漫画源受 Cloudflare 保护，可搭配 FlareSolverr 使用（需单独部署并在设置中配置）。",
+    "version": "1.0.0",
+    "type": "compose",
+    "changelog": "初始导入",
+    "backup_paths": [
+        "/home/suwayomi/.local/share/Tachidesk"
+    ],
+    "is_builtin": false
+}

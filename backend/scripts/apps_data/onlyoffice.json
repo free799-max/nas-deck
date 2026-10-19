@@ -1,0 +1,122 @@
+{
+  "name": "onlyoffice",
+  "display_name": "ONLYOFFICE Docs",
+  "description": "对应海报条目：Office 在线编辑。ONLYOFFICE Docs 是开源的在线办公套件，支持 Word、Excel、PowerPoint 文档的在线查看与多人协作编辑，可与 Nextcloud 等网盘应用集成。",
+  "category": "tool",
+  "tags": ["工具", "办公", "在线编辑", "文档协作", "开源"],
+  "website": "https://www.onlyoffice.com/",
+  "source_url": "https://github.com/ONLYOFFICE/Docker-DocumentServer",
+  "architectures": ["amd64", "arm64"],
+  "image": "onlyoffice/documentserver",
+  "default_ports": [
+    {"port": 80, "protocol": "tcp", "description": "Web 服务端口（容器内 80，需映射到本地空闲端口）"}
+  ],
+  "config_schema": {
+    "type": "object",
+    "required": ["ports", "volumes", "onlyoffice_env"],
+    "containers": [
+      {
+        "name": "onlyoffice",
+        "title": "ONLYOFFICE Docs",
+        "settings": [
+          {"type": "ports", "title": "端口设置", "fields": ["ports"]},
+          {"type": "volumes", "title": "存储空间设置", "fields": ["volumes"]},
+          {"type": "env", "title": "环境变量", "fields": ["onlyoffice_env"]},
+          {"type": "advanced", "title": "高级设置", "fields": ["privileged"]}
+        ],
+        "description": "ONLYOFFICE Docs 在线文档编辑服务"
+      }
+    ],
+    "properties": {
+      "ports": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": ["local_port", "container_port", "protocol"],
+          "properties": {
+            "protocol": {
+              "enum": ["tcp", "udp"],
+              "type": "string",
+              "title": "协议",
+              "default": "tcp"
+            },
+            "local_port": {
+              "type": "integer",
+              "title": "本地端口",
+              "maximum": 65535,
+              "minimum": 1
+            },
+            "container_port": {
+              "type": "integer",
+              "title": "容器端口",
+              "maximum": 65535,
+              "minimum": 1
+            }
+          }
+        },
+        "title": "端口设置",
+        "default": [
+          {"protocol": "tcp", "local_port": 8180, "container_port": 80}
+        ]
+      },
+      "volumes": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": ["host_path", "container_path", "mode"],
+          "properties": {
+            "mode": {
+              "enum": ["rw", "ro"],
+              "type": "string",
+              "title": "权限",
+              "default": "rw"
+            },
+            "host_path": {
+              "type": "string",
+              "title": "本地路径",
+              "format": "directory"
+            },
+            "container_path": {
+              "type": "string",
+              "title": "容器路径"
+            }
+          }
+        },
+        "title": "存储空间设置",
+        "default": [
+          {"mode": "rw", "host_path": "onlyoffice/data", "container_path": "/var/www/onlyoffice/Data"},
+          {"mode": "rw", "host_path": "onlyoffice/logs", "container_path": "/var/log/onlyoffice"}
+        ]
+      },
+      "privileged": {
+        "type": "boolean",
+        "title": "特权模式",
+        "default": false,
+        "description": "一般无需开启，仅在有特殊系统调用需求时启用"
+      },
+      "onlyoffice_env": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": ["key", "value"],
+          "properties": {
+            "key": {"type": "string", "title": "变量名"},
+            "value": {"type": "string", "title": "值"}
+          }
+        },
+        "title": "环境变量",
+        "default": [
+          {"key": "TZ", "value": "Asia/Shanghai"},
+          {"key": "JWT_ENABLED", "value": "true"},
+          {"key": "JWT_SECRET", "value": "nasdeck-onlyoffice-secret"}
+        ]
+      }
+    }
+  },
+  "yaml_template": "services:\n  onlyoffice:\n    image: {{ image }}\n    container_name: {{ project_name }}\n    ports:\n{%- for port in ports %}\n      - \"{{ port.local_port }}:{{ port.container_port }}/{{ port.protocol }}\"\n{%- endfor %}\n    volumes:\n{%- for vol in volumes %}\n      - {{ to_host_path(vol.host_path if (vol.host_path.startswith('/') or vol.shared) else project_name ~ '/' ~ vol.host_path) }}:{{ vol.container_path }}:{{ vol.mode }}\n{%- endfor %}\n    privileged: {{ privileged | lower }}\n    restart: unless-stopped\n    environment:\n{%- for item in onlyoffice_env %}\n      - {{ item.key }}={{ item.value }}\n{%- endfor %}\n",
+  "readme": "# ONLYOFFICE Docs\n\nONLYOFFICE Docs 是开源的在线办公套件（Document Server），支持 Word、Excel、PowerPoint 文档的在线查看与多人实时协作编辑，可与 Nextcloud、ownCloud、Seafile 等网盘应用集成。\n\n## 部署前准备\n\n1. 容器内 Web 服务监听 **80 端口**，默认映射到本地 8180，如被占用请改为其他空闲端口。\n2. 首次启动需要初始化数据库与字体缓存，**启动较慢（约 1-3 分钟）**，请耐心等待。\n3. 镜像体积较大且内存占用较高，建议为 NAS 预留至少 2GB 可用内存。\n\n## 安全设置\n\n- 自 7.2 版本起默认启用 JWT 校验。请务必把环境变量 `JWT_SECRET` 修改为你自己的随机密钥；与其他应用（如 Nextcloud ONLYOFFICE 连接器）集成时，需在对方配置中填写相同的密钥。\n- 若集成的应用不支持 JWT，可将 `JWT_ENABLED` 设为 `false`（不推荐在公网环境下关闭）。\n\n## 使用说明\n\n部署完成后访问 `http://<NAS-IP>:8180`，看到欢迎页即表示服务正常。",
+  "version": "1.0.0",
+  "type": "compose",
+  "backup_paths": ["/var/www/onlyoffice/Data"],
+  "is_builtin": false
+}

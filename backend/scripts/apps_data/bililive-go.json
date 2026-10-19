@@ -1,0 +1,120 @@
+{
+  "name": "bililive-go",
+  "display_name": "BiliLive-Go",
+  "description": "BiliLive-Go 是一个支持哔哩哔哩、斗鱼、虎牙等多种直播平台的直播录制工具，提供 Web 管理界面，可自动监听并录制直播间。",
+  "category": "download",
+  "tags": ["下载", "直播录制", "录播", "哔哩哔哩", "开源"],
+  "website": "https://github.com/hr3lxphr6j/bililive-go",
+  "source_url": "https://github.com/hr3lxphr6j/bililive-go",
+  "architectures": ["amd64", "arm64"],
+  "image": "chigusa/bililive-go",
+  "default_ports": [
+    {"port": 8080, "protocol": "tcp", "description": "Web 管理界面"}
+  ],
+  "config_schema": {
+    "type": "object",
+    "required": ["ports", "volumes", "bililive_go_env"],
+    "containers": [
+      {
+        "name": "bililive-go",
+        "title": "BiliLive-Go",
+        "settings": [
+          {"type": "ports", "title": "端口设置", "fields": ["ports"]},
+          {"type": "volumes", "title": "存储空间设置", "fields": ["volumes"]},
+          {"type": "env", "title": "环境变量", "fields": ["bililive_go_env"]},
+          {"type": "advanced", "title": "高级设置", "fields": ["privileged"]}
+        ],
+        "description": "BiliLive-Go 多平台直播录制工具"
+      }
+    ],
+    "properties": {
+      "ports": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": ["local_port", "container_port", "protocol"],
+          "properties": {
+            "protocol": {
+              "enum": ["tcp", "udp"],
+              "type": "string",
+              "title": "协议",
+              "default": "tcp"
+            },
+            "local_port": {
+              "type": "integer",
+              "title": "本地端口",
+              "maximum": 65535,
+              "minimum": 1
+            },
+            "container_port": {
+              "type": "integer",
+              "title": "容器端口",
+              "maximum": 65535,
+              "minimum": 1
+            }
+          }
+        },
+        "title": "端口设置",
+        "default": [
+          {"protocol": "tcp", "local_port": 8080, "container_port": 8080}
+        ]
+      },
+      "volumes": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": ["host_path", "container_path", "mode"],
+          "properties": {
+            "mode": {
+              "enum": ["rw", "ro"],
+              "type": "string",
+              "title": "权限",
+              "default": "rw"
+            },
+            "host_path": {
+              "type": "string",
+              "title": "本地路径",
+              "format": "directory"
+            },
+            "container_path": {
+              "type": "string",
+              "title": "容器路径"
+            }
+          }
+        },
+        "title": "存储空间设置",
+        "default": [
+          {"mode": "rw", "host_path": "bililive-go/config", "container_path": "/etc/bililive-go"},
+          {"mode": "rw", "host_path": "bililive-go/videos", "container_path": "/srv/bililive"}
+        ]
+      },
+      "privileged": {
+        "type": "boolean",
+        "title": "特权模式",
+        "default": false,
+        "description": "一般无需开启，仅在有特殊系统调用需求时启用"
+      },
+      "bililive_go_env": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": ["key", "value"],
+          "properties": {
+            "key": {"type": "string", "title": "变量名"},
+            "value": {"type": "string", "title": "值"}
+          }
+        },
+        "title": "环境变量",
+        "default": [
+          {"key": "TZ", "value": "Asia/Shanghai"}
+        ]
+      }
+    }
+  },
+  "yaml_template": "services:\n  bililive-go:\n    image: {{ image }}\n    container_name: {{ project_name }}\n    ports:\n{%- for port in ports %}\n      - \"{{ port.local_port }}:{{ port.container_port }}/{{ port.protocol }}\"\n{%- endfor %}\n    volumes:\n{%- for vol in volumes %}\n      - {{ to_host_path(vol.host_path if (vol.host_path.startswith('/') or vol.shared) else project_name ~ '/' ~ vol.host_path) }}:{{ vol.container_path }}:{{ vol.mode }}\n{%- endfor %}\n    privileged: {{ privileged | lower }}\n    restart: unless-stopped\n    environment:\n{%- for item in bililive_go_env %}\n      - {{ item.key }}={{ item.value }}\n{%- endfor %}\n",
+  "readme": "# BiliLive-Go\n\nBiliLive-Go 是一个支持哔哩哔哩、斗鱼、虎牙、抖音等多种直播平台的直播录制工具，依赖 ffmpeg 完成转封装，录制稳定、资源占用低。\n\n## 部署前准备\n\n1. 「BiliLive-Go 挂载」中：配置目录映射到容器内 `/etc/bililive-go`（存放 `config.yml`），录像目录映射到 `/srv/bililive`。\n2. 录像文件体积较大，请确保录像目录所在磁盘有足够空间。\n\n## 使用说明\n\n1. 部署完成后访问 `http://<NAS-IP>:8080` 打开 Web 管理界面。\n2. 在「直播间」中添加需要监听的直播间地址，开播后会自动开始录制。\n3. 录制参数（画质、分段、回调等）可在 Web 界面或配置目录下的 `config.yml` 中调整。",
+  "version": "1.0.0",
+  "type": "compose",
+  "backup_paths": ["/etc/bililive-go"],
+  "is_builtin": false
+}

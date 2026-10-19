@@ -1,0 +1,97 @@
+{
+  "name": "stirling-pdf",
+  "display_name": "Stirling-PDF",
+  "description": "Stirling-PDF 是本地托管的开源 PDF 工具箱，提供拆分、合并、转换、压缩、OCR、签名、加密等 50+ 种 PDF 处理功能，所有文件都在本地处理，无需上传到第三方服务。",
+  "category": "tool",
+  "tags": ["工具", "PDF", "PDF工具箱", "OCR", "文档处理"],
+  "website": "https://www.stirlingpdf.com",
+  "source_url": "https://github.com/Stirling-Tools/Stirling-PDF",
+  "architectures": ["amd64", "arm64"],
+  "image": "stirlingtools/stirling-pdf",
+  "default_ports": [
+    {"port": 8080, "protocol": "tcp", "description": "Web 界面"}
+  ],
+  "config_schema": {
+    "type": "object",
+    "required": ["ports", "volumes", "stirling_pdf_env", "privileged"],
+    "containers": [
+      {
+        "name": "stirling-pdf",
+        "title": "Stirling-PDF",
+        "settings": [
+          {"type": "ports", "title": "端口设置", "fields": ["ports"]},
+          {"type": "volumes", "title": "存储空间设置", "fields": ["volumes"]},
+          {"type": "env", "title": "环境变量", "fields": ["stirling_pdf_env"]},
+          {"type": "advanced", "title": "高级设置", "fields": ["privileged"]}
+        ],
+        "description": "Stirling-PDF 本地 PDF 工具箱"
+      }
+    ],
+    "properties": {
+      "ports": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": ["local_port", "container_port", "protocol"],
+          "properties": {
+            "protocol": {"enum": ["tcp", "udp"], "type": "string", "title": "协议", "default": "tcp"},
+            "local_port": {"type": "integer", "title": "本地端口", "maximum": 65535, "minimum": 1},
+            "container_port": {"type": "integer", "title": "容器端口", "maximum": 65535, "minimum": 1}
+          }
+        },
+        "title": "端口设置",
+        "default": [
+          {"protocol": "tcp", "local_port": 8080, "container_port": 8080}
+        ]
+      },
+      "volumes": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": ["host_path", "container_path", "mode"],
+          "properties": {
+            "mode": {"enum": ["rw", "ro"], "type": "string", "title": "权限", "default": "rw"},
+            "host_path": {"type": "string", "title": "本地路径", "format": "directory"},
+            "container_path": {"type": "string", "title": "容器路径"}
+          }
+        },
+        "title": "存储空间设置",
+        "default": [
+          {"mode": "rw", "host_path": "stirling-pdf/configs", "container_path": "/configs"},
+          {"mode": "rw", "host_path": "stirling-pdf/logs", "container_path": "/logs"},
+          {"mode": "rw", "host_path": "stirling-pdf/customFiles", "container_path": "/customFiles"},
+          {"mode": "rw", "host_path": "stirling-pdf/trainingData", "container_path": "/usr/share/tessdata"}
+        ]
+      },
+      "privileged": {
+        "type": "boolean",
+        "title": "特权模式",
+        "default": false,
+        "description": "一般情况下无需开启"
+      },
+      "stirling_pdf_env": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": ["key", "value"],
+          "properties": {
+            "key": {"type": "string", "title": "变量名"},
+            "value": {"type": "string", "title": "值"}
+          }
+        },
+        "title": "环境变量",
+        "default": [
+          {"key": "TZ", "value": "Asia/Shanghai"},
+          {"key": "DOCKER_ENABLE_SECURITY", "value": "false"},
+          {"key": "LANGS", "value": "zh_CN"}
+        ]
+      }
+    }
+  },
+  "yaml_template": "services:\n  stirling-pdf:\n    image: {{ image }}\n    container_name: {{ project_name }}\n    ports:\n{%- for port in ports %}\n      - \"{{ port.local_port }}:{{ port.container_port }}/{{ port.protocol }}\"\n{%- endfor %}\n    volumes:\n{%- for vol in volumes %}\n      - {{ to_host_path(vol.host_path if (vol.host_path.startswith('/') or vol.shared) else project_name ~ '/' ~ vol.host_path) }}:{{ vol.container_path }}:{{ vol.mode }}\n{%- endfor %}\n    privileged: {{ privileged | lower }}\n    restart: unless-stopped\n    environment:\n{%- for item in stirling_pdf_env %}\n      - {{ item.key }}={{ item.value }}\n{%- endfor %}\n",
+  "readme": "# Stirling-PDF\n\nStirling-PDF 是本地托管的开源 PDF 工具箱，提供拆分、合并、旋转、压缩、格式转换、OCR、签名、加水印、加解密等 50+ 种 PDF 处理功能。所有文件均在你的 NAS 本地处理，不会上传到任何第三方服务器。\n\n## 部署前准备\n\n1. 在「存储空间设置」中确认各挂载路径：\n   - `/configs`：自定义配置文件\n   - `/logs`：运行日志\n   - `/customFiles`：自定义静态文件\n   - `/usr/share/tessdata`：OCR 语言包（OCR 中文时需下载 `chi_sim.traineddata` 放入该目录）\n2. 默认 Web 端口为 `8080`，如与本机其他服务冲突请修改本地端口。\n3. 环境变量 `DOCKER_ENABLE_SECURITY=false` 表示关闭登录认证（内网自用时推荐）；如需账号登录可改为 `true` 并参考官方文档配置。\n\n## 部署后使用\n\n1. 访问 `http://<NAS-IP>:8080` 打开 Stirling-PDF。\n2. 在首页选择需要的工具，拖入 PDF 文件即可处理。\n\n## 说明\n\n- 官方镜像已由旧名 `frooodle/s-pdf` 迁移至 `stirlingtools/stirling-pdf`。\n- 官方文档：https://docs.stirlingpdf.com",
+  "version": "1.0.0",
+  "type": "compose",
+  "backup_paths": ["/configs"],
+  "is_builtin": false
+}

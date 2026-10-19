@@ -1,0 +1,143 @@
+{
+  "name": "clouddrive2",
+  "display_name": "CloudDrive2",
+  "description": "CloudDrive2 是一款多云盘挂载管理工具，可将 115、阿里云盘、百度网盘、天翼云盘、PikPak、WebDAV 等云存储挂载为本地目录，供 Emby、Plex 等应用直接读取。",
+  "category": "tool",
+  "tags": ["工具", "网盘挂载", "云存储", "FUSE", "NAS"],
+  "website": "https://www.clouddrive2.com/",
+  "source_url": "https://hub.docker.com/r/cloudnas/clouddrive2",
+  "architectures": ["amd64", "arm64"],
+  "image": "cloudnas/clouddrive2",
+  "default_ports": [
+    {"port": 19798, "protocol": "tcp", "description": "Web 管理界面"}
+  ],
+  "config_schema": {
+    "type": "object",
+    "required": ["ports", "volumes", "clouddrive2_env"],
+    "containers": [
+      {
+        "name": "clouddrive2",
+        "title": "CloudDrive2",
+        "settings": [
+          {"type": "ports", "title": "端口设置", "fields": ["ports"]},
+          {"type": "volumes", "title": "存储空间设置", "fields": ["volumes"]},
+          {"type": "env", "title": "环境变量", "fields": ["clouddrive2_env"]},
+          {"type": "devices", "title": "设备映射", "fields": ["devices"]},
+          {"type": "advanced", "title": "高级设置", "fields": ["privileged"]}
+        ],
+        "description": "CloudDrive2 多云盘挂载工具"
+      }
+    ],
+    "properties": {
+      "ports": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": ["local_port", "container_port", "protocol"],
+          "properties": {
+            "protocol": {
+              "enum": ["tcp", "udp"],
+              "type": "string",
+              "title": "协议",
+              "default": "tcp"
+            },
+            "local_port": {
+              "type": "integer",
+              "title": "本地端口",
+              "maximum": 65535,
+              "minimum": 1
+            },
+            "container_port": {
+              "type": "integer",
+              "title": "容器端口",
+              "maximum": 65535,
+              "minimum": 1
+            }
+          }
+        },
+        "title": "端口设置",
+        "default": [
+          {"protocol": "tcp", "local_port": 19798, "container_port": 19798}
+        ]
+      },
+      "devices": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": ["host_path", "container_path"],
+          "properties": {
+            "host_path": {
+              "type": "string",
+              "title": "宿主机设备"
+            },
+            "container_path": {
+              "type": "string",
+              "title": "容器设备"
+            }
+          }
+        },
+        "title": "设备映射",
+        "default": [
+          {"host_path": "/dev/fuse", "container_path": "/dev/fuse"}
+        ]
+      },
+      "volumes": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": ["host_path", "container_path", "mode"],
+          "properties": {
+            "mode": {
+              "enum": ["rw", "ro", "shared", "rshared"],
+              "type": "string",
+              "title": "权限",
+              "default": "rw"
+            },
+            "host_path": {
+              "type": "string",
+              "title": "本地路径",
+              "format": "directory"
+            },
+            "container_path": {
+              "type": "string",
+              "title": "容器路径"
+            }
+          }
+        },
+        "title": "存储空间设置",
+        "default": [
+          {"mode": "rw", "host_path": "clouddrive2/config", "container_path": "/Config"},
+          {"mode": "rshared", "host_path": "clouddrive2/CloudNAS", "container_path": "/CloudNAS"}
+        ]
+      },
+      "privileged": {
+        "type": "boolean",
+        "title": "特权模式",
+        "default": true,
+        "description": "FUSE 挂载需要特权模式（或等价的 capabilities），请保持开启"
+      },
+      "clouddrive2_env": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": ["key", "value"],
+          "properties": {
+            "key": {"type": "string", "title": "变量名"},
+            "value": {"type": "string", "title": "值"}
+          }
+        },
+        "title": "环境变量",
+        "default": [
+          {"key": "TZ", "value": "Asia/Shanghai"},
+          {"key": "CLOUDDRIVE_HOME", "value": "/Config"}
+        ]
+      }
+    }
+  },
+  "yaml_template": "services:\n  clouddrive2:\n    image: {{ image }}\n    container_name: {{ project_name }}\n    ports:\n{%- for port in ports %}\n      - \"{{ port.local_port }}:{{ port.container_port }}/{{ port.protocol }}\"\n{%- endfor %}\n    volumes:\n{%- for vol in volumes %}\n      - {{ to_host_path(vol.host_path if (vol.host_path.startswith('/') or vol.shared) else project_name ~ '/' ~ vol.host_path) }}:{{ vol.container_path }}:{{ vol.mode }}\n{%- endfor %}\n    privileged: {{ privileged | lower }}\n{%- if devices %}\n    devices:\n{%- for dev in devices %}\n      - {{ dev.host_path }}:{{ dev.container_path }}\n{%- endfor %}\n{%- endif %}\n    restart: unless-stopped\n    environment:\n{%- for item in clouddrive2_env %}\n      - {{ item.key }}={{ item.value }}\n{%- endfor %}\n",
+  "readme": "# CloudDrive2\n\nCloudDrive2 是一款多云盘挂载管理工具，基于 fuse3 将 115、阿里云盘、百度网盘、天翼云盘、Google Drive、PikPak、WebDAV 等云存储挂载为本地目录，供 Emby、Plex、Jellyfin 等媒体应用直接读取，无需下载到本地。\n\n## 部署要求（重要）\n\n1. **宿主机内核需支持 FUSE**（存在 `/dev/fuse` 设备），大部分 x86 NAS 系统默认支持。\n2. 容器需要**特权模式**与 `/dev/fuse` 设备映射，默认已配置好，请勿随意关闭。\n3. 挂载目录（容器内 `/CloudNAS`）使用 **rshared 共享挂载传播**，这样容器内的云盘挂载点对宿主机和其他容器可见。对应的宿主机目录建议先执行 `mount --bind` 并设为 shared，详见官方 Docker 部署文档。\n\n## 使用说明\n\n1. 部署完成后访问 `http://<NAS-IP>:19798`，注册并登录 CloudDrive 账号。\n2. 在 Web 界面中添加云盘账号，挂载点选择 `/CloudNAS` 下的子目录。\n3. 挂载完成后，宿主机的 CloudNAS 目录即可看到云盘内容，可将其映射给 Emby、Plex 等应用使用。\n\n## 提示\n\n没有 FUSE 设备时，Web 管理、WebDAV 服务等基础功能仍可使用，但无法挂载本地目录。",
+  "version": "1.0.0",
+  "type": "compose",
+  "backup_paths": ["/Config"],
+  "is_builtin": false
+}

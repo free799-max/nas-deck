@@ -1,0 +1,119 @@
+{
+  "name": "memos",
+  "display_name": "Memos",
+  "description": "Memos 是一个轻量级、自托管的备忘录中心，开源且永久免费，支持 Markdown、标签、分享与 RESTful API，随时随地记录你的想法。",
+  "category": "tool",
+  "tags": ["工具", "备忘录", "笔记", "自托管", "开源"],
+  "website": "https://www.usememos.com/",
+  "source_url": "https://github.com/usememos/memos",
+  "architectures": ["amd64", "arm64"],
+  "image": "neosmemo/memos",
+  "default_ports": [
+    {"port": 5230, "protocol": "tcp", "description": "Web 界面"}
+  ],
+  "config_schema": {
+    "type": "object",
+    "required": ["ports", "volumes", "memos_env"],
+    "containers": [
+      {
+        "name": "memos",
+        "title": "Memos",
+        "settings": [
+          {"type": "ports", "title": "端口设置", "fields": ["ports"]},
+          {"type": "volumes", "title": "存储空间设置", "fields": ["volumes"]},
+          {"type": "env", "title": "环境变量", "fields": ["memos_env"]},
+          {"type": "advanced", "title": "高级设置", "fields": ["privileged"]}
+        ],
+        "description": "Memos 轻量级自托管备忘录"
+      }
+    ],
+    "properties": {
+      "ports": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": ["local_port", "container_port", "protocol"],
+          "properties": {
+            "protocol": {
+              "enum": ["tcp", "udp"],
+              "type": "string",
+              "title": "协议",
+              "default": "tcp"
+            },
+            "local_port": {
+              "type": "integer",
+              "title": "本地端口",
+              "maximum": 65535,
+              "minimum": 1
+            },
+            "container_port": {
+              "type": "integer",
+              "title": "容器端口",
+              "maximum": 65535,
+              "minimum": 1
+            }
+          }
+        },
+        "title": "端口设置",
+        "default": [
+          {"protocol": "tcp", "local_port": 5230, "container_port": 5230}
+        ]
+      },
+      "volumes": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": ["host_path", "container_path", "mode"],
+          "properties": {
+            "mode": {
+              "enum": ["rw", "ro"],
+              "type": "string",
+              "title": "权限",
+              "default": "rw"
+            },
+            "host_path": {
+              "type": "string",
+              "title": "本地路径",
+              "format": "directory"
+            },
+            "container_path": {
+              "type": "string",
+              "title": "容器路径"
+            }
+          }
+        },
+        "title": "存储空间设置",
+        "default": [
+          {"mode": "rw", "host_path": "memos/data", "container_path": "/var/opt/memos"}
+        ]
+      },
+      "privileged": {
+        "type": "boolean",
+        "title": "特权模式",
+        "default": false,
+        "description": "一般无需开启，仅在有特殊系统调用需求时启用"
+      },
+      "memos_env": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": ["key", "value"],
+          "properties": {
+            "key": {"type": "string", "title": "变量名"},
+            "value": {"type": "string", "title": "值"}
+          }
+        },
+        "title": "环境变量",
+        "default": [
+          {"key": "TZ", "value": "Asia/Shanghai"}
+        ]
+      }
+    }
+  },
+  "yaml_template": "services:\n  memos:\n    image: {{ image }}\n    container_name: {{ project_name }}\n    ports:\n{%- for port in ports %}\n      - \"{{ port.local_port }}:{{ port.container_port }}/{{ port.protocol }}\"\n{%- endfor %}\n    volumes:\n{%- for vol in volumes %}\n      - {{ to_host_path(vol.host_path if (vol.host_path.startswith('/') or vol.shared) else project_name ~ '/' ~ vol.host_path) }}:{{ vol.container_path }}:{{ vol.mode }}\n{%- endfor %}\n    privileged: {{ privileged | lower }}\n    restart: unless-stopped\n    environment:\n{%- for item in memos_env %}\n      - {{ item.key }}={{ item.value }}\n{%- endfor %}\n",
+  "readme": "# Memos\n\nMemos 是一个轻量级、自托管的备忘录中心，开源且永久免费。支持 Markdown 语法、标签分类、内容分享，并提供 RESTful API 便于与其他工具集成。\n\n## 部署前准备\n\n1. 确认「Memos 挂载」中的数据目录（容器内 `/var/opt/memos`），所有备忘录数据（SQLite 数据库与附件）都保存在这里。\n2. 如需修改端口，调整「端口设置」中的本地端口即可。\n\n## 使用说明\n\n1. 部署完成后访问 `http://<NAS-IP>:5230`，首次打开需注册管理员账号。\n2. 支持中文界面，可在设置中切换语言。\n3. 升级镜像前建议先备份数据目录。",
+  "version": "1.0.0",
+  "type": "compose",
+  "backup_paths": ["/var/opt/memos"],
+  "is_builtin": false
+}

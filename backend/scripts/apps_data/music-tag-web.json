@@ -1,0 +1,205 @@
+{
+  "name": "music-tag-web",
+  "display_name": "Music Tag Web",
+  "description": "Music Tag Web 是自托管的音乐标签编辑器，可在浏览器中批量刮削、编辑歌曲的标题、专辑、艺术家、歌词和封面等元数据，内置音乐指纹识别，是 Navidrome / Jellyfin 曲库的绝佳配套整理工具。",
+  "category": "music",
+  "tags": [
+    "音乐",
+    "刮削",
+    "标签编辑",
+    "元数据",
+    "开源"
+  ],
+  "source_url": "https://github.com/xhongc/music-tag-web",
+  "architectures": [
+    "amd64",
+    "arm64"
+  ],
+  "image": "xhongc/music_tag_web",
+  "default_ports": [
+    {
+      "port": 8002,
+      "protocol": "tcp",
+      "description": "Web 管理界面"
+    }
+  ],
+  "config_schema": {
+    "type": "object",
+    "required": [
+      "ports",
+      "volumes",
+      "music_tag_web_env"
+    ],
+    "containers": [
+      {
+        "name": "music-tag-web",
+        "title": "Music Tag Web",
+        "settings": [
+          {
+            "type": "ports",
+            "title": "端口设置",
+            "fields": [
+              "ports"
+            ]
+          },
+          {
+            "type": "volumes",
+            "title": "存储空间设置",
+            "fields": [
+              "volumes"
+            ]
+          },
+          {
+            "type": "env",
+            "title": "环境变量",
+            "fields": [
+              "music_tag_web_env"
+            ]
+          },
+          {
+            "type": "advanced",
+            "title": "高级设置",
+            "fields": [
+              "privileged"
+            ]
+          }
+        ],
+        "description": "音乐元数据刮削与批量整理工具"
+      }
+    ],
+    "properties": {
+      "ports": {
+        "type": "array",
+        "title": "端口设置",
+        "items": {
+          "type": "object",
+          "required": [
+            "local_port",
+            "container_port",
+            "protocol"
+          ],
+          "properties": {
+            "protocol": {
+              "enum": [
+                "tcp",
+                "udp"
+              ],
+              "type": "string",
+              "title": "协议",
+              "default": "tcp"
+            },
+            "local_port": {
+              "type": "integer",
+              "title": "本地端口",
+              "maximum": 65535,
+              "minimum": 1
+            },
+            "container_port": {
+              "type": "integer",
+              "title": "容器端口",
+              "maximum": 65535,
+              "minimum": 1
+            }
+          }
+        },
+        "default": [
+          {
+            "protocol": "tcp",
+            "local_port": 8002,
+            "container_port": 8002
+          }
+        ]
+      },
+      "volumes": {
+        "type": "array",
+        "title": "存储空间设置",
+        "items": {
+          "type": "object",
+          "required": [
+            "host_path",
+            "container_path",
+            "mode"
+          ],
+          "properties": {
+            "mode": {
+              "enum": [
+                "rw",
+                "ro"
+              ],
+              "type": "string",
+              "title": "权限",
+              "default": "rw"
+            },
+            "host_path": {
+              "type": "string",
+              "title": "本地路径",
+              "format": "directory"
+            },
+            "container_path": {
+              "type": "string",
+              "title": "容器路径"
+            }
+          }
+        },
+        "default": [
+          {
+            "mode": "rw",
+            "host_path": "music-tag-web/config",
+            "container_path": "/app/data"
+          },
+          {
+            "mode": "rw",
+            "host_path": "music",
+            "container_path": "/app/media"
+          }
+        ]
+      },
+      "privileged": {
+        "type": "boolean",
+        "title": "特权模式",
+        "default": false,
+        "description": "以特权模式运行容器，可访问宿主机全部设备，一般无需开启"
+      },
+      "music_tag_web_env": {
+        "type": "array",
+        "title": "环境变量",
+        "items": {
+          "type": "object",
+          "required": [
+            "key",
+            "value"
+          ],
+          "properties": {
+            "key": {
+              "type": "string",
+              "title": "变量名"
+            },
+            "value": {
+              "type": "string",
+              "title": "值"
+            }
+          }
+        },
+        "default": [
+          {
+            "key": "DJANGO_SECRET_KEY",
+            "value": "9f2c4a7e1b8d3f5a6c0e2d4b8a1f3c5e7d9b0a2c4e6f8a1b3d5c7e9f0a2b4c6d8"
+          },
+          {
+            "key": "TZ",
+            "value": "Asia/Shanghai"
+          }
+        ]
+      }
+    }
+  },
+  "yaml_template": "services:\n  music-tag-web:\n    image: {{ image }}\n    container_name: {{ project_name }}\n    ports:\n{%- for port in ports %}\n      - \"{{ port.local_port }}:{{ port.container_port }}/{{ port.protocol }}\"\n{%- endfor %}\n    volumes:\n{%- for vol in volumes %}\n      - {{ to_host_path(vol.host_path if (vol.host_path.startswith('/') or vol.shared) else project_name ~ '/' ~ vol.host_path) }}:{{ vol.container_path }}:{{ vol.mode }}\n{%- endfor %}\n    privileged: {{ privileged | lower }}\n    restart: unless-stopped\n    environment:\n{%- for item in music_tag_web_env %}\n      - {{ item.key }}={{ item.value }}\n{%- endfor %}\n",
+  "readme": "# Music Tag Web\n\nMusic Tag Web 是一款开源的自托管音乐标签编辑器，专为 NAS 曲库打造，可远程批量刮削、修复歌曲的标题、专辑、艺术家、歌词、封面等元数据，替代本地的 MP3Tag。\n\n## 部署前准备\n\n1. 在「存储空间设置」中将 `/app/media` 对应的本地路径修改为你的音乐库目录（需要 `rw` 权限才能写入标签）。\n2. `/app/data` 用于保存配置与数据库，保持默认即可。\n3. 建议在「环境变量」中把 `DJANGO_SECRET_KEY` 修改为随机字符串。\n\n## 首次使用\n\n部署完成后访问 `http://<NAS-IP>:8002`，默认账号密码 `admin/admin`，首次登录请立即修改密码。",
+  "version": "1.0.0",
+  "type": "compose",
+  "changelog": "初始导入",
+  "backup_paths": [
+    "/app/data"
+  ],
+  "is_builtin": false
+}

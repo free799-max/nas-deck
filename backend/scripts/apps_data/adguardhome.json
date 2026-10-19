@@ -1,0 +1,98 @@
+{
+    "name": "adguardhome",
+    "display_name": "AdGuard Home",
+    "description": "对应海报条目：Hosts 优选 优化站点 + TMDB等访问。AdGuard Home 是全网广告拦截与隐私保护的 DNS 服务器，通过其 DNS 重写（rewrite）功能可实现自定义 hosts 效果，优化 PT 站点、TMDB 等域名的访问，同时提供广告过滤、恶意网站拦截等能力。",
+    "category": "tool",
+    "tags": ["工具", "DNS", "Hosts", "去广告", "开源"],
+    "website": "https://adguard.com/zh_cn/adguard-home.html",
+    "source_url": "https://github.com/AdguardTeam/AdGuardHome",
+    "architectures": ["amd64", "arm64"],
+    "image": "adguard/adguardhome",
+    "default_ports": [
+        {"port": 3000, "protocol": "tcp", "description": "初始化向导 / Web 管理界面"},
+        {"port": 53, "protocol": "tcp", "description": "DNS 服务端口（TCP，可选映射）"},
+        {"port": 53, "protocol": "udp", "description": "DNS 服务端口（UDP，可选映射）"}
+    ],
+    "config_schema": {
+        "type": "object",
+        "required": ["ports", "volumes"],
+        "containers": [
+            {
+                "name": "adguardhome",
+                "title": "AdGuard Home",
+                "settings": [
+                    {"type": "ports", "title": "端口设置", "fields": ["ports"]},
+                    {"type": "volumes", "title": "存储空间设置", "fields": ["volumes"]},
+                    {"type": "env", "title": "环境变量", "fields": ["adguardhome_env"]},
+                    {"type": "advanced", "title": "高级设置", "fields": ["privileged"]}
+                ],
+                "description": "AdGuard Home DNS 服务器"
+            }
+        ],
+        "properties": {
+            "ports": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "required": ["local_port", "container_port", "protocol"],
+                    "properties": {
+                        "protocol": {"enum": ["tcp", "udp"], "type": "string", "title": "协议", "default": "tcp"},
+                        "local_port": {"type": "integer", "title": "本地端口", "maximum": 65535, "minimum": 1},
+                        "container_port": {"type": "integer", "title": "容器端口", "maximum": 65535, "minimum": 1}
+                    }
+                },
+                "title": "端口设置",
+                "default": [
+                    {"protocol": "tcp", "local_port": 3000, "container_port": 3000},
+                    {"protocol": "tcp", "local_port": 53, "container_port": 53},
+                    {"protocol": "udp", "local_port": 53, "container_port": 53}
+                ]
+            },
+            "volumes": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "required": ["host_path", "container_path", "mode"],
+                    "properties": {
+                        "mode": {"enum": ["rw", "ro"], "type": "string", "title": "权限", "default": "rw"},
+                        "host_path": {"type": "string", "title": "本地路径", "format": "directory"},
+                        "container_path": {"type": "string", "title": "容器路径"}
+                    }
+                },
+                "title": "存储空间设置",
+                "default": [
+                    {"mode": "rw", "host_path": "adguardhome/work", "container_path": "/opt/adguardhome/work"},
+                    {"mode": "rw", "host_path": "adguardhome/conf", "container_path": "/opt/adguardhome/conf"}
+                ]
+            },
+            "adguardhome_env": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "required": ["key", "value"],
+                    "properties": {
+                        "key": {"type": "string", "title": "变量名"},
+                        "value": {"type": "string", "title": "值"}
+                    }
+                },
+                "title": "环境变量",
+                "default": [
+                    {"key": "TZ", "value": "Asia/Shanghai"}
+                ]
+            },
+            "privileged": {
+                "type": "boolean",
+                "title": "特权模式",
+                "default": false,
+                "description": "一般无需开启；53 端口被占用时可改用其他本地端口映射"
+            }
+        }
+    },
+    "yaml_template": "services:\n  adguardhome:\n    image: {{ image }}\n    container_name: {{ project_name }}\n    ports:\n{%- for port in ports %}\n      - \"{{ port.local_port }}:{{ port.container_port }}/{{ port.protocol }}\"\n{%- endfor %}\n    volumes:\n{%- for vol in volumes %}\n      - {{ to_host_path(vol.host_path if (vol.host_path.startswith('/') or vol.shared) else project_name ~ '/' ~ vol.host_path) }}:{{ vol.container_path }}:{{ vol.mode }}\n{%- endfor %}\n    privileged: {{ privileged | lower }}\n    restart: unless-stopped\n{%- if adguardhome_env %}\n    environment:\n{%- for item in adguardhome_env %}\n      - {{ item.key }}={{ item.value }}\n{%- endfor %}\n{%- endif %}\n",
+    "readme": "# AdGuard Home\n\n对应海报条目：Hosts 优选 优化站点 + TMDB等访问。\n\nAdGuard Home 是一款全网广告拦截与隐私保护的 DNS 服务器。通过「DNS 重写」功能可以为任意域名指定解析 IP，等效于自定义 hosts，可用于优化 PT 站点、TMDB 等域名的访问速度与连通性。\n\n## 部署前准备\n\n1. 首次安装请访问 `http://<NAS-IP>:3000` 完成初始化向导（设置管理端口、账号密码）。初始化后管理界面默认运行在 80 端口，请在向导中留意或在「端口设置」中追加 80 端口映射。\n2. 53 端口（TCP/UDP）为 DNS 服务端口，若宿主机已有 DNS 服务占用（如 systemd-resolved），可将本地端口改为其他值（如 5553）或删除该映射。\n\n## 实现 Hosts 优选\n\n进入管理界面 →「过滤器」→「DNS 重写」→ 添加重写：填写域名（如 `api.themoviedb.org`）与优选 IP，保存即可。将设备或路由器的 DNS 指向本服务地址后全网生效。\n\n## 注意\n\n请妥善保管初始化时设置的管理账号密码；配置保存在 `/opt/adguardhome/conf`，已默认持久化。",
+    "version": "1.0.0",
+    "type": "compose",
+    "changelog": "初始导入",
+    "backup_paths": ["/opt/adguardhome/work", "/opt/adguardhome/conf"],
+    "is_builtin": false
+}

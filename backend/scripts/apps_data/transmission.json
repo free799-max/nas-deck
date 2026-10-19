@@ -1,0 +1,101 @@
+{
+    "name": "transmission",
+    "display_name": "Transmission",
+    "description": "Transmission 是轻量、开源的 BitTorrent 下载工具，资源占用低、运行稳定，常与 qBittorrent 搭配实现「QB 下载 + TR 保种」的经典组合，自带 Web 管理界面，适合长期挂机做种。",
+    "category": "download",
+    "tags": ["下载", "BT", "PT", "保种", "开源"],
+    "website": "https://transmissionbt.com/",
+    "source_url": "https://github.com/transmission/transmission",
+    "architectures": ["amd64", "arm64"],
+    "image": "linuxserver/transmission",
+    "default_ports": [
+        {"port": 9091, "protocol": "tcp", "description": "Web 管理界面"},
+        {"port": 51413, "protocol": "tcp", "description": "BT 监听端口（TCP）"},
+        {"port": 51413, "protocol": "udp", "description": "BT 监听端口（UDP）"}
+    ],
+    "config_schema": {
+        "type": "object",
+        "required": ["ports", "volumes", "transmission_env"],
+        "containers": [
+            {
+                "name": "transmission",
+                "title": "Transmission",
+                "settings": [
+                    {"type": "ports", "title": "端口设置", "fields": ["ports"]},
+                    {"type": "volumes", "title": "存储空间设置", "fields": ["volumes"]},
+                    {"type": "env", "title": "环境变量", "fields": ["transmission_env"]},
+                    {"type": "advanced", "title": "高级设置", "fields": ["privileged"]}
+                ],
+                "description": "Transmission BT 下载器"
+            }
+        ],
+        "properties": {
+            "ports": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "required": ["local_port", "container_port", "protocol"],
+                    "properties": {
+                        "protocol": {"enum": ["tcp", "udp"], "type": "string", "title": "协议", "default": "tcp"},
+                        "local_port": {"type": "integer", "title": "本地端口", "maximum": 65535, "minimum": 1},
+                        "container_port": {"type": "integer", "title": "容器端口", "maximum": 65535, "minimum": 1}
+                    }
+                },
+                "title": "端口设置",
+                "default": [
+                    {"protocol": "tcp", "local_port": 9091, "container_port": 9091},
+                    {"protocol": "tcp", "local_port": 51413, "container_port": 51413},
+                    {"protocol": "udp", "local_port": 51413, "container_port": 51413}
+                ]
+            },
+            "volumes": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "required": ["host_path", "container_path", "mode"],
+                    "properties": {
+                        "mode": {"enum": ["rw", "ro"], "type": "string", "title": "权限", "default": "rw"},
+                        "host_path": {"type": "string", "title": "本地路径", "format": "directory"},
+                        "container_path": {"type": "string", "title": "容器路径"}
+                    }
+                },
+                "title": "存储空间设置",
+                "default": [
+                    {"mode": "rw", "host_path": "transmission/config", "container_path": "/config"},
+                    {"mode": "rw", "host_path": "transmission/downloads", "container_path": "/downloads"},
+                    {"mode": "rw", "host_path": "transmission/watch", "container_path": "/watch"}
+                ]
+            },
+            "transmission_env": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "required": ["key", "value"],
+                    "properties": {
+                        "key": {"type": "string", "title": "变量名"},
+                        "value": {"type": "string", "title": "值"}
+                    }
+                },
+                "title": "环境变量",
+                "default": [
+                    {"key": "PUID", "value": "1000"},
+                    {"key": "PGID", "value": "1000"},
+                    {"key": "TZ", "value": "Asia/Shanghai"}
+                ]
+            },
+            "privileged": {
+                "type": "boolean",
+                "title": "特权模式",
+                "default": false,
+                "description": "一般无需开启"
+            }
+        }
+    },
+    "yaml_template": "services:\n  transmission:\n    image: {{ image }}\n    container_name: {{ project_name }}\n    ports:\n{%- for port in ports %}\n      - \"{{ port.local_port }}:{{ port.container_port }}/{{ port.protocol }}\"\n{%- endfor %}\n    volumes:\n{%- for vol in volumes %}\n      - {{ to_host_path(vol.host_path if (vol.host_path.startswith('/') or vol.shared) else project_name ~ '/' ~ vol.host_path) }}:{{ vol.container_path }}:{{ vol.mode }}\n{%- endfor %}\n    privileged: {{ privileged | lower }}\n    restart: unless-stopped\n{%- if transmission_env %}\n    environment:\n{%- for item in transmission_env %}\n      - {{ item.key }}={{ item.value }}\n{%- endfor %}\n{%- endif %}\n",
+    "readme": "# Transmission\n\nTransmission 是轻量、开源的 BitTorrent 下载工具，资源占用低、运行稳定，适合长期挂机保种，常与 qBittorrent 搭配组成「QB 下载 + TR 保种」方案。\n\n## 部署前准备\n\n1. 在「环境变量」中按需修改 `PUID` / `PGID`（默认 `1000:1000`），确保对下载目录有写权限。\n2. 在「存储空间设置」中确认配置目录 `/config`、下载目录 `/downloads` 和种子监控目录 `/watch` 的本地映射。\n3. 如需 PT 做种，请保持 51413 端口（TCP/UDP）映射并在路由器上放行。\n\n## 使用\n\n部署完成后访问 `http://<NAS-IP>:9091` 打开 Web 管理界面。默认无登录密码，可在设置中开启账号密码认证。将 .torrent 文件放入 watch 目录可自动添加任务。",
+    "version": "1.0.0",
+    "type": "compose",
+    "changelog": "初始导入",
+    "backup_paths": ["/config"],
+    "is_builtin": false
+}

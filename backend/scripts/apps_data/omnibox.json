@@ -1,0 +1,94 @@
+{
+    "name": "omnibox",
+    "display_name": "Omnibox",
+    "description": "OmniBox 是以「聚合」为核心的家庭影视系统，一站式整合采集站影视、网盘资源（阿里云盘、夸克、115 等）、IPTV 电视源与 B 站、抖音等平台直播源，支持弹幕、TMDB 刮削、TVBox 对接与多用户管理，网页、手机、电视多端可用。",
+    "category": "movie",
+    "tags": ["影视", "聚合", "网盘", "直播", "在线播放"],
+    "website": "https://hub.docker.com/r/lampon/omnibox",
+    "source_url": "https://hub.docker.com/r/lampon/omnibox",
+    "architectures": ["amd64", "arm64"],
+    "image": "lampon/omnibox",
+    "default_ports": [
+        {"port": 7023, "protocol": "tcp", "description": "Web 访问端口"}
+    ],
+    "config_schema": {
+        "type": "object",
+        "required": ["ports", "volumes"],
+        "containers": [
+            {
+                "name": "omnibox",
+                "title": "Omnibox",
+                "settings": [
+                    {"type": "ports", "title": "端口设置", "fields": ["ports"]},
+                    {"type": "volumes", "title": "存储空间设置", "fields": ["volumes"]},
+                    {"type": "env", "title": "环境变量", "fields": ["omnibox_env"]},
+                    {"type": "advanced", "title": "高级设置", "fields": ["privileged"]}
+                ],
+                "description": "OmniBox 影视直播聚合平台"
+            }
+        ],
+        "properties": {
+            "ports": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "required": ["local_port", "container_port", "protocol"],
+                    "properties": {
+                        "protocol": {"enum": ["tcp", "udp"], "type": "string", "title": "协议", "default": "tcp"},
+                        "local_port": {"type": "integer", "title": "本地端口", "maximum": 65535, "minimum": 1},
+                        "container_port": {"type": "integer", "title": "容器端口", "maximum": 65535, "minimum": 1}
+                    }
+                },
+                "title": "端口设置",
+                "default": [
+                    {"protocol": "tcp", "local_port": 7023, "container_port": 7023}
+                ]
+            },
+            "volumes": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "required": ["host_path", "container_path", "mode"],
+                    "properties": {
+                        "mode": {"enum": ["rw", "ro"], "type": "string", "title": "权限", "default": "rw"},
+                        "host_path": {"type": "string", "title": "本地路径", "format": "directory"},
+                        "container_path": {"type": "string", "title": "容器路径"}
+                    }
+                },
+                "title": "存储空间设置",
+                "default": [
+                    {"mode": "rw", "host_path": "omnibox/data", "container_path": "/app/data"}
+                ]
+            },
+            "omnibox_env": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "required": ["key", "value"],
+                    "properties": {
+                        "key": {"type": "string", "title": "变量名"},
+                        "value": {"type": "string", "title": "值"}
+                    }
+                },
+                "title": "环境变量",
+                "default": [
+                    {"key": "TZ", "value": "Asia/Shanghai"},
+                    {"key": "DATABASE_TYPE", "value": "sqlite"}
+                ]
+            },
+            "privileged": {
+                "type": "boolean",
+                "title": "特权模式",
+                "default": false,
+                "description": "一般无需开启"
+            }
+        }
+    },
+    "yaml_template": "services:\n  omnibox:\n    image: {{ image }}\n    container_name: {{ project_name }}\n    ports:\n{%- for port in ports %}\n      - \"{{ port.local_port }}:{{ port.container_port }}/{{ port.protocol }}\"\n{%- endfor %}\n    volumes:\n{%- for vol in volumes %}\n      - {{ to_host_path(vol.host_path if (vol.host_path.startswith('/') or vol.shared) else project_name ~ '/' ~ vol.host_path) }}:{{ vol.container_path }}:{{ vol.mode }}\n{%- endfor %}\n    privileged: {{ privileged | lower }}\n    restart: unless-stopped\n{%- if omnibox_env %}\n    environment:\n{%- for item in omnibox_env %}\n      - {{ item.key }}={{ item.value }}\n{%- endfor %}\n{%- endif %}\n",
+    "readme": "# Omnibox\n\nOmniBox 是以「聚合」为核心的家庭影视系统，一站式整合在线影视、网盘资源与电视直播：\n\n- 多源影视聚合：支持采集站与阿里云盘、夸克、115 等主流网盘资源，无需下载即可在线播放\n- 电视直播：支持 IPTV 电视源及 B 站、抖音等平台直播源\n- 支持弹幕 API、TMDB API 接入，可展示分季分集海报、简介、演员与评分\n- 支持密码保护、多用户管理，可对接 TVBox 等第三方播放端\n\n## 部署前准备\n\n1. 默认端口 `7023`，如有冲突请修改本地端口。\n2. 数据目录 `/app/data` 已默认持久化；默认使用 SQLite 数据库（`DATABASE_TYPE=sqlite`），无需额外配置，也可改用 MySQL / PostgreSQL。\n\n## 使用\n\n1. 部署完成后访问 `http://<NAS-IP>:7023`，首次使用建议先设置访问密码。\n2. 进入「爬虫管理」添加影视源、直播源等接口后首页才有内容；可配合 PanSou 网盘搜索获得更佳体验。",
+    "version": "1.0.0",
+    "type": "compose",
+    "changelog": "初始导入",
+    "backup_paths": ["/app/data"],
+    "is_builtin": false
+}

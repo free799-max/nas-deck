@@ -1,0 +1,201 @@
+{
+    "name": "newsnow",
+    "display_name": "NewsNow",
+    "description": "NewsNow 是优雅的实时热门新闻聚合面板，聚合微博、知乎、GitHub 等多个站点热榜，支持缓存与 GitHub 登录同步。",
+    "category": "news",
+    "tags": [
+        "新闻",
+        "热榜",
+        "资讯聚合",
+        "RSS",
+        "开源"
+    ],
+    "website": "https://newsnow.busiyi.world/",
+    "source_url": "https://github.com/ourongxing/newsnow",
+    "architectures": [
+        "amd64",
+        "arm64"
+    ],
+    "image": "ghcr.io/ourongxing/newsnow",
+    "default_ports": [
+        {
+            "port": 4444,
+            "protocol": "tcp",
+            "description": "Web 界面"
+        }
+    ],
+    "config_schema": {
+        "type": "object",
+        "required": [
+            "ports",
+            "volumes",
+            "newsnow_env"
+        ],
+        "containers": [
+            {
+                "name": "newsnow",
+                "title": "NewsNow",
+                "settings": [
+                    {
+                        "type": "ports",
+                        "title": "端口设置",
+                        "fields": [
+                            "ports"
+                        ]
+                    },
+                    {
+                        "type": "volumes",
+                        "title": "存储空间设置",
+                        "fields": [
+                            "volumes"
+                        ]
+                    },
+                    {
+                        "type": "env",
+                        "title": "环境变量",
+                        "fields": [
+                            "newsnow_env"
+                        ]
+                    },
+                    {
+                        "type": "advanced",
+                        "title": "高级设置",
+                        "fields": [
+                            "privileged"
+                        ]
+                    }
+                ],
+                "description": "NewsNow 实时新闻聚合"
+            }
+        ],
+        "properties": {
+            "ports": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "required": [
+                        "local_port",
+                        "container_port",
+                        "protocol"
+                    ],
+                    "properties": {
+                        "protocol": {
+                            "enum": [
+                                "tcp",
+                                "udp"
+                            ],
+                            "type": "string",
+                            "title": "协议",
+                            "default": "tcp"
+                        },
+                        "local_port": {
+                            "type": "integer",
+                            "title": "本地端口",
+                            "maximum": 65535,
+                            "minimum": 1
+                        },
+                        "container_port": {
+                            "type": "integer",
+                            "title": "容器端口",
+                            "maximum": 65535,
+                            "minimum": 1
+                        }
+                    }
+                },
+                "title": "端口设置",
+                "default": [
+                    {
+                        "protocol": "tcp",
+                        "local_port": 4444,
+                        "container_port": 4444
+                    }
+                ]
+            },
+            "volumes": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "required": [
+                        "host_path",
+                        "container_path",
+                        "mode"
+                    ],
+                    "properties": {
+                        "mode": {
+                            "enum": [
+                                "rw",
+                                "ro"
+                            ],
+                            "type": "string",
+                            "title": "权限",
+                            "default": "rw"
+                        },
+                        "host_path": {
+                            "type": "string",
+                            "title": "本地路径",
+                            "format": "directory"
+                        },
+                        "container_path": {
+                            "type": "string",
+                            "title": "容器路径"
+                        }
+                    }
+                },
+                "title": "存储空间设置",
+                "default": [
+                    {
+                        "mode": "rw",
+                        "host_path": "newsnow/data",
+                        "container_path": "/usr/app/.data"
+                    }
+                ]
+            },
+            "privileged": {
+                "type": "boolean",
+                "title": "特权模式",
+                "default": false,
+                "description": "一般情况下无需开启，仅当应用需要访问宿主机硬件设备时启用"
+            },
+            "newsnow_env": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "required": [
+                        "key",
+                        "value"
+                    ],
+                    "properties": {
+                        "key": {
+                            "type": "string",
+                            "title": "变量名"
+                        },
+                        "value": {
+                            "type": "string",
+                            "title": "值"
+                        }
+                    }
+                },
+                "title": "环境变量",
+                "default": [
+                    {
+                        "key": "INIT_TABLE",
+                        "value": "true"
+                    },
+                    {
+                        "key": "ENABLE_CACHE",
+                        "value": "true"
+                    }
+                ]
+            }
+        }
+    },
+    "yaml_template": "services:\n  newsnow:\n    image: {{ image }}\n    container_name: {{ project_name }}\n    ports:\n{%- for port in ports %}\n      - \"{{ port.local_port }}:{{ port.container_port }}/{{ port.protocol }}\"\n{%- endfor %}\n    volumes:\n{%- for vol in volumes %}\n      - {{ to_host_path(vol.host_path if (vol.host_path.startswith('/') or vol.shared) else project_name ~ '/' ~ vol.host_path) }}:{{ vol.container_path }}:{{ vol.mode }}\n{%- endfor %}\n    privileged: {{ privileged | lower }}\n    restart: unless-stopped\n    environment:\n{%- for item in newsnow_env %}\n      - {{ item.key }}={{ item.value }}\n{%- endfor %}\n",
+    "readme": "# NewsNow\n\nNewsNow 是一个实时热门新闻聚合面板，以卡片形式展示微博、知乎、GitHub、少数派等多个站点的热榜，支持深浅色模式、拖拽排序，默认 30 分钟缓存。\n\n## 部署前准备\n\n1. 在「存储空间设置」中确认 `/usr/app/.data`（SQLite 数据）的本地路径。\n2. 环境变量 `INIT_TABLE=true` 用于首次启动初始化数据库，`ENABLE_CACHE=true` 开启缓存，请保持默认。\n3. 部署完成后访问 `http://<NAS-IP>:4444` 即可浏览热榜。\n\n## 登录同步（可选）\n\n如需 GitHub 登录与跨设备同步，请在环境变量中追加 `G_CLIENT_ID`、`G_CLIENT_SECRET`、`JWT_SECRET`，详见项目文档。",
+    "version": "1.0.0",
+    "type": "compose",
+    "changelog": "初始导入",
+    "backup_paths": [
+        "/usr/app/.data"
+    ],
+    "is_builtin": false
+}

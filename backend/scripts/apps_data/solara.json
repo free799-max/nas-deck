@@ -1,0 +1,199 @@
+{
+  "name": "solara",
+  "display_name": "Solara",
+  "description": "Solara（光域）是极简风格的现代化网页音乐播放器，基于免费音乐 API 聚合检索各大平台曲库，支持在线播放、多码率下载、网易云官方榜单音乐雷达和收藏夹云端漫游。",
+  "category": "music",
+  "tags": [
+    "音乐",
+    "在线播放",
+    "音乐播放器",
+    "聚合搜索",
+    "开源"
+  ],
+  "source_url": "https://github.com/akudamatata/Solara",
+  "architectures": [
+    "amd64"
+  ],
+  "image": "ghcr.io/akudamatata/solara",
+  "default_ports": [
+    {
+      "port": 8787,
+      "protocol": "tcp",
+      "description": "Web 界面"
+    }
+  ],
+  "config_schema": {
+    "type": "object",
+    "required": [
+      "ports",
+      "volumes",
+      "solara_env"
+    ],
+    "containers": [
+      {
+        "name": "solara",
+        "title": "Solara",
+        "settings": [
+          {
+            "type": "ports",
+            "title": "端口设置",
+            "fields": [
+              "ports"
+            ]
+          },
+          {
+            "type": "volumes",
+            "title": "存储空间设置",
+            "fields": [
+              "volumes"
+            ]
+          },
+          {
+            "type": "env",
+            "title": "环境变量",
+            "fields": [
+              "solara_env"
+            ]
+          },
+          {
+            "type": "advanced",
+            "title": "高级设置",
+            "fields": [
+              "privileged"
+            ]
+          }
+        ],
+        "description": "极简风格的在线音乐播放器"
+      }
+    ],
+    "properties": {
+      "ports": {
+        "type": "array",
+        "title": "端口设置",
+        "items": {
+          "type": "object",
+          "required": [
+            "local_port",
+            "container_port",
+            "protocol"
+          ],
+          "properties": {
+            "protocol": {
+              "enum": [
+                "tcp",
+                "udp"
+              ],
+              "type": "string",
+              "title": "协议",
+              "default": "tcp"
+            },
+            "local_port": {
+              "type": "integer",
+              "title": "本地端口",
+              "maximum": 65535,
+              "minimum": 1
+            },
+            "container_port": {
+              "type": "integer",
+              "title": "容器端口",
+              "maximum": 65535,
+              "minimum": 1
+            }
+          }
+        },
+        "default": [
+          {
+            "protocol": "tcp",
+            "local_port": 8787,
+            "container_port": 8787
+          }
+        ]
+      },
+      "volumes": {
+        "type": "array",
+        "title": "存储空间设置",
+        "items": {
+          "type": "object",
+          "required": [
+            "host_path",
+            "container_path",
+            "mode"
+          ],
+          "properties": {
+            "mode": {
+              "enum": [
+                "rw",
+                "ro"
+              ],
+              "type": "string",
+              "title": "权限",
+              "default": "rw"
+            },
+            "host_path": {
+              "type": "string",
+              "title": "本地路径",
+              "format": "directory"
+            },
+            "container_path": {
+              "type": "string",
+              "title": "容器路径"
+            }
+          }
+        },
+        "default": [
+          {
+            "mode": "rw",
+            "host_path": "solara/data",
+            "container_path": "/data"
+          }
+        ]
+      },
+      "privileged": {
+        "type": "boolean",
+        "title": "特权模式",
+        "default": false,
+        "description": "以特权模式运行容器，可访问宿主机全部设备，一般无需开启"
+      },
+      "solara_env": {
+        "type": "array",
+        "title": "环境变量",
+        "items": {
+          "type": "object",
+          "required": [
+            "key",
+            "value"
+          ],
+          "properties": {
+            "key": {
+              "type": "string",
+              "title": "变量名"
+            },
+            "value": {
+              "type": "string",
+              "title": "值"
+            }
+          }
+        },
+        "default": [
+          {
+            "key": "PASSWORD",
+            "value": ""
+          },
+          {
+            "key": "API_BASE_URL",
+            "value": "https://music-api.gdstudio.xyz/api.php"
+          }
+        ]
+      }
+    }
+  },
+  "yaml_template": "services:\n  solara:\n    image: {{ image }}\n    container_name: {{ project_name }}\n    ports:\n{%- for port in ports %}\n      - \"{{ port.local_port }}:{{ port.container_port }}/{{ port.protocol }}\"\n{%- endfor %}\n    volumes:\n{%- for vol in volumes %}\n      - {{ to_host_path(vol.host_path if (vol.host_path.startswith('/') or vol.shared) else project_name ~ '/' ~ vol.host_path) }}:{{ vol.container_path }}:{{ vol.mode }}\n{%- endfor %}\n    privileged: {{ privileged | lower }}\n    restart: unless-stopped\n    environment:\n{%- for item in solara_env %}\n      - {{ item.key }}={{ item.value }}\n{%- endfor %}\n",
+  "readme": "# Solara（光域）\n\nSolara 是极简风格的现代化网页音乐播放器，基于免费音乐 API 聚合检索网易云、QQ 音乐等曲库，支持在线试听、128K/320K/FLAC 多码率下载、官方榜单音乐雷达与收藏夹漫游。\n\n## 部署前准备\n\n1. `/data` 用于持久化 SQLite 数据库（收藏夹与播放记录），保持默认即可。\n2. 「环境变量」中的 `PASSWORD` 默认为空，即不开启访问密码；填入口令后，访客需登录才能使用，公网部署建议设置。\n3. `API_BASE_URL` 为音乐聚合 API 地址，默认 API 失效时可更换为备用地址。\n\n## 使用\n\n部署完成后访问 `http://<NAS-IP>:8787`，输入关键词即可搜索播放；桌面端双击左上角 Logo、移动端双击标题栏可呼出高级设置面板。",
+  "version": "1.0.0",
+  "type": "compose",
+  "changelog": "初始导入",
+  "backup_paths": [
+    "/data"
+  ],
+  "is_builtin": false
+}
