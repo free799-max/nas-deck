@@ -168,6 +168,13 @@ DockerComposeProject 1--1 DockerComposeStack
 - 前端：`hooks/useDeployTasks.ts` 管理任务状态与 SSE 连接，`components/DeployProgressDialog.tsx` 通过 `DeployTaskContext` 全局监听并展示进度；发起部署的组件调用 `startTask(taskId)` 接入。
 - 镜像拉取有独立的任务机制（`pull_task_service` + `useAllPullProgress`），不复用部署任务通道。
 
+## 应用商店数据维护
+
+- 应用定义存放在数据库 `apps` 表；批量收录的源文件在 `backend/scripts/apps_data/<name>.json`（格式见 `scripts/import_app.py` 的 `AppImportInput`），`_` 开头的文件（如参考样例）会被忽略。
+- 批量导入/更新：在 `backend/` 下执行 `PYTHONPATH=. .venv/bin/python -m scripts.import_apps_batch`。脚本逐文件校验模板与 schema，**同名应用为 upsert**；任一文件失败则整体回滚。
+- 新增应用时：参照 `apps_data/_reference_jellyfin.txt` 的范式（单服务 compose、`containers` 表单分组、`<name>_env` 环境变量数组），先写 JSON 再跑批量脚本，不要直接改库、不要写 migration。
+- 分类为自由字符串，前端标签硬编码在 `frontend/src/pages/apps/AppsTab.tsx`（CATEGORY_LABELS）与 `pages/apps/edit/form-types.ts`（CATEGORY_OPTIONS），新增分类需两处同步；当前已覆盖 movie/comic/book/music/game/gallery/news/download/docker/tool/media/network/web/other。
+
 ## 应用商店图标规则
 
 - 内置/本地应用图标统一放在 `frontend/public/icons/apps/<app-name>.svg`，Vite 构建时会自动复制到 `dist/icons/apps/`。
