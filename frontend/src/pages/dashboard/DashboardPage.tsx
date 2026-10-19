@@ -1,66 +1,236 @@
 /**
- * 看板页面组件 - Weihu 风格 Kanban Board
+ * 仪表盘页面
  *
- * 展示四列看板：Todo list / In Progress / In Review / Done
+ * 展示 NAS 的真实运行概览（数据来自 Docker / Compose hooks）：
+ * - 统计卡片：容器、镜像、编排项目、Docker 引擎
+ * - 宿主机资源：CPU、内存、磁盘
+ * - 最近容器列表
  */
 
-import { useState } from "react";
-import { Plus } from "lucide-react";
-import { initialColumns, teamMembers } from "./components/mock-data";
-import type { Column } from "./components/mock-data";
-import { KanbanColumn } from "./components/KanbanColumn";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Progress } from "@/components/ui/progress";
+import { PageHeader } from "@/components/PageHeader";
+import {
+  useContainers,
+  useImages,
+  useDockerHostInfo,
+  useDockerStatus,
+  type ContainerInfo,
+} from "@/hooks/useDocker";
+import { useComposeProjects } from "@/hooks/useCompose";
+import { formatBytes, formatRelativeTime } from "@/lib/utils";
+import {
+  Box,
+  HardDrive,
+  Image as ImageIcon,
+  Layers,
+  Cpu,
+  MemoryStick,
+  Server,
+} from "lucide-react";
+
+function StatCard({
+  icon: Icon,
+  label,
+  value,
+  sub,
+}: {
+  icon: React.ComponentType<{ className?: string }>;
+  label: string;
+  value: React.ReactNode;
+  sub?: string;
+}) {
+  return (
+    <Card className="rounded-xl">
+      <CardContent className="p-4 flex items-center gap-3">
+        <div className="h-10 w-10 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
+          <Icon className="h-5 w-5 text-primary" />
+        </div>
+        <div className="min-w-0">
+          <p className="text-xs text-muted-foreground">{label}</p>
+          <p className="text-lg font-semibold leading-tight truncate">{value}</p>
+          {sub && (
+            <p className="text-xs text-muted-foreground truncate">{sub}</p>
+          )}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function containerStatusVariant(status: string) {
+  switch (status) {
+    case "running":
+      return "default";
+    case "exited":
+      return "secondary";
+    case "paused":
+      return "outline";
+    case "dead":
+      return "destructive";
+    default:
+      return "outline";
+  }
+}
 
 export function DashboardPage() {
-  const [columns] = useState<Column[]>(initialColumns);
+  const { data: dockerStatus } = useDockerStatus();
+  const { data: containers = [] } = useContainers();
+  const { data: images = [] } = useImages();
+  const { data: projects = [] } = useComposeProjects();
+  const { data: hostInfo } = useDockerHostInfo();
+
+  const dockerAvailable = dockerStatus?.available !== false;
+
+  const runningContainers = containers.filter(
+    (c) => c.status.toLowerCase() === "running"
+  );
+  const totalImageSize = images.reduce((sum, img) => sum + (img.size || 0), 0);
+  const activeProjects = projects.filter((p) => p.is_active);
+  const recentContainers: ContainerInfo[] = [...containers]
+    .sort((a, b) => (b.created || "").localeCompare(a.created || ""))
+    .slice(0, 6);
+
+  if (!dockerAvailable) {
+    return (
+      <div>
+        <PageHeader title="仪表盘" description="系统运行概览" />
+        <p className="text-muted-foreground">Docker 不可用或未连接。</p>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-5">
-      {/* 页面标题区 */}
-      <div className="flex items-start justify-between">
-        <div>
-          <h1 className="text-xl font-semibold tracking-tight text-foreground">看板</h1>
-          <p className="text-sm text-muted-foreground mt-0.5">
-            任务进度追踪
-          </p>
-        </div>
+      <PageHeader title="仪表盘" description="系统运行概览" />
 
-        <div className="flex items-center gap-3">
-          {/* 成员头像组 */}
-          <div className="flex -space-x-2">
-            {teamMembers.map((member, i) => (
-              <div
-                key={i}
-                className={`h-7 w-7 rounded-full border-2 border-background flex items-center justify-center text-[9px] font-medium text-foreground ${member.color}`}
-              >
-                {member.initials}
+      {/* 统计卡片 */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
+        <StatCard
+          icon={Box}
+          label="容器"
+          value={`${runningContainers.length} / ${containers.length}`}
+          sub="运行中 / 总数"
+        />
+        <StatCard
+          icon={ImageIcon}
+          label="镜像"
+          value={images.length}
+          sub={`占用 ${formatBytes(totalImageSize)}`}
+        />
+        <StatCard
+          icon={Layers}
+          label="编排项目"
+          value={projects.length}
+          sub={`${activeProjects.length} 个启用中`}
+        />
+        <StatCard
+          icon={Server}
+          label="Docker 引擎"
+          value={hostInfo?.docker_version?.version ?? "-"}
+          sub={hostInfo ? `${hostInfo.os} · ${hostInfo.arch}` : undefined}
+        />
+      </div>
+
+      {/* 宿主机资源 */}
+      {hostInfo && (
+        <Card className="rounded-xl">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base flex items-center gap-2">
+              <Cpu className="h-4 w-4 text-muted-foreground" />
+              宿主机资源
+              <span className="text-xs font-normal text-muted-foreground">
+                {hostInfo.hostname}
+              </span>
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="flex items-center gap-3">
+                <Cpu className="h-4 w-4 text-muted-foreground shrink-0" />
+                <div>
+                  <p className="text-xs text-muted-foreground">CPU</p>
+                  <p className="text-sm font-medium">
+                    {hostInfo.resources.cpu_cores} 核
+                  </p>
+                </div>
               </div>
-            ))}
-          </div>
+              <div className="flex items-center gap-3">
+                <MemoryStick className="h-4 w-4 text-muted-foreground shrink-0" />
+                <div>
+                  <p className="text-xs text-muted-foreground">内存</p>
+                  <p className="text-sm font-medium">
+                    {formatBytes(hostInfo.resources.memory_total)}
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-3">
+                <HardDrive className="h-4 w-4 text-muted-foreground shrink-0" />
+                <div>
+                  <p className="text-xs text-muted-foreground">磁盘</p>
+                  <p className="text-sm font-medium">
+                    {formatBytes(hostInfo.resources.disk_used)} /{" "}
+                    {formatBytes(hostInfo.resources.disk_total)}
+                  </p>
+                </div>
+              </div>
+            </div>
+            <div className="space-y-1">
+              <div className="flex justify-between text-xs text-muted-foreground">
+                <span>磁盘使用率</span>
+                <span>{hostInfo.resources.disk_usage_percent.toFixed(1)}%</span>
+              </div>
+              <Progress
+                value={hostInfo.resources.disk_usage_percent}
+                className="h-1.5"
+              />
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
-          {/* Filters 按钮 */}
-          <button className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-card border border-border/60 text-sm font-medium text-foreground hover:bg-muted transition-colors">
-            <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <line x1="4" y1="6" x2="20" y2="6" />
-              <line x1="4" y1="12" x2="16" y2="12" />
-              <line x1="4" y1="18" x2="12" y2="18" />
-            </svg>
-            筛选
-          </button>
-
-          {/* Create task 按钮 */}
-          <button className="flex items-center gap-1.5 px-4 py-1.5 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors">
-            <Plus className="h-3.5 w-3.5" />
-            新建任务
-          </button>
-        </div>
-      </div>
-
-      {/* 看板区域 */}
-      <div className="flex gap-5 overflow-x-auto pb-4">
-        {columns.map((column) => (
-          <KanbanColumn key={column.id} column={column} />
-        ))}
-      </div>
+      {/* 最近容器 */}
+      <Card className="rounded-xl">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-base flex items-center gap-2">
+            <Box className="h-4 w-4 text-muted-foreground" />
+            最近容器
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          {recentContainers.length === 0 ? (
+            <p className="text-sm text-muted-foreground py-4 text-center">
+              暂无容器
+            </p>
+          ) : (
+            <div className="divide-y">
+              {recentContainers.map((c) => (
+                <div
+                  key={c.id}
+                  className="flex items-center gap-3 py-2.5 first:pt-0 last:pb-0"
+                >
+                  <span className="text-sm font-medium truncate flex-1">
+                    {c.name}
+                  </span>
+                  <span className="text-xs text-muted-foreground truncate hidden sm:block max-w-[240px]">
+                    {c.image}
+                  </span>
+                  <Badge
+                    variant={containerStatusVariant(c.status)}
+                    className="text-xs shrink-0"
+                  >
+                    {c.state || c.status}
+                  </Badge>
+                  <span className="text-xs text-muted-foreground shrink-0 hidden md:block">
+                    {formatRelativeTime(c.created)}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
     </div>
   );
 }
