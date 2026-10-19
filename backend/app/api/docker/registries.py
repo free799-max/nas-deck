@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.custom_route import CustomAPIRoute
 from app.core.exceptions import APIException
-from app.core.security import get_current_user
+from app.core.security import get_current_user, require_admin
 from app.database import get_db
 from app.models.docker import DockerMirrorConfig
 from app.models.user import User
@@ -31,7 +31,7 @@ async def list_registries(
 async def create_registry(
     data: RegistryCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
 ):
     """创建镜像搜索接口配置，第一条自动设为默认。"""
     config = DockerMirrorConfig(
@@ -56,7 +56,7 @@ async def update_registry(
     registry_id: int,
     data: RegistryUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
 ):
     """更新镜像搜索接口配置。"""
     result = await db.execute(
@@ -77,7 +77,7 @@ async def update_registry(
 async def delete_registry(
     registry_id: int,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
 ):
     """删除镜像搜索接口配置。"""
     result = await db.execute(
@@ -96,7 +96,7 @@ async def delete_registry(
 async def set_default_registry(
     registry_id: int,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
 ):
     """将指定配置设为默认。"""
     result = await db.execute(

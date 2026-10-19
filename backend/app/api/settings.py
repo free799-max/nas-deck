@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.custom_route import CustomAPIRoute
 from app.core.exceptions import APIException
-from app.core.security import get_current_user
+from app.core.security import get_current_user, require_admin
 from app.database import get_db
 from app.models.user import User
 from app.schemas.system_config import SystemConfigOut, SystemConfigUpdate
@@ -42,7 +42,7 @@ async def get_system_config(
 async def update_system_config(
     data: SystemConfigUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
 ):
     """更新系统全局配置。"""
     config = await system_config_service.update(db, data)
@@ -82,7 +82,7 @@ async def list_directories(
 async def create_directory(
     data: DirectoryCreateRequest,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
 ):
     """在指定父目录下创建子目录。"""
     root_path = await _get_host_root_dir(db)
@@ -94,7 +94,7 @@ async def create_directory(
 async def rename_directory(
     data: DirectoryRenameRequest,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
 ):
     """重命名目录。"""
     root_path = await _get_host_root_dir(db)
@@ -109,7 +109,7 @@ async def rename_directory(
 async def delete_directory(
     data: DirectoryDeleteRequest,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
 ):
     """删除目录（递归删除非空目录）。"""
     root_path = await _get_host_root_dir(db)

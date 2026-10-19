@@ -185,6 +185,14 @@ class FilesystemService:
         if not target.is_dir():
             raise APIException(f"不是目录: {path}", 400)
 
+        # 根目录保护：禁止删除文件系统根目录与允许访问的根目录本身
+        if target.parent == target:
+            raise APIException("禁止删除根目录", 403)
+        if root_path:
+            root = Path(root_path).expanduser().resolve()
+            if target == root:
+                raise APIException("禁止删除根目录本身", 403)
+
         try:
             shutil.rmtree(target)
         except PermissionError as exc:

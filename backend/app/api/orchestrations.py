@@ -9,8 +9,9 @@ from fastapi import APIRouter, Depends, Response
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.core.exceptions import APIException
-from app.core.security import get_current_user
+from app.core.security import get_current_user, require_admin
 from app.database import get_db
 from app.models.user import User
 from app.models.orchestration import AppOrchestrationInstance
@@ -123,7 +124,7 @@ async def update_orchestration_instance(
     instance_id: int,
     data: OrchestrationInstanceUpdateRequest,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
 ):
     """更新编排实例组信息。"""
     group = await orchestration_service.update_instance(
@@ -140,7 +141,7 @@ async def update_orchestration_instance(
 async def delete_orchestration_instance(
     instance_id: int,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
 ):
     """删除编排实例组及其关联实例。"""
     await orchestration_service.delete_instance(db, instance_id)
@@ -150,7 +151,7 @@ async def delete_orchestration_instance(
 @router.post("/auth/verify", response_model=AppAuthVerifyResponse)
 async def verify_app_auth(
     data: AppAuthVerifyRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
 ):
     """验证应用访问地址与认证信息。"""
     result = await orchestration_service.verify_app_auth(
@@ -198,6 +199,15 @@ async def get_orchestration_icon(
     icon_path = Path(orchestration.icon)
     if not icon_path.is_absolute():
         icon_path = Path(__file__).parent.parent.parent / icon_path
+    icon_path = icon_path.resolve()
+
+    # 只允许提供图标目录内的文件，防止通过 icon 字段读取任意宿主机文件
+    allowed_dirs = [
+        Path(settings.APP_ICON_DIR).resolve(),
+        (Path(settings.DATA_ROOT) / "icons").resolve(),
+    ]
+    if not any(icon_path.is_relative_to(d) for d in allowed_dirs):
+        raise APIException("图标文件不存在", 404)
 
     if not icon_path.exists():
         raise APIException("图标文件不存在", 404)
@@ -210,7 +220,7 @@ async def deploy_orchestration(
     name: str,
     data: OrchestrationDeployRequest,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
 ):
     """组合部署应用编排。"""
     group, task_ids = await orchestration_service.deploy(
@@ -247,7 +257,7 @@ async def import_orchestration(
     name: str,
     data: OrchestrationImportRequest,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
 ):
     """导入已有 Docker 部署为应用编排实例。"""
     group, created_instance_ids = await orchestration_service.import_orchestration(

@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.custom_route import CustomAPIRoute
 from app.core.exceptions import APIException
-from app.core.security import get_current_user
+from app.core.security import get_current_user, require_admin
 from app.database import get_db
 from app.models.user import User
 from app.schemas.docker import (
@@ -16,7 +16,7 @@ from app.schemas.docker import (
     DirectoryRenameRequest,
     HostInfo,
 )
-from app.core.docker_manager import docker_manager
+from app.services.docker import docker_manager
 from app.services.system_config_service import system_config_service
 
 router = APIRouter(route_class=CustomAPIRoute)
@@ -55,7 +55,7 @@ async def list_host_directories(
 async def create_host_directory(
     data: DirectoryCreateRequest,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
 ):
     """在指定父目录下创建子目录。"""
     root_path = await _get_host_root_dir(db)
@@ -67,7 +67,7 @@ async def create_host_directory(
 async def rename_host_directory(
     data: DirectoryRenameRequest,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
 ):
     """重命名目录。"""
     root_path = await _get_host_root_dir(db)
@@ -82,7 +82,7 @@ async def rename_host_directory(
 async def delete_host_directory(
     data: DirectoryDeleteRequest,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
 ):
     """删除目录（递归删除非空目录）。"""
     root_path = await _get_host_root_dir(db)
@@ -93,9 +93,9 @@ async def delete_host_directory(
 @router.get("/host/info", response_model=HostInfo)
 async def get_host_info(current_user: User = Depends(get_current_user)):
     """获取 Docker 宿主机综合信息。"""
-    if not docker_manager.available:
+    if not await docker_manager.run_sync(docker_manager.check_available):
         raise APIException("Docker 不可用", 503)
-    info = docker_manager.get_host_info()
+    info = await docker_manager.run_sync(docker_manager.get_host_info)
     if not info:
         raise APIException("Docker 不可用", 503)
     return info

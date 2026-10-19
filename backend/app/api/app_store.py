@@ -136,9 +136,9 @@ async def deploy_app(
     name: str,
     data: AppDeployRequest,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
 ):
-    """一键部署应用，返回部署任务 ID。"""
+    """一键部署应用（仅管理员），返回部署任务 ID。"""
     instance, task_id = await app_service.deploy(
         db,
         app_name=name,

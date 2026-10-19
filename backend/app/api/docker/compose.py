@@ -11,9 +11,10 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core.background import create_background_task
 from app.core.custom_route import CustomAPIRoute
 from app.core.exceptions import APIException
-from app.core.security import get_current_user, get_current_user_sse
+from app.core.security import get_current_user, get_current_user_sse, require_admin
 from app.database import async_session, get_db
 from app.models.docker import DockerComposeProject, DockerComposeStack, DockerComposeVersion
 from app.models.user import User
@@ -29,8 +30,8 @@ from app.schemas.docker import (
     ContainerInfo,
 )
 from app.schemas.orchestration.deploy_task import ComposeDeployResponse
-from app.core.compose_manager import compose_manager
-from app.core.docker_manager import docker_manager
+from app.services.compose import compose_manager
+from app.services.docker import docker_manager
 from app.services.orchestration.deploy_task_service import deploy_task_manager
 
 logger = logging.getLogger(__name__)
@@ -167,7 +168,7 @@ async def list_compose_projects(
 async def create_compose_project(
     data: ComposeProjectCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
 ):
     """创建 Compose 项目（异步）。"""
     project_name = data.project_name
@@ -215,7 +216,7 @@ async def create_compose_project(
                 logger.exception("Compose 创建项目失败")
                 deploy_task_manager.fail_task(task_id, f"创建项目失败: {e}")
 
-    asyncio.create_task(_task(task_id))
+    create_background_task(_task(task_id))
 
     return ComposeDeployResponse(
         task_id=task_id,
@@ -240,7 +241,7 @@ async def update_compose_project(
     project_id: int,
     data: ComposeProjectUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
 ):
     """更新 Compose 项目元数据。"""
     project = await _get_compose_project(db, project_id)
@@ -261,7 +262,7 @@ async def edit_compose_project(
     project_id: int,
     data: ComposeEditRequest,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
 ):
     """编辑 Compose 项目并自动部署（异步）。"""
     project = await _get_compose_project(db, project_id)
@@ -308,7 +309,7 @@ async def edit_compose_project(
                 logger.exception("Compose 编辑部署失败")
                 deploy_task_manager.fail_task(task_id, str(e))
 
-    asyncio.create_task(_task(task_id))
+    create_background_task(_task(task_id))
 
     return ComposeDeployResponse(
         task_id=task_id,
@@ -321,7 +322,7 @@ async def edit_compose_project(
 async def delete_compose_project(
     project_id: int,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
 ):
     """删除 Compose 项目。"""
     project = await _get_compose_project(db, project_id)
@@ -347,7 +348,7 @@ async def create_compose_version(
     project_id: int,
     data: ComposeVersionCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
 ):
     """为项目新增一个版本。"""
     project = await _get_compose_project(db, project_id)
@@ -370,7 +371,7 @@ async def rollback_compose_version(
     project_id: int,
     version_id: int,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
 ):
     """切换到指定版本。"""
     project = await _get_compose_project(db, project_id)
@@ -391,7 +392,7 @@ async def compose_action(
     project_id: int,
     data: ComposeActionRequest,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
 ):
     """对 Compose 项目执行 up / down / restart 操作（异步）。"""
     project = await _get_compose_project(db, project_id)
@@ -426,7 +427,7 @@ async def compose_action(
                 logger.exception("Compose 操作失败")
                 deploy_task_manager.fail_task(task_id, str(e))
 
-    asyncio.create_task(_task(task_id))
+    create_background_task(_task(task_id))
 
     return ComposeDeployResponse(
         task_id=task_id,
@@ -458,10 +459,10 @@ async def list_compose_containers(
 ):
     """获取 Compose 项目维护的容器列表。"""
     project = await _get_compose_project(db, project_id)
-    if not docker_manager.available:
+    if not await docker_manager.run_sync(docker_manager.check_available):
         raise APIException("Docker 不可用", 503)
     filters = {"label": [f"com.docker.compose.project={project.project_name}"]}
-    return docker_manager.list_containers(filters=filters)
+    return await docker_manager.run_sync(docker_manager.list_containers, filters=filters)
 
 
 @router.get("/compose/{project_id}/logs")
@@ -496,7 +497,7 @@ async def compose_logs_stream(
     current_user: User = Depends(get_current_user_sse),
 ):
     """流式获取 Compose 项目日志（SSE）。"""
-    if not docker_manager.available:
+    if not await docker_manager.run_sync(docker_manager.check_available):
         raise APIException("Docker 不可用", 503)
 
     project = await _get_compose_project(db, project_id)

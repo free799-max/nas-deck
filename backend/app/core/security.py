@@ -125,6 +125,9 @@ async def get_current_user_sse(
 
     result = await db.execute(select(User).where(User.id == user_id))
     user = result.scalar_one_or_none()
+    # SSE 连接会一直持有请求直到流结束，鉴权完成后立即释放数据库会话，
+    # 避免长连接占用连接池
+    await db.close()
     if user is None:
         raise APIException("认证失败", 401)
     return user

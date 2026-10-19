@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.custom_route import CustomAPIRoute
 from app.core.exceptions import APIException
-from app.core.security import get_current_user, get_current_user_sse
+from app.core.security import get_current_user, get_current_user_sse, require_admin
 from app.database import get_db
 from app.models.docker import DockerMirrorConfig
 from app.models.user import User
@@ -29,7 +29,7 @@ from app.schemas.docker import (
     PullTaskResponse,
     PullTaskStatus,
 )
-from app.core.docker_manager import docker_manager, task_manager
+from app.services.docker import docker_manager, task_manager
 
 logger = logging.getLogger(__name__)
 router = APIRouter(route_class=CustomAPIRoute)
@@ -38,18 +38,18 @@ router = APIRouter(route_class=CustomAPIRoute)
 @router.get("/images", response_model=list[ImageInfo])
 async def list_images(current_user: User = Depends(get_current_user)):
     """获取本地镜像列表。"""
-    return docker_manager.list_images()
+    return await docker_manager.run_sync(docker_manager.list_images)
 
 
 @router.delete("/images/{image_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def remove_image(
     image_id: str,
     force: bool = False,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
 ):
     """删除指定镜像。"""
     try:
-        docker_manager.remove_image(image_id, force=force)
+        await docker_manager.run_sync(docker_manager.remove_image, image_id, force=force)
     except docker.errors.ImageNotFound:
         raise APIException("镜像不存在", 404)
     except docker.errors.APIError as e:
@@ -62,21 +62,21 @@ async def get_image_detail(
     current_user: User = Depends(get_current_user),
 ):
     """获取镜像完整元数据。"""
-    if not docker_manager.available:
+    if not await docker_manager.run_sync(docker_manager.check_available):
         raise APIException("Docker 不可用", 503)
-    detail = docker_manager.get_image_detail(image_id)
+    detail = await docker_manager.run_sync(docker_manager.get_image_detail, image_id)
     if not detail:
         raise APIException("镜像不存在", 404)
     return detail
 
 
 @router.post("/images/prune", response_model=ImagePruneResult)
-async def prune_images(current_user: User = Depends(get_current_user)):
+async def prune_images(current_user: User = Depends(require_admin)):
     """移除所有未使用的镜像。"""
-    if not docker_manager.available:
+    if not await docker_manager.run_sync(docker_manager.check_available):
         raise APIException("Docker 不可用", 503)
     try:
-        return docker_manager.prune_unused_images()
+        return await docker_manager.run_sync(docker_manager.prune_unused_images)
     except RuntimeError:
         raise APIException("Docker 不可用", 503)
     except Exception as e:
@@ -124,10 +124,10 @@ async def get_image_tags(
 @router.post("/images/pull", response_model=PullTaskResponse)
 async def pull_image(
     data: ImagePullRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
 ):
     """启动镜像拉取任务。"""
-    if not docker_manager.available:
+    if not await docker_manager.run_sync(docker_manager.check_available):
         raise APIException("Docker 不可用", 503)
 
     try:
@@ -171,7 +171,7 @@ async def pull_image_events(
         try:
             while True:
                 try:
-                    progress = q.get(timeout=1)
+                    progress = await asyncio.to_thread(q.get, True, 1)
                     yield f"data: {json.dumps(progress, ensure_ascii=False)}\n\n"
                 except queue.Empty:
                     pass
@@ -217,15 +217,15 @@ async def pull_image_status(
 @router.post("/images/batch-delete")
 async def batch_delete_images(
     data: BatchImageDeleteRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
 ):
     """批量删除本地镜像。"""
-    if not docker_manager.available:
+    if not await docker_manager.run_sync(docker_manager.check_available):
         raise APIException("Docker 不可用", 503)
     if not data.ids:
         return {"deleted": [], "failed": []}
     try:
-        return docker_manager.remove_images(data.ids, force=data.force)
+        return await docker_manager.run_sync(docker_manager.remove_images, data.ids, force=data.force)
     except RuntimeError:
         raise APIException("Docker 不可用", 503)
     except Exception as e:

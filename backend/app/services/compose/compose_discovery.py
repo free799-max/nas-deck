@@ -24,9 +24,12 @@ class ComposeDiscoveryService:
 
         通过标准标签 com.docker.compose.project 识别项目，
         对未入库项目创建记录并尝试读取当前 compose 文件内容作为初始版本。
+        出于安全考虑，只读取 Compose 工作区目录内的文件，
+        避免容器标签指向任意宿主机文件被吸收入库。
         """
-        from app.core.docker_manager import docker_manager
+        from app.config import settings
         from app.services.compose.compose_service import ComposeService
+        from app.services.docker import docker_manager
 
         if not docker_manager.available:
             result = await db.execute(
@@ -82,9 +85,21 @@ class ComposeDiscoveryService:
 
             if config_files:
                 first_file = Path(config_files[0])
-                if first_file.exists():
+                try:
+                    resolved_file = first_file.resolve()
+                except OSError:
+                    resolved_file = None
+                # 只允许读取 Compose 工作区内的文件，防止容器标签指向
+                # 任意宿主机文件（如 /etc/passwd）被读取入库
+                workspace = Path(settings.COMPOSE_WORKSPACE_DIR).resolve()
+                if resolved_file is None or not resolved_file.is_relative_to(workspace):
+                    if resolved_file is not None and resolved_file.exists():
+                        logger.warning(
+                            "跳过读取工作区外的 compose 文件: %s", first_file
+                        )
+                elif resolved_file.exists():
                     try:
-                        content = first_file.read_text(encoding="utf-8")
+                        content = resolved_file.read_text(encoding="utf-8")
                         ComposeService.validate_yaml(content)
                         version = DockerComposeVersion(
                             project_id=project.id,

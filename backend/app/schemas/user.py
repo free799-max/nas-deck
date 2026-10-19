@@ -8,7 +8,7 @@
 - TokenResponse: JWT 令牌的响应数据
 """
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class UserCreate(BaseModel):
@@ -19,11 +19,11 @@ class UserCreate(BaseModel):
 
     Attributes:
         username: 注册用户名
-        password: 注册密码（明文，在服务端进行哈希处理）
+        password: 注册密码（明文，在服务端进行哈希处理，最少 8 位）
     """
 
-    username: str  # 注册用户名
-    password: str  # 注册密码（明文传入，服务端哈希存储）
+    username: str = Field(min_length=1, max_length=50)  # 注册用户名
+    password: str = Field(min_length=8, max_length=128)  # 注册密码（明文传入，服务端哈希存储）
 
 
 class UserLogin(BaseModel):

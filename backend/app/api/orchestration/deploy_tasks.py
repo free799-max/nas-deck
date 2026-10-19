@@ -13,7 +13,7 @@ from app.core.exceptions import APIException
 from app.core.security import get_current_user, get_current_user_sse
 from app.models.user import User
 from app.schemas.orchestration.deploy_task import DeployTaskStatus
-from app.services.orchestration.deploy_task_service import deploy_task_manager
+from app.services.orchestration.deploy_task_service import deploy_task_manager, sanitize_meta
 
 logger = logging.getLogger(__name__)
 router = APIRouter(route_class=CustomAPIRoute)
@@ -56,7 +56,7 @@ async def deploy_task_events(
                     _final["_task_status"] = current_task["status"]
                     if current_task.get("error"):
                         _final["_error"] = current_task["error"]
-                    _final["_meta"] = current_task.get("meta")
+                    _final["_meta"] = sanitize_meta(current_task.get("meta"))
                     yield f"data: {json.dumps(_final, ensure_ascii=False)}\n\n"
                     break
         finally:
