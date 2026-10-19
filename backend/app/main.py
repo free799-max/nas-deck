@@ -7,6 +7,7 @@
 from contextlib import asynccontextmanager
 
 import logging
+import secrets
 
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -16,7 +17,7 @@ from app.core.exceptions import APIException
 from app.schemas.response import StandardResponse
 from app.core.custom_route import CustomAPIRoute
 
-from app.config import settings
+from app.config import DEFAULT_SECRET_KEY, settings
 from app.api.auth import router as auth_router
 from app.api.orchestrations import router as orchestrations_router
 from app.api.app_store import router as apps_router
@@ -30,6 +31,18 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期管理：启动时初始化资源，关闭时释放资源。"""
+    # SECRET_KEY 仍为默认占位值时，生成随机密钥并打印醒目警告；
+    # 不硬失败以免打断开发，但重启后旧令牌会全部失效
+    if settings.SECRET_KEY == DEFAULT_SECRET_KEY:
+        settings.SECRET_KEY = secrets.token_urlsafe(48)
+        warning = (
+            "检测到 SECRET_KEY 使用默认值，已自动生成随机密钥。"
+            "生产环境请通过环境变量 SECRET_KEY 配置固定密钥，"
+            "否则每次重启后所有登录状态都会失效！"
+        )
+        logger.warning(warning)
+        print(f"\n*** WARNING: {warning} ***\n", flush=True)
+
     # 执行数据库迁移（包含 schema 与内置数据初始化）
     import asyncio
     from pathlib import Path
@@ -77,10 +90,10 @@ async def general_exception_handler(request: Request, exc: Exception):
         content=StandardResponse.fail("服务器内部错误").model_dump(),
     )
 
-# 配置 CORS 中间件，允许所有来源（开发环境）
+# 配置 CORS 中间件，允许的来源由 CORS_ORIGINS 配置（逗号分隔）
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.cors_origin_list(),
     allow_methods=["*"],
     allow_headers=["*"],
 )

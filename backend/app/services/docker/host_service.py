@@ -62,7 +62,7 @@ class HostService(common.BaseDockerService):
                 if disk_total > 0:
                     disk_usage_percent = round((disk_used / disk_total) * 100, 2)
             except Exception:
-                pass
+                common.logger.debug("读取 DockerRootDir 磁盘用量失败", exc_info=True)
 
             networks = []
             for net in self._client.networks.list():
@@ -107,4 +107,5 @@ class HostService(common.BaseDockerService):
                 "networks": networks,
             }
         except Exception:
+            common.logger.exception("获取 Docker 宿主机信息失败")
             return None

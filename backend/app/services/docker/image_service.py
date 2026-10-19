@@ -135,6 +135,7 @@ class ImageService(common.BaseDockerService):
         except common.docker.errors.ImageNotFound:
             return None
         except Exception:
+            common.logger.exception("获取镜像详情失败: %s", image_id)
             return None
 
     def prune_unused_images(self) -> dict:
@@ -299,14 +300,14 @@ class ImageService(common.BaseDockerService):
             is_hub = _is_docker_hub_format(resolved_api)
             url = _build_search_url(resolved_api, is_hub)
             try:
-                return _do_search(url, is_docker_hub=is_hub)
+                return await _do_search(url, is_docker_hub=is_hub)
             except RuntimeError as e:
                 errors.append(str(e))
             if resolved_mirror:
                 is_hub = _is_docker_hub_format(resolved_mirror)
                 url = _build_search_url(resolved_mirror, is_hub)
                 try:
-                    return _do_search(url, is_docker_hub=is_hub)
+                    return await _do_search(url, is_docker_hub=is_hub)
                 except RuntimeError as e:
                     errors.append(str(e))
             raise RuntimeError("镜像搜索全部失败: " + "; ".join(errors))
@@ -314,7 +315,7 @@ class ImageService(common.BaseDockerService):
         default_url = "https://hub.docker.com/v2/search/repositories"
         url = _build_search_url(default_url, is_docker_hub=True)
         try:
-            return _do_search(url, is_docker_hub=True)
+            return await _do_search(url, is_docker_hub=True)
         except RuntimeError as e:
             raise RuntimeError("镜像搜索失败: " + str(e)) from e
 

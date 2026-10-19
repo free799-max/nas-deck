@@ -5,7 +5,6 @@ import logging
 import re
 from pathlib import Path
 
-import docker
 import yaml
 from jinja2 import Environment, BaseLoader
 from jsonschema import validate, ValidationError
@@ -14,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.config import settings
+from app.core.background import create_background_task
 from app.core.exceptions import APIException
 from app.database import async_session
 from app.models.app_store import App
@@ -25,6 +25,7 @@ from app.services.app_store.app_validator import (
     validate_app_definition,
 )
 from app.services.compose import compose_manager
+from app.services.docker import docker_manager
 from app.services.orchestration.deploy_task_service import deploy_task_manager
 from app.services.system_config_service import (
     StoragePathResolver,
@@ -142,24 +143,25 @@ def _get_used_ports() -> set[int]:
     used: set[int] = set()
 
     # 1. Docker 容器端口映射
-    try:
-        client = docker.from_env()
-        for container in client.containers.list(all=True):
-            host_config = container.attrs.get("HostConfig") or {}
-            bindings = host_config.get("PortBindings") or {}
-            for binding_list in bindings.values():
-                if not isinstance(binding_list, list):
-                    continue
-                for binding in binding_list:
-                    host_port = binding.get("HostPort")
-                    if host_port:
-                        try:
-                            used.add(int(host_port))
-                        except ValueError:
-                            pass
-    except Exception:
-        # Docker 不可用时跳过
-        pass
+    client = docker_manager._client
+    if client is not None:
+        try:
+            for container in client.containers.list(all=True):
+                host_config = container.attrs.get("HostConfig") or {}
+                bindings = host_config.get("PortBindings") or {}
+                for binding_list in bindings.values():
+                    if not isinstance(binding_list, list):
+                        continue
+                    for binding in binding_list:
+                        host_port = binding.get("HostPort")
+                        if host_port:
+                            try:
+                                used.add(int(host_port))
+                            except ValueError:
+                                pass
+        except Exception:
+            # Docker 不可用时跳过
+            logger.warning("获取 Docker 容器端口映射失败，跳过该来源", exc_info=True)
 
     # 2. 从 /proc/net/tcp* 读取监听端口
     used.update(_parse_proc_net_tcp("/proc/net/tcp"))
@@ -184,11 +186,14 @@ class AppService:
         stmt = select(App)
         if category:
             stmt = stmt.where(App.category == category)
-        if tag:
-            stmt = stmt.where(App.tags.contains(tag))
         stmt = stmt.order_by(App.category, App.display_name)
         result = await db.execute(stmt)
-        return list(result.scalars().all())
+        apps = list(result.scalars().all())
+        # tags 为 JSON 列，PostgreSQL 的 json 类型不支持 contains 查询，
+        # 为保证 SQLite/PG 可移植性，标签过滤在 Python 侧做精确匹配
+        if tag:
+            apps = [a for a in apps if tag in (a.tags or [])]
+        return apps
 
     async def get_app(self, db: AsyncSession, name: str) -> App:
         """获取单个应用详情。"""
@@ -351,6 +356,8 @@ class AppService:
 
     def get_app_icon_path(self, name: str) -> Path:
         """获取已上传应用图标的文件路径，不存在时抛出 404。"""
+        if not APP_NAME_PATTERN.match(name):
+            raise APIException("应用图标不存在", 404)
         icon_dir = Path(settings.APP_ICON_DIR)
         for ext in ALLOWED_ICON_EXTS:
             icon_file = icon_dir / f"{name}{ext}"
@@ -423,7 +430,7 @@ class AppService:
 
         # 2. 端口冲突预检（仅在部署时执行）
         if check_ports:
-            used_ports = _get_used_ports()
+            used_ports = await asyncio.to_thread(_get_used_ports)
 
             # 2.1 单端口字段（如 moviepilot_port: 3000）
             port_keys = _extract_app_ports(schema)
@@ -524,7 +531,7 @@ class AppService:
             },
         )
 
-        asyncio.create_task(self._do_deploy(task_id, instance.id))
+        create_background_task(self._do_deploy(task_id, instance.id))
 
         return instance, task_id
 

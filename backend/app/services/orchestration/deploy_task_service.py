@@ -5,19 +5,50 @@
 """
 
 import logging
-import queue
-import threading
+import re
 import uuid
-from datetime import datetime
+
+from app.services.task_manager_base import BaseTaskManager
 
 logger = logging.getLogger(__name__)
 
+# meta 中需要脱敏的敏感字段名（密码/密钥/令牌类）
+_SENSITIVE_KEY_PATTERN = re.compile(r"password|secret|token|api_key|apikey|access_key", re.IGNORECASE)
+# meta 中完全不对外推送的字段（可能包含明文密码的渲染结果等）
+_META_EXCLUDED_KEYS = frozenset({"rendered_yaml"})
+_MASKED_VALUE = "***"
 
-class DeployTaskManager:
+
+def sanitize_meta(meta: dict | None) -> dict | None:
+    """对任务 meta 做脱敏处理，用于 SSE 事件对外推送。
+
+    移除可能包含明文敏感信息的字段（如 rendered_yaml），
+    并对 password/secret/token/key 类字段打码。
+    """
+    if meta is None:
+        return None
+    if not isinstance(meta, dict):
+        return meta
+    result = {}
+    for key, value in meta.items():
+        key_str = str(key)
+        if key_str in _META_EXCLUDED_KEYS:
+            continue
+        if _SENSITIVE_KEY_PATTERN.search(key_str):
+            result[key] = _MASKED_VALUE
+        else:
+            result[key] = value
+    return result
+
+
+class DeployTaskManager(BaseTaskManager):
     """部署任务管理器。
 
     管理后台部署任务的进度状态，支持 SSE 推送。
     """
+
+    _active_status = "deploying"
+    _timeout_error = "部署超时，请检查网络或 Compose 配置"
 
     def __init__(
         self,
@@ -27,14 +58,19 @@ class DeployTaskManager:
         task_timeout_seconds: int = 1800,
         max_history_size: int = 200,
     ):
-        self._tasks: dict[str, dict] = {}
-        self._listeners: dict[str, list[queue.Queue]] = {}
-        self._lock = threading.Lock()
-        self._max_tasks = max_tasks
-        self._ttl_seconds = ttl_seconds
-        self._max_concurrent = max_concurrent
-        self._task_timeout_seconds = task_timeout_seconds
+        super().__init__(
+            max_tasks=max_tasks,
+            ttl_seconds=ttl_seconds,
+            max_concurrent=max_concurrent,
+            task_timeout_seconds=task_timeout_seconds,
+        )
         self._max_history_size = max_history_size
+
+    def _concurrency_limit_error(self) -> str:
+        return (
+            f"并发部署任务数已达上限（{self._max_concurrent}个），"
+            f"请等待现有任务完成后再试"
+        )
 
     def _new_progress(self, stage: str, percentage: int, message: str, detail: str | None = None) -> dict:
         """构造新的进度字典。"""
@@ -45,6 +81,14 @@ class DeployTaskManager:
             "detail": detail,
         }
 
+    def _build_notify(self, task: dict, **extra) -> dict:
+        """构造对外推送的通知，meta 统一脱敏。"""
+        notify = task["progress"].copy()
+        notify["_task_status"] = task["status"]
+        notify["_meta"] = sanitize_meta(task.get("meta"))
+        notify.update(extra)
+        return notify
+
     def create_task(
         self,
         task_type: str,
@@ -54,19 +98,11 @@ class DeployTaskManager:
         meta: dict | None = None,
     ) -> str:
         """创建新部署任务并返回 task_id。"""
-        with self._lock:
-            running = sum(
-                1 for t in self._tasks.values() if t.get("status") == "deploying"
-            )
-            if running >= self._max_concurrent:
-                raise RuntimeError(
-                    f"并发部署任务数已达上限（{self._max_concurrent}个），"
-                    f"请等待现有任务完成后再试"
-                )
-
         task_id = str(uuid.uuid4())
-        now = datetime.now().isoformat()
+        now = self._now()
+        # 并发上限检查与任务插入在同一个锁临界区内完成，消除 TOCTOU 竞态
         with self._lock:
+            self._check_concurrency_limit()
             self._cleanup_expired()
             self._tasks[task_id] = {
                 "task_id": task_id,
@@ -84,10 +120,7 @@ class DeployTaskManager:
                 "completed_at": None,
             }
             self._listeners[task_id] = []
-            _initial_notify = self._tasks[task_id]["progress"].copy()
-            _initial_notify["_task_status"] = self._tasks[task_id]["status"]
-            _initial_notify["_meta"] = self._tasks[task_id].get("meta")
-            self._append_history(task_id, _initial_notify)
+            self._append_history(task_id, self._build_notify(self._tasks[task_id]))
         return task_id
 
     def _append_history(self, task_id: str, notify: dict):
@@ -114,105 +147,53 @@ class DeployTaskManager:
                 return
             self._tasks[task_id]["progress"] = progress
             self._tasks[task_id]["stage"] = stage
-            self._tasks[task_id]["updated_at"] = datetime.now().isoformat()
-            _notify = progress.copy()
-            _notify["_task_status"] = self._tasks[task_id]["status"]
-            _notify["_meta"] = self._tasks[task_id].get("meta")
-            self._append_history(task_id, _notify)
-            for q in self._listeners.get(task_id, []):
-                try:
-                    q.put_nowait(_notify)
-                except queue.Full:
-                    pass
+            self._tasks[task_id]["updated_at"] = self._now()
+            notify = self._build_notify(self._tasks[task_id])
+            self._append_history(task_id, notify)
+            self._notify_listeners(task_id, notify)
 
     def complete_task(self, task_id: str):
         """标记任务为已完成。"""
         with self._lock:
             if task_id not in self._tasks:
                 return
-            self._tasks[task_id]["status"] = "completed"
-            self._tasks[task_id]["stage"] = "completed"
-            self._tasks[task_id]["completed_at"] = datetime.now().isoformat()
-            self._tasks[task_id]["updated_at"] = datetime.now().isoformat()
-            progress = self._new_progress("completed", 100, "部署完成")
-            self._tasks[task_id]["progress"] = progress
-            _notify = progress.copy()
-            _notify["_task_status"] = "completed"
-            _notify["_meta"] = self._tasks[task_id].get("meta")
-            self._append_history(task_id, _notify)
-            for q in self._listeners.get(task_id, []):
-                try:
-                    q.put_nowait(_notify)
-                except queue.Full:
-                    pass
+            task = self._tasks[task_id]
+            task["status"] = "completed"
+            task["stage"] = "completed"
+            task["completed_at"] = self._now()
+            task["updated_at"] = self._now()
+            task["progress"] = self._new_progress("completed", 100, "部署完成")
+            notify = self._build_notify(task)
+            self._append_history(task_id, notify)
+            self._notify_listeners(task_id, notify)
 
     def fail_task(self, task_id: str, error: str):
         """标记任务为失败。"""
         with self._lock:
             if task_id not in self._tasks:
                 return
-            self._tasks[task_id]["status"] = "failed"
-            self._tasks[task_id]["stage"] = "failed"
-            self._tasks[task_id]["error"] = error
-            self._tasks[task_id]["completed_at"] = datetime.now().isoformat()
-            self._tasks[task_id]["updated_at"] = datetime.now().isoformat()
-            progress = self._tasks[task_id]["progress"]
+            task = self._tasks[task_id]
+            task["status"] = "failed"
+            task["stage"] = "failed"
+            task["error"] = error
+            task["completed_at"] = self._now()
+            task["updated_at"] = self._now()
+            progress = task["progress"]
             progress["stage"] = "failed"
             progress["message"] = f"部署失败: {error}"
-            _notify = progress.copy()
-            _notify["_task_status"] = "failed"
-            _notify["_error"] = error
-            _notify["_meta"] = self._tasks[task_id].get("meta")
-            self._append_history(task_id, _notify)
-            for q in self._listeners.get(task_id, []):
-                try:
-                    q.put_nowait(_notify)
-                except queue.Full:
-                    pass
+            notify = self._build_notify(task, _error=error)
+            self._append_history(task_id, notify)
+            self._notify_listeners(task_id, notify)
 
-    def _check_task_timeout(self, task: dict) -> bool:
-        """检查任务是否已超时，超时时自动标记为失败。"""
-        if task.get("status") != "deploying":
-            return False
-        if task.get("_timeout_notified"):
-            return True
-        updated_at = task.get("updated_at")
-        if not updated_at:
-            return False
-        try:
-            updated_dt = datetime.fromisoformat(updated_at)
-            if (datetime.now() - updated_dt).total_seconds() > self._task_timeout_seconds:
-                task["status"] = "failed"
-                task["stage"] = "failed"
-                task["error"] = "部署超时，请检查网络或 Compose 配置"
-                task["completed_at"] = datetime.now().isoformat()
-                task["updated_at"] = datetime.now().isoformat()
-                task["_timeout_notified"] = True
-                progress = task["progress"]
-                progress["stage"] = "failed"
-                progress["message"] = task["error"]
-                _notify = progress.copy()
-                _notify["_task_status"] = "failed"
-                _notify["_error"] = task["error"]
-                _notify["_meta"] = task.get("meta")
-                self._append_history(task["task_id"], _notify)
-                for q in self._listeners.get(task["task_id"], []):
-                    try:
-                        q.put_nowait(_notify)
-                    except queue.Full:
-                        pass
-                return True
-        except Exception:
-            pass
-        return False
-
-    def get_task(self, task_id: str) -> dict | None:
-        """获取任务状态。"""
-        with self._lock:
-            task = self._tasks.get(task_id)
-            if task:
-                self._check_task_timeout(task)
-            return task
+    def _on_timeout(self, task: dict):
+        """部署任务超时：更新进度阶段并推送脱敏后的失败通知。"""
+        task["stage"] = "failed"
+        progress = task["progress"]
+        progress["stage"] = "failed"
+        progress["message"] = task["error"]
+        notify = self._build_notify(task, _error=task["error"])
+        self._append_history(task["task_id"], notify)
+        self._notify_listeners(task["task_id"], notify)
 
     def get_task_history(self, task_id: str) -> list[dict]:
         """获取任务进度历史快照，用于 SSE 连接时回放。"""
@@ -222,54 +203,6 @@ class DeployTaskManager:
                 return []
             self._check_task_timeout(task)
             return [entry.copy() for entry in task.get("progress_history", [])]
-
-    def register_listener(self, task_id: str) -> queue.Queue:
-        """注册 SSE 监听器队列。"""
-        q = queue.Queue(maxsize=100)
-        with self._lock:
-            if task_id in self._listeners:
-                self._listeners[task_id].append(q)
-        return q
-
-    def unregister_listener(self, task_id: str, q: queue.Queue):
-        """注销 SSE 监听器队列。"""
-        with self._lock:
-            if task_id in self._listeners:
-                try:
-                    self._listeners[task_id].remove(q)
-                except ValueError:
-                    pass
-
-    def _cleanup_expired(self):
-        """清理过期和超额的任务。"""
-        now = datetime.now()
-        expired = []
-        for tid, task in self._tasks.items():
-            completed_at = task.get("completed_at")
-            if completed_at:
-                try:
-                    completed_dt = datetime.fromisoformat(completed_at)
-                    if (now - completed_dt).total_seconds() > self._ttl_seconds:
-                        expired.append(tid)
-                except Exception:
-                    pass
-            elif task.get("status") == "deploying":
-                if self._check_task_timeout(task):
-                    expired.append(tid)
-
-        for tid in expired:
-            self._tasks.pop(tid, None)
-            self._listeners.pop(tid, None)
-
-        if len(self._tasks) > self._max_tasks:
-            completed_tasks = [
-                (tid, t) for tid, t in self._tasks.items() if t.get("completed_at")
-            ]
-            completed_tasks.sort(key=lambda x: x[1].get("completed_at", ""))
-            to_remove = len(self._tasks) - self._max_tasks
-            for tid, _ in completed_tasks[:to_remove]:
-                self._tasks.pop(tid, None)
-                self._listeners.pop(tid, None)
 
 
 # 全局单例，供其他模块直接导入使用

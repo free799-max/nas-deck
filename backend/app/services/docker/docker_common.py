@@ -3,6 +3,7 @@
 集中导入 Docker SDK、time、logger 等，便于服务层统一引用和测试时打补丁。
 """
 
+import asyncio
 import logging
 import time
 
@@ -18,22 +19,41 @@ class BaseDockerService:
     _ALLOWED_ACTIONS = frozenset({"start", "stop", "restart", "remove"})
 
     def __init__(self):
-        """初始化 Docker 客户端，失败时安全降级为 None。"""
+        """初始化 Docker 客户端占位，实际连接惰性建立。"""
+        self._client_obj = None
+
+    @property
+    def _client(self):
+        """惰性初始化 Docker 客户端，初始化失败后下次访问会重试。"""
+        if self._client_obj is None:
+            try:
+                self._client_obj = docker.from_env()
+            except docker.errors.DockerException:
+                return None
+            except Exception:
+                logger.exception("初始化 Docker 客户端失败")
+                return None
+        return self._client_obj
+
+    def check_available(self) -> bool:
+        """同步检查 Docker 服务是否可用（可能阻塞，异步代码请用 run_sync 包装）。"""
+        client = self._client
+        if not client:
+            return False
         try:
-            self._client = docker.from_env()
-        except docker.errors.DockerException:
-            self._client = None
+            client.ping()
+            return True
+        except Exception:
+            return False
 
     @property
     def available(self) -> bool:
         """检查 Docker 服务是否可用。"""
-        if not self._client:
-            return False
-        try:
-            self._client.ping()
-            return True
-        except Exception:
-            return False
+        return self.check_available()
+
+    async def run_sync(self, func, *args, **kwargs):
+        """在线程池中运行同步阻塞调用，避免占用事件循环。"""
+        return await asyncio.to_thread(func, *args, **kwargs)
 
     def _wait_for_status(
         self,

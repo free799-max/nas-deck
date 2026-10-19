@@ -4,7 +4,8 @@
 - 异步引擎和会话工厂
 - ORM 声明式基类
 - 依赖注入用的数据库会话生成器
-- 数据库表自动创建
+
+表结构与内置数据由 alembic 迁移负责（见 main.py lifespan）。
 """
 
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
@@ -36,18 +37,3 @@ async def get_db():
         except Exception:
             await session.rollback()
             raise
-
-
-async def init_db():
-    """初始化数据库，创建所有未创建的表。"""
-    try:
-        import app.models  # noqa: F401 — 导入所有模型以注册到 Base.metadata
-    except ImportError:
-        pass
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-
-    # 初始化默认 Docker Hub 镜像仓库配置
-    from app.initializers.docker_initializer import init_default_registry
-
-    await init_default_registry()

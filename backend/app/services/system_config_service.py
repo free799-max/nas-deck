@@ -202,12 +202,11 @@ class SystemConfigService:
                 continue
             # 优先使用预置的 Docker 挂载目录
             docker_path = Path(docker_mount)
-            if docker_path.is_dir() or docker_path.parent == host_path:
+            if docker_path.is_dir():
                 return host_root, docker_mount
-            # 回退到 host_root/docker
+            # 回退到 host_root/docker（允许目录不存在，后续部署时自动创建）
             fallback = host_path / "docker"
-            if fallback.is_dir() or True:  # 允许目录不存在，后续部署时自动创建
-                return host_root, str(fallback)
+            return host_root, str(fallback)
         return None, None
 
     async def get_or_create(self, db: AsyncSession) -> SystemConfig:

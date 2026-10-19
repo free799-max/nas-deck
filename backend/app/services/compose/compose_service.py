@@ -6,6 +6,7 @@ import logging
 import re
 import shutil
 from collections.abc import Callable
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -45,8 +46,8 @@ class ComposeService:
 
     @property
     def docker_available(self) -> bool:
-        """检查 docker 命令是否可用（结果缓存一次）。"""
-        if self._docker_available is None:
+        """检查 docker 命令是否可用（成功结果缓存，失败时每次重新探测）。"""
+        if self._docker_available is not True:
             self._docker_available = shutil.which("docker") is not None
         return self._docker_available
 
@@ -472,20 +473,24 @@ class ComposeService:
 
     async def _remove_project_containers(self, project_name: str) -> None:
         """按 Compose 项目标签强制停止并删除容器。"""
-        from app.core.docker_manager import docker_manager
+        from app.services.docker import docker_manager
 
-        if not docker_manager.available:
+        if not await docker_manager.run_sync(docker_manager.check_available):
             return
 
         try:
             filters = {"label": [f"com.docker.compose.project={project_name}"]}
-            containers = docker_manager.list_containers(filters=filters)
+            containers = await docker_manager.run_sync(
+                docker_manager.list_containers, filters=filters
+            )
             container_ids = [c.get("id") for c in containers if c.get("id")]
             if container_ids:
                 logger.info(
                     "强制删除项目 %s 的容器: %s", project_name, container_ids
                 )
-                docker_manager.batch_container_action(container_ids, "remove")
+                await docker_manager.run_sync(
+                    docker_manager.batch_container_action, container_ids, "remove"
+                )
         except Exception as e:
             logger.warning("强制删除项目 %s 容器失败: %s", project_name, e)
 
@@ -819,6 +824,11 @@ class ComposeService:
             "ports": sorted(port_set),
         }
 
+    @staticmethod
+    def _utcnow() -> "datetime":
+        """返回 UTC 当前时间（naive，与数据库 func.now() 写入的语义一致）。"""
+        return datetime.now(timezone.utc).replace(tzinfo=None)
+
     async def sync_stack_status(
         self,
         db,
@@ -826,7 +836,6 @@ class ComposeService:
         action: str | None = None,
     ) -> DockerComposeStack:
         """同步 Stack 状态到数据库。"""
-        from datetime import datetime
         from sqlalchemy import select
 
         status_info = await self.get_status(project)
@@ -846,8 +855,8 @@ class ComposeService:
         stack.ports = json.dumps(status_info["ports"], ensure_ascii=False)
         if action:
             stack.last_action = action
-            stack.last_action_at = datetime.now()
-        stack.updated_at = datetime.now()
+            stack.last_action_at = self._utcnow()
+        stack.updated_at = self._utcnow()
 
         await db.commit()
         await db.refresh(stack)

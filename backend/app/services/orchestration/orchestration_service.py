@@ -1,6 +1,10 @@
 """应用编排业务服务。"""
 
+import asyncio
+import ipaddress
+import logging
 import socket
+from urllib.parse import urlparse
 
 import docker
 from sqlalchemy import delete, select
@@ -21,7 +25,10 @@ from app.schemas.orchestration import (
 )
 from app.services.app_store import app_service
 from app.services.apps import AuthVerifyResult, get_client
+from app.services.docker import docker_manager
 from app.services.orchestration.shared_config import merge_shared_config
+
+logger = logging.getLogger(__name__)
 
 
 class OrchestrationService:
@@ -42,11 +49,14 @@ class OrchestrationService:
         stmt = select(AppOrchestration)
         if category:
             stmt = stmt.where(AppOrchestration.category == category)
-        if tag:
-            stmt = stmt.where(AppOrchestration.tags.contains(tag))
         stmt = stmt.order_by(AppOrchestration.category, AppOrchestration.display_name)
         result = await db.execute(stmt)
-        return list(result.scalars().all())
+        orchestrations = list(result.scalars().all())
+        # tags 为 JSON 列，PostgreSQL 的 json 类型不支持 contains 查询，
+        # 为保证 SQLite/PG 可移植性，标签过滤在 Python 侧做精确匹配
+        if tag:
+            orchestrations = [o for o in orchestrations if tag in (o.tags or [])]
+        return orchestrations
 
     async def get_orchestration(self, db: AsyncSession, name: str) -> AppOrchestration:
         """获取单个编排详情。"""
@@ -63,10 +73,51 @@ class OrchestrationService:
         app_name: str,
         config: dict,
     ) -> AuthVerifyResult:
-        """调用应用专属客户端验证认证信息。"""
+        """调用应用专属客户端验证认证信息（带 SSRF 防护）。"""
+        rejection = await self._check_verify_url(config.get("url"))
+        if rejection:
+            return AuthVerifyResult(valid=False, message=rejection)
         client_cls = get_client(app_name)
         client = client_cls()
         return await client.verify_auth(config)
+
+    @staticmethod
+    async def _check_verify_url(url: object) -> str | None:
+        """校验待探测的应用访问地址，阻断 SSRF 高风险目标。
+
+        阻断 link-local / 云元数据地址（169.254.0.0/16、fe80::/10）、
+        多播与保留地址；放行回环地址与内网（含 Docker 网段）地址，
+        因为应用通常部署在宿主机或内网中。
+
+        Returns:
+            拒绝原因；允许访问时返回 None
+        """
+        raw = str(url or "").strip()
+        if not raw:
+            return None  # 空地址由应用客户端自行提示
+        parsed = urlparse(raw if "://" in raw else f"http://{raw}")
+        host = parsed.hostname
+        if not host:
+            return "访问地址无效，无法解析主机名"
+
+        try:
+            addrinfos = await asyncio.to_thread(socket.getaddrinfo, host, None)
+        except socket.gaierror:
+            return f"无法解析访问地址的主机名: {host}"
+        except Exception:
+            logger.exception("解析访问地址主机名失败: %s", host)
+            return f"无法解析访问地址的主机名: {host}"
+
+        for info in addrinfos:
+            try:
+                ip = ipaddress.ip_address(info[4][0])
+            except ValueError:
+                continue
+            if ip.is_link_local:
+                return f"目标地址 {ip} 属于 link-local/元数据网段，禁止访问"
+            if ip.is_multicast or ip.is_unspecified or ip.is_reserved:
+                return f"目标地址 {ip} 属于受限网段，禁止访问"
+        return None
 
     async def deploy(
         self,
@@ -254,7 +305,7 @@ class OrchestrationService:
         app_names = [item.get("app_name") for item in composition if item.get("app_name")]
         app_map = await self._load_apps(db, app_names)
 
-        containers = self._list_running_containers()
+        containers = await asyncio.to_thread(self._list_running_containers)
 
         candidates_by_app: dict[str, list[ContainerMatch]] = {
             name: [] for name in app_names
@@ -406,10 +457,15 @@ class OrchestrationService:
 
     def _list_running_containers(self) -> list:
         """列出当前运行中的 Docker 容器，Docker 不可用时返回空列表。"""
+        client = docker_manager._client
+        if client is None:
+            return []
         try:
-            client = docker.from_env()
             return client.containers.list(all=False)
         except docker.errors.DockerException:
+            return []
+        except Exception:
+            logger.exception("列出运行中容器失败")
             return []
 
     def _extract_network_info(
@@ -531,8 +587,10 @@ class OrchestrationService:
                 return
             container_id = container_name
 
+        client = docker_manager._client
+        if client is None:
+            return
         try:
-            client = docker.from_env()
             container = client.containers.get(container_id)
             container.reload()
         except docker.errors.NotFound:
@@ -580,7 +638,7 @@ class OrchestrationService:
 
         for group in groups:
             for instance in group.instances:
-                self._refresh_instance_status(instance)
+                await asyncio.to_thread(self._refresh_instance_status, instance)
 
         return groups
 
@@ -644,7 +702,7 @@ class OrchestrationService:
             raise APIException("编排实例组不存在", 404)
 
         for instance in group.instances:
-            self._refresh_instance_status(instance)
+            await asyncio.to_thread(self._refresh_instance_status, instance)
 
         return group
 
