@@ -3,7 +3,6 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 .venv/
-*.db
 
 # Node
 node_modules/
@@ -29,9 +28,10 @@ Thumbs.db
 .zcf/
 .playwright-mcp/
 
-# Images (非项目资源)
-*.jpg
-*.png
-*.jpeg
-*.gif
-*.ico
+# 数据库与运行时产物（仅数据目录，不影响 frontend/public 下的项目图标资源）
+*.db
+*.db.bak
+*.db-shm
+*.db-wal
+backend/data/
+data/
