@@ -4,7 +4,7 @@
  * 响应式网格展示远程镜像搜索结果，每张卡片包含图标、名称、描述、统计和拉取操作。
  */
 
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -18,7 +18,7 @@ import {
 import { useToast } from "@/components/ui/toast";
 import { TagSelectDialog } from "./TagSelectDialog";
 import { PullProgressMini } from "./PullProgressMini";
-import { addPullHistoryItem, getPullHistory } from "@/lib/docker-progress";
+import { usePullProgressStore } from "@/stores/pull-progress";
 import { formatCount } from "@/lib/utils";
 import {
   Search,
@@ -186,32 +186,16 @@ export function ImageSearchSection({
   const [selectedImage, setSelectedImage] = useState<string>("");
 
   // 跟踪活跃拉取任务中的镜像（用于禁用按钮），仅当状态为 pulling 时禁用
-  const [activeImages, setActiveImages] = useState<Set<string>>(() => {
-    return new Set(
-      getPullHistory()
-        .filter((item) => item.status === "pulling")
-        .map((t) => t.image)
-    );
-  });
-
-  // 监听 localStorage 变化更新活跃镜像
-  useEffect(() => {
-    const updateActive = () => {
-      setActiveImages(
-        new Set(
-          getPullHistory()
-            .filter((item) => item.status === "pulling")
-            .map((t) => t.image)
-        )
-      );
-    };
-    window.addEventListener("storage", updateActive);
-    const interval = setInterval(updateActive, 2000);
-    return () => {
-      window.removeEventListener("storage", updateActive);
-      clearInterval(interval);
-    };
-  }, []);
+  const history = usePullProgressStore((s) => s.history);
+  const activeImages = useMemo(
+    () =>
+      new Set(
+        history
+          .filter((item) => item.status === "pulling")
+          .map((t) => t.image)
+      ),
+    [history]
+  );
 
   const {
     data,
@@ -257,10 +241,8 @@ export function ImageSearchSection({
     pullImageStream.mutate(imageWithTag, {
       onSuccess: (data) => {
         toast.success(`已开始拉取 ${imageWithTag}`);
-        // 保存到 localStorage 历史记录，进度面板会自动显示
-        addPullHistoryItem(data.task_id, imageWithTag);
-        // 触发进度面板刷新
-        window.dispatchEvent(new Event("storage"));
+        // 记录到全局拉取进度 store，进度面板会自动显示
+        usePullProgressStore.getState().addTask(data.task_id, imageWithTag);
       },
     });
   };

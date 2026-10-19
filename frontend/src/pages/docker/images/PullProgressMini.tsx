@@ -7,36 +7,21 @@
  * - 失败时进度条变红，全部完成时变绿
  * - 点击后 Popover 展开，显示每个历史任务的详细进度卡片
  * - 最新下载排在最上方，先下载的排在下方
+ *
+ * 历史记录与进度状态均来自全局内存态 store（zustand），
+ * 多组件共享同一份状态与同一条 SSE 连接。
  */
 
-import { useState, useEffect } from "react";
 import { useAllPullProgress } from "@/hooks/useDocker";
 import { Popover as PopoverPrimitive } from "@base-ui/react/popover";
 import { Popover, PopoverTrigger } from "@/components/ui/popover";
-import {
-  getPullHistory,
-  removePullHistoryItem,
-  clearPullHistory,
-  type PullHistoryItem,
-} from "@/lib/docker-progress";
+import { usePullProgressStore } from "@/stores/pull-progress";
 import { PullTaskCard } from "./PullTaskCard";
 import { cn } from "@/lib/utils";
 import { Download, X } from "lucide-react";
 
 export function PullProgressMini() {
-  const [history, setHistory] = useState<PullHistoryItem[]>(() => getPullHistory());
-
-  // 监听 localStorage 变化同步历史记录
-  useEffect(() => {
-    const handleStorage = () => setHistory(getPullHistory());
-    window.addEventListener("storage", handleStorage);
-    // 同时用轮询兜底（同页面 storage 事件不触发）
-    const interval = setInterval(handleStorage, 2000);
-    return () => {
-      window.removeEventListener("storage", handleStorage);
-      clearInterval(interval);
-    };
-  }, []);
+  const history = usePullProgressStore((s) => s.history);
 
   const pullingTasks = history.filter((item) => item.status === "pulling");
   const taskIds = pullingTasks.map((t) => t.taskId);
@@ -138,11 +123,7 @@ export function PullProgressMini() {
                 </span>
               </div>
               <button
-                onClick={() => {
-                  clearPullHistory();
-                  setHistory([]); // 即时同步
-                  window.dispatchEvent(new Event("storage"));
-                }}
+                onClick={() => usePullProgressStore.getState().clearHistory()}
                 className="text-[11px] text-muted-foreground hover:text-foreground transition-colors flex items-center gap-0.5"
                 title="清除全部"
               >
@@ -165,11 +146,9 @@ export function PullProgressMini() {
                     createdAt={task.createdAt}
                     lastActivityAt={task.lastActivityAt}
                     defaultExpanded={index === 0}
-                    onRemove={() => {
-                      removePullHistoryItem(task.taskId);
-                      setHistory(getPullHistory());
-                      window.dispatchEvent(new Event("storage"));
-                    }}
+                    onRemove={() =>
+                      usePullProgressStore.getState().removeHistoryItem(task.taskId)
+                    }
                   />
                 );
               })}

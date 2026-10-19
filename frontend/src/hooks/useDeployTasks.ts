@@ -8,6 +8,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { useContext } from "react";
 import { DeployTaskContext } from "@/contexts/DeployTaskContext";
+import { getToken } from "@/lib/api";
 
 /** 获取全局部署任务上下文 */
 export function useDeployTasks() {
@@ -177,61 +178,6 @@ function appendDeployLogs(
 }
 
 /**
- * 监听单个部署任务的 SSE 实时进度
- */
-export function useDeployTaskEvents(
-  taskId: string | null,
-  onComplete?: (state: DeployTaskState) => void,
-  onError?: (state: DeployTaskState) => void
-): DeployTaskState | null {
-  const [state, setState] = useState<DeployTaskState | null>(null);
-  const eventSourceRef = useRef<EventSource | null>(null);
-
-  useEffect(() => {
-    if (!taskId) {
-      setState(null);
-      return;
-    }
-
-    const baseUrl = getApiBaseUrl();
-    const token = localStorage.getItem("token") || "";
-    const url = `${baseUrl}/api/deploy-tasks/${taskId}/events?token=${encodeURIComponent(token)}`;
-    const es = new EventSource(url);
-    eventSourceRef.current = es;
-
-    es.onmessage = (event) => {
-      const newState = parseDeployEvent(taskId, event.data);
-      if (!newState) return;
-
-      setState((prev) => {
-        const logs = appendDeployLogs(prev ?? undefined, newState);
-        return { ...newState, logs };
-      });
-
-      if (newState.status === "completed") {
-        onComplete?.(newState);
-        es.close();
-      } else if (newState.status === "failed") {
-        onError?.(newState);
-        es.close();
-      }
-    };
-
-    es.onerror = () => {
-      // SSE 连接错误时关闭，调用方可选择重连或提示
-      es.close();
-    };
-
-    return () => {
-      es.close();
-      eventSourceRef.current = null;
-    };
-  }, [taskId, onComplete, onError]);
-
-  return state;
-}
-
-/**
  * 同时监听多个部署任务的 SSE 实时进度
  */
 export function useDeployTasksEvents(
@@ -242,17 +188,26 @@ export function useDeployTasksEvents(
   const [states, setStates] = useState<Record<string, DeployTaskState>>({});
   const taskIdsKey = taskIds.join(",");
 
+  // 回调用 ref 保持最新引用，避免其变化导致 SSE 反复重建
+  const onCompleteRef = useRef(onComplete);
+  const onErrorRef = useRef(onError);
   useEffect(() => {
-    if (taskIds.length === 0) {
+    onCompleteRef.current = onComplete;
+    onErrorRef.current = onError;
+  }, [onComplete, onError]);
+
+  useEffect(() => {
+    const ids = taskIdsKey ? taskIdsKey.split(",") : [];
+    if (ids.length === 0) {
       setStates({});
       return;
     }
 
     const baseUrl = getApiBaseUrl();
-    const token = localStorage.getItem("token") || "";
+    const token = getToken() || "";
     const sources: Record<string, EventSource> = {};
 
-    taskIds.forEach((taskId) => {
+    ids.forEach((taskId) => {
       const url = `${baseUrl}/api/deploy-tasks/${taskId}/events?token=${encodeURIComponent(token)}`;
       const es = new EventSource(url);
       sources[taskId] = es;
@@ -268,10 +223,10 @@ export function useDeployTasksEvents(
         });
 
         if (newState.status === "completed") {
-          onComplete?.(taskId, newState);
+          onCompleteRef.current?.(taskId, newState);
           es.close();
         } else if (newState.status === "failed") {
-          onError?.(taskId, newState);
+          onErrorRef.current?.(taskId, newState);
           es.close();
         }
       };
@@ -284,7 +239,7 @@ export function useDeployTasksEvents(
     return () => {
       Object.values(sources).forEach((es) => es.close());
     };
-  }, [taskIdsKey, taskIds, onComplete, onError]);
+  }, [taskIdsKey]);
 
   return states;
 }
