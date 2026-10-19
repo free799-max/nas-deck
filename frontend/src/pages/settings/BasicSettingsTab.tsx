@@ -104,10 +104,11 @@ export function BasicSettingsTab() {
   const updateConfig = useUpdateSystemConfig();
 
   const [form, setForm] = useState<SystemConfig>(EMPTY_CONFIG);
+  const [initialized, setInitialized] = useState(false);
 
-  // 加载完成后回填表单
+  // 首次加载完成后回填表单；后续 refetch 不再覆盖用户未保存的修改
   useEffect(() => {
-    if (config) {
+    if (config && !initialized) {
       setForm({
         ...config,
         http_proxy: config.http_proxy || "",
@@ -116,8 +117,9 @@ export function BasicSettingsTab() {
         storage_host_root_dir: config.storage_host_root_dir || "",
         storage_docker_mount_dir: config.storage_docker_mount_dir || "",
       });
+      setInitialized(true);
     }
-  }, [config]);
+  }, [config, initialized]);
 
   const handleChange = (field: keyof SystemConfig, value: string) => {
     setForm((prev) => ({ ...prev, [field]: value }));

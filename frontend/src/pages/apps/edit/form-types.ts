@@ -48,6 +48,12 @@ export const CATEGORY_OPTIONS: { value: string; label: string }[] = [
   { value: "game", label: "游戏" },
   { value: "gallery", label: "图库" },
   { value: "news", label: "资讯" },
+  { value: "download", label: "下载" },
+  { value: "docker", label: "Docker" },
+  { value: "tool", label: "工具" },
+  { value: "media", label: "媒体" },
+  { value: "network", label: "网络" },
+  { value: "web", label: "网站" },
 ];
 
 /** 默认的 config_schema 模板 */

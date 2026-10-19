@@ -301,22 +301,25 @@ export function AutomationImportDialog({
     const projectName = slugify(instanceName);
     if (!projectName) return;
 
-    await importMutation.mutateAsync({
-      name: orchestration.name,
-      data: {
-        instance_name: projectName,
-        selected_apps: Array.from(selectedApps),
-        app_configs: Object.fromEntries(
-          Array.from(selectedApps).map((name) => [
-            name,
-            appConfigs[name] ?? {},
-          ])
-        ),
-        shared_config: {},
-      },
-    });
-
-    onOpenChange(false);
+    try {
+      await importMutation.mutateAsync({
+        name: orchestration.name,
+        data: {
+          instance_name: projectName,
+          selected_apps: Array.from(selectedApps),
+          app_configs: Object.fromEntries(
+            Array.from(selectedApps).map((name) => [
+              name,
+              appConfigs[name] ?? {},
+            ])
+          ),
+          shared_config: {},
+        },
+      });
+      onOpenChange(false);
+    } catch {
+      // 错误提示由 useImportOrchestration 的 onError 统一处理，弹窗保持打开
+    }
   };
 
   const canSubmit =

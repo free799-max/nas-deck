@@ -5,7 +5,7 @@
  * - user: 当前登录用户信息
  * - isLoading: 初始化认证状态中
  * - isAuthenticated: 是否已登录
- * - login(token): 登录后设置状态
+ * - login(token, remember): 登录后设置状态，remember 决定 token 持久化位置
  * - logout(): 登出清除状态并跳转
  */
 
@@ -17,13 +17,14 @@ import {
   useMemo,
 } from "react";
 import { getMe, type User } from "@/api/auth";
+import { clearToken, getToken, setToken } from "@/lib/api";
 
 /** AuthContext 提供的值 */
 interface AuthContextValue {
   user: User | null;
   isLoading: boolean;
   isAuthenticated: boolean;
-  login: (token: string) => Promise<void>;
+  login: (token: string, remember?: boolean) => Promise<void>;
   logout: () => void;
 }
 
@@ -38,10 +39,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   /**
    * 初始化时验证本地 token 是否有效
-   * 若 localStorage 中存在 token，调用 /auth/me 验证
+   * 若存在 token（localStorage 或 sessionStorage），调用 /auth/me 验证
    */
   useEffect(() => {
-    const token = localStorage.getItem("token");
+    const token = getToken();
     if (!token) {
       // 使用 microtask 避免在 effect 中同步 setState
       queueMicrotask(() => setIsLoading(false));
@@ -53,8 +54,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       .catch(() => {
         // token 无效或过期，清除本地存储
         // 注意：仅当本地 token 未变更时才清除，避免竞态中误删新登录的 token
-        if (localStorage.getItem("token") === token) {
-          localStorage.removeItem("token");
+        if (getToken() === token) {
+          clearToken();
         }
       })
       .finally(() => setIsLoading(false));
@@ -62,9 +63,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   /**
    * 登录成功后调用，存储 token 并获取用户信息
+   * remember 为 true 时持久保存（localStorage），否则仅本次会话（sessionStorage）
    */
-  const login = useCallback(async (token: string) => {
-    localStorage.setItem("token", token);
+  const login = useCallback(async (token: string, remember: boolean = false) => {
+    setToken(token, remember);
     const user = await getMe();
     setUser(user);
   }, []);
@@ -73,7 +75,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
    * 登出：清除本地 token 和用户状态，跳转到登录页
    */
   const logout = useCallback(() => {
-    localStorage.removeItem("token");
+    clearToken();
     setUser(null);
     window.location.href = "/login";
   }, []);

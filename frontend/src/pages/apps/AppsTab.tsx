@@ -34,6 +34,13 @@ const CATEGORY_LABELS: Record<string, string> = {
   game: "游戏",
   gallery: "图库",
   news: "资讯",
+  download: "下载",
+  docker: "Docker",
+  tool: "工具",
+  media: "媒体",
+  network: "网络",
+  web: "网站",
+  other: "其他",
 };
 
 export function AppsTab() {

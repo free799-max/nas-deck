@@ -148,7 +148,7 @@ export function DirectoryPicker({
     ];
     let acc = normalizedRoot;
     for (const part of parts) {
-      acc += `/${part}`;
+      acc = acc === "/" ? `/${part}` : `${acc}/${part}`;
       crumbs.push({ name: part, path: acc });
     }
     return crumbs;
@@ -166,8 +166,9 @@ export function DirectoryPicker({
       return;
     }
     const target = toAbsolutePath(trimmed, normalizedRoot);
-    // 输入框允许用户跳到 rootPath 下的任意路径
-    if (!target.startsWith(normalizedRoot + "/") && target !== normalizedRoot) {
+    // 输入框允许用户跳到 rootPath 下的任意路径；rootPath 为 "/" 时所有绝对路径均合法
+    const rootPrefix = normalizedRoot === "/" ? "/" : `${normalizedRoot}/`;
+    if (target !== normalizedRoot && !target.startsWith(rootPrefix)) {
       return;
     }
     navigateTo(target);

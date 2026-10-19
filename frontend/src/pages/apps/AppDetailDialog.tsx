@@ -23,6 +23,19 @@ interface AppDetailDialogProps {
   onDeploy: (app: App) => void;
 }
 
+/** 协议白名单：仅允许 http/https 链接，防止 javascript: 等协议注入 */
+function safeHttpUrl(url: string | null | undefined): string | undefined {
+  if (!url) return undefined;
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === "http:" || parsed.protocol === "https:"
+      ? url
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export function AppDetailDialog({
   app,
   open,
@@ -82,7 +95,7 @@ export function AppDetailDialog({
         {/* 信息卡片 */}
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-px bg-border border-y flex-shrink-0">
           <a
-            href={app.website || undefined}
+            href={safeHttpUrl(app.website)}
             target="_blank"
             rel="noopener noreferrer"
             className="bg-card p-4 hover:bg-muted/40 transition-colors"
@@ -96,7 +109,7 @@ export function AppDetailDialog({
             </div>
           </a>
           <a
-            href={app.source_url || undefined}
+            href={safeHttpUrl(app.source_url)}
             target="_blank"
             rel="noopener noreferrer"
             className="bg-card p-4 hover:bg-muted/40 transition-colors"

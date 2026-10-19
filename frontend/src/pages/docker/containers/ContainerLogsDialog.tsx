@@ -91,7 +91,7 @@ export function ContainerLogsDialog({
   }, [logs, follow]);
 
   const handleCopy = () => {
-    navigator.clipboard.writeText(logs.join(""));
+    navigator.clipboard.writeText(logs.join("\n"));
     setCopied(true);
     setTimeout(() => setCopied(false), 1500);
   };

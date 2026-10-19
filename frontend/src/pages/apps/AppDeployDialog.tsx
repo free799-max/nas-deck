@@ -4,7 +4,7 @@
  * 上下布局：上方为配置表单，下方实时展示渲染后的 Compose YAML。
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Dialog,
   DialogContent,
@@ -44,19 +44,23 @@ function useDebouncedPreview(
   instanceName: string,
   config: Record<string, unknown>
 ) {
-  const preview = useAppPreview(app?.name || "");
+  const { mutate: previewMutate, isPending } = useAppPreview(app?.name || "");
   const [yaml, setYaml] = useState("<初始化预览中…>");
   const [error, setError] = useState<string | null>(null);
 
+  // 稳定序列化作为依赖，避免每次渲染都触发预览
+  const configKey = useMemo(() => JSON.stringify(config), [config]);
+
   useEffect(() => {
     if (!app) return;
+    const parsedConfig = JSON.parse(configKey) as Record<string, unknown>;
 
     const timer = setTimeout(() => {
       const payload: AppPreviewRequest = {
         instance_name: slugify(instanceName) || slugify(app.display_name),
-        config,
+        config: parsedConfig,
       };
-      preview.mutate(payload, {
+      previewMutate(payload, {
         onSuccess: (data) => {
           if (data.error) {
             setError(data.error);
@@ -74,10 +78,9 @@ function useDebouncedPreview(
     }, 500);
 
     return () => clearTimeout(timer);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [app?.name, instanceName, JSON.stringify(config)]);
+  }, [app, instanceName, configKey, previewMutate]);
 
-  return { yaml, error, isPending: preview.isPending };
+  return { yaml, error, isPending };
 }
 
 export function AppDeployDialog({
@@ -135,14 +138,13 @@ export function AppDeployDialog({
   const [imageTagsLoading, setImageTagsLoading] = useState(false);
 
   const appDisplayName = app?.display_name || "";
-  const appConfigSchema = app?.config_schema || {};
+  const appConfigSchema = useMemo(() => app?.config_schema || {}, [app]);
 
   useEffect(() => {
     setInstanceName(slugify(appDisplayName));
     const defaults = extractDefaults(appConfigSchema);
     setConfig(fillEmptyPasswords(appConfigSchema, defaults));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [appDisplayName, JSON.stringify(appConfigSchema)]);
+  }, [appDisplayName, appConfigSchema]);
 
   // 获取镜像可用标签列表
   const appImage = app?.image;

@@ -33,7 +33,10 @@ export function DeployProgressDialog() {
   const handleComplete = useCallback(
     (taskId: string) => {
       toast.success("部署完成");
-      const t = setTimeout(() => removeTask(taskId), DISMISS_DELAY_MS);
+      const t = setTimeout(() => {
+        timersRef.current.delete(t);
+        removeTask(taskId);
+      }, DISMISS_DELAY_MS);
       timersRef.current.add(t);
     },
     [removeTask, toast]
@@ -42,7 +45,10 @@ export function DeployProgressDialog() {
   const handleError = useCallback(
     (taskId: string, state: { error?: string | null }) => {
       toast.error(state.error || "部署失败");
-      const t = setTimeout(() => removeTask(taskId), DISMISS_DELAY_MS);
+      const t = setTimeout(() => {
+        timersRef.current.delete(t);
+        removeTask(taskId);
+      }, DISMISS_DELAY_MS);
       timersRef.current.add(t);
     },
     [removeTask, toast]

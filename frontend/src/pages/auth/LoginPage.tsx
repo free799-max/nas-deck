@@ -73,8 +73,7 @@ export function LoginPage() {
         setIsCheckingUsers(false);
         setTimeout(() => usernameRef.current?.focus(), 300);
       });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [toast]);
 
   /* 登录提交 */
   const handleLogin = async (e: React.FormEvent) => {
@@ -87,7 +86,7 @@ export function LoginPage() {
     setIsLoading(true);
     try {
       const resp = await authApi.login(username, password);
-      await login(resp.access_token);
+      await login(resp.access_token, rememberMe);
       toast.success("登录成功，正在跳转...", { duration: 2000 });
       setTimeout(() => navigate("/"), 600);
     } catch {

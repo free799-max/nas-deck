@@ -72,6 +72,19 @@ interface SchemaFormProps {
   /** 是否正在加载镜像标签 */
   imageTagsLoading?: boolean;
 }
+
+/**
+ * 目录字段相关服务，由 SchemaForm 顶层统一获取后逐级下发，
+ * 避免每个字段实例各自调用 useSystemConfig 与目录 mutation hooks。
+ */
+interface DirectoryServices {
+  hostRootDir: string;
+  dockerMountDir: string;
+  createDirectory: ReturnType<typeof useCreateDirectory>;
+  renameDirectory: ReturnType<typeof useRenameDirectory>;
+  deleteDirectory: ReturnType<typeof useDeleteDirectory>;
+}
+
 interface FieldInputProps {
   propKey: string;
   prop: SchemaProperty;
@@ -80,6 +93,7 @@ interface FieldInputProps {
   onChange: (key: string, value: unknown) => void;
   hideLabel?: boolean;
   instanceName?: string;
+  directoryServices: DirectoryServices;
 }
 
 function FieldInput({
@@ -90,13 +104,10 @@ function FieldInput({
   onChange,
   hideLabel = false,
   instanceName,
+  directoryServices,
 }: FieldInputProps) {
   const label = prop.title || propKey;
   const [pickerOpen, setPickerOpen] = useState(false);
-  const { data: systemConfig } = useSystemConfig();
-  const createDirectory = useCreateDirectory();
-  const renameDirectory = useRenameDirectory();
-  const deleteDirectory = useDeleteDirectory();
 
   const handleChange = (next: unknown) => {
     onChange(propKey, next);
@@ -193,8 +204,8 @@ function FieldInput({
 
   // 目录选择：输入框 + 浏览按钮
   if (isDirectoryField) {
-    const hostRootDir = systemConfig?.storage_host_root_dir || "/";
-    const dockerMountDir = systemConfig?.storage_docker_mount_dir || hostRootDir;
+    const { hostRootDir, dockerMountDir, createDirectory, renameDirectory, deleteDirectory } =
+      directoryServices;
     const currentValue =
       value === undefined || value === null ? "" : String(value);
     const displayValue = toDisplayPath(currentValue, hostRootDir, dockerMountDir, instanceName);
@@ -277,6 +288,7 @@ interface ArrayFieldProps {
   required: boolean;
   onChange: (key: string, value: unknown) => void;
   instanceName?: string;
+  directoryServices: DirectoryServices;
 }
 
 function ArrayField({
@@ -286,6 +298,7 @@ function ArrayField({
   required,
   onChange,
   instanceName,
+  directoryServices,
 }: ArrayFieldProps) {
   const rows = Array.isArray(value) ? (value as Record<string, unknown>[]) : [];
   const items = prop.items || {};
@@ -367,6 +380,7 @@ function ArrayField({
                   onChange={(_, val) => updateRow(index, key, val)}
                   hideLabel
                   instanceName={instanceName}
+                  directoryServices={directoryServices}
                 />
               </div>
             );
@@ -465,6 +479,7 @@ function ContainerSchemaForm({
   image,
   imageTags,
   imageTagsLoading,
+  directoryServices,
 }: {
   schema: SchemaFormProps["schema"];
   data: Record<string, unknown>;
@@ -473,18 +488,18 @@ function ContainerSchemaForm({
   image?: string;
   imageTags?: string[];
   imageTagsLoading?: boolean;
+  directoryServices: DirectoryServices;
 }) {
   const properties = schema.properties || {};
   const requiredSet = new Set(schema.required || []);
   const containers = schema.containers || [];
 
-  const allKeys = containers.flatMap((container) =>
-    container.settings.map((setting) => `${container.name}-${setting.type}`)
-  );
-  const [expanded, setExpanded] = useState<Set<string>>(new Set(allKeys));
+  // 记录用户手动收起的区块；schema 异步变化时新出现的区块默认展开，
+  // 避免 useState(new Set(allKeys)) 初始化后不再同步的问题
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
 
   const toggleSection = (key: string) => {
-    setExpanded((prev) => {
+    setCollapsed((prev) => {
       const next = new Set(prev);
       if (next.has(key)) next.delete(key);
       else next.add(key);
@@ -526,6 +541,7 @@ function ContainerSchemaForm({
                   required={requiredSet.has(key)}
                   onChange={handleChange}
                   instanceName={instanceName}
+                  directoryServices={directoryServices}
                 />
               );
             }
@@ -539,6 +555,7 @@ function ContainerSchemaForm({
                   onChange={handleChange}
                   hideLabel
                   instanceName={instanceName}
+                  directoryServices={directoryServices}
                 />
               </div>
             );
@@ -589,7 +606,7 @@ function ContainerSchemaForm({
                   if (fields.length === 0) return null;
 
                   const sectionKey = `${container.name}-${setting.type}`;
-                  const isExpanded = expanded.has(sectionKey);
+                  const isExpanded = !collapsed.has(sectionKey);
                   return (
                     <div
                       key={sectionKey}
@@ -639,6 +656,7 @@ function PlainSchemaForm({
   image,
   imageTags,
   imageTagsLoading,
+  directoryServices,
 }: {
   schema: SchemaFormProps["schema"];
   data: Record<string, unknown>;
@@ -647,6 +665,7 @@ function PlainSchemaForm({
   image?: string;
   imageTags?: string[];
   imageTagsLoading?: boolean;
+  directoryServices: DirectoryServices;
 }) {
   const properties = schema.properties || {};
   const requiredSet = new Set(schema.required || []);
@@ -702,6 +721,7 @@ function PlainSchemaForm({
                     required={required}
                     onChange={handleChange}
                     instanceName={instanceName}
+                    directoryServices={directoryServices}
                   />
                 </div>
               </div>
@@ -716,6 +736,7 @@ function PlainSchemaForm({
               required={requiredSet.has(key)}
               onChange={handleChange}
               instanceName={instanceName}
+              directoryServices={directoryServices}
             />
           );
         })}
@@ -734,6 +755,20 @@ export function SchemaForm({
 }: SchemaFormProps) {
   const hasContainers = schema?.containers && schema.containers.length > 0;
 
+  // 目录字段依赖的系统配置与目录操作 hooks 统一在顶层获取一次
+  const { data: systemConfig } = useSystemConfig();
+  const createDirectory = useCreateDirectory();
+  const renameDirectory = useRenameDirectory();
+  const deleteDirectory = useDeleteDirectory();
+  const hostRootDir = systemConfig?.storage_host_root_dir || "/";
+  const directoryServices: DirectoryServices = {
+    hostRootDir,
+    dockerMountDir: systemConfig?.storage_docker_mount_dir || hostRootDir,
+    createDirectory,
+    renameDirectory,
+    deleteDirectory,
+  };
+
   if (!hasContainers) {
     return (
       <PlainSchemaForm
@@ -744,6 +779,7 @@ export function SchemaForm({
         image={image}
         imageTags={imageTags}
         imageTagsLoading={imageTagsLoading}
+        directoryServices={directoryServices}
       />
     );
   }
@@ -757,6 +793,7 @@ export function SchemaForm({
       image={image}
       imageTags={imageTags}
       imageTagsLoading={imageTagsLoading}
+      directoryServices={directoryServices}
     />
   );
 }
