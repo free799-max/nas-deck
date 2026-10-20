@@ -127,12 +127,19 @@ function cleanDetailLine(detail: string): string {
   return translateStatusWord(translatedPrefix);
 }
 
+// docker 层状态行：12 位十六进制层 ID + 状态词（尺寸单位为 MB/GB，可能不带 /总量）
+const DOCKER_LAYER_LINE_RE =
+  /^[0-9a-f]{12}\s+(Waiting|Pulling fs layer|Downloading|Verifying Checksum|Download complete|Extracting|Pull complete|Already exists)\b/;
+// 通用进度条：current/total，单位覆盖 docker（KB/MB/GB）与包管理器（KiB/MiB/GiB）
+const SIZE_PROGRESS_RE =
+  /\d+(\.\d+)?\s*(KiB|MiB|GiB|KB|MB|GB)\s*\/\s*\d+(\.\d+)?\s*(KiB|MiB|GiB|KB|MB|GB)/;
+
 /**
- * 判断一行日志是否属于单个包的下载/安装进度条。
- * 例如："click ------------------------------ 94.81 KiB/116.45 KiB"
+ * 判断一行日志是否属于进度条行（docker 层状态或 current/total 尺寸）。
+ * 例如："c949c4a16af4 Downloading 22.02MB"、"click ---- 94.81 KiB/116.45 KiB"
  */
 function isProgressLine(line: string): boolean {
-  return /\d+(\.\d+)?\s*(KiB|MiB|GiB)\s*\/\s*\d+(\.\d+)?\s*(KiB|MiB|GiB)/.test(line);
+  return DOCKER_LAYER_LINE_RE.test(line) || SIZE_PROGRESS_RE.test(line);
 }
 
 /**
@@ -160,14 +167,17 @@ function appendDeployLogs(
     const cleaned = cleanDetailLine(detail);
     const lastCleaned = lastDetail ? cleanDetailLine(lastDetail) : undefined;
     if (cleaned && cleaned !== lastCleaned) {
-      // 对单个包的进度条进行覆盖：相同包名的进度只保留最新一帧，避免刷屏
+      // 进度行按标识覆盖：docker 多层下载是交错的（A B C A' B'...），
+      // 只比较最后一行会漏掉，需向前回溯找同层行原地替换，每层只保留最新一帧
       if (isProgressLine(cleaned)) {
         const key = progressLineKey(cleaned);
-        if (key && logs.length > 0) {
-          const lastLog = logs[logs.length - 1];
-          if (isProgressLine(lastLog) && progressLineKey(lastLog) === key) {
-            logs[logs.length - 1] = cleaned;
-            return logs;
+        if (key) {
+          const searchStart = Math.max(0, logs.length - 50);
+          for (let i = logs.length - 1; i >= searchStart; i--) {
+            if (isProgressLine(logs[i]) && progressLineKey(logs[i]) === key) {
+              logs[i] = cleaned;
+              return logs;
+            }
           }
         }
       }
@@ -232,7 +242,9 @@ export function useDeployTasksEvents(
       };
 
       es.onerror = () => {
-        es.close();
+        // 不主动 close：让 EventSource 自动重连。
+        // 后端 SSE 会回放历史事件，重连后能恢复到最新状态（含终态），
+        // 避免网络抖动导致任务卡片永远停在“连接任务…”占位。
       };
     });
 

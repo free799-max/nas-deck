@@ -21,7 +21,7 @@ import {
   useSettingsDeleteDirectory,
   type SystemConfig,
 } from "@/hooks/useSettings";
-import { Network, HardDrive, FolderOpen } from "lucide-react";
+import { Network, HardDrive, FolderOpen, Plug, KeyRound } from "lucide-react";
 
 /** 空配置对象 */
 const EMPTY_CONFIG: SystemConfig = {
@@ -31,6 +31,9 @@ const EMPTY_CONFIG: SystemConfig = {
   no_proxy: "",
   storage_host_root_dir: "",
   storage_docker_mount_dir: "",
+  service_port_start: 10000,
+  default_admin_username: "admin",
+  default_admin_password: "",
 };
 
 interface DirectoryInputProps {
@@ -116,6 +119,9 @@ export function BasicSettingsTab() {
         no_proxy: config.no_proxy || "",
         storage_host_root_dir: config.storage_host_root_dir || "",
         storage_docker_mount_dir: config.storage_docker_mount_dir || "",
+        service_port_start: config.service_port_start ?? 10000,
+        default_admin_username: config.default_admin_username || "admin",
+        default_admin_password: config.default_admin_password || "",
       });
       setInitialized(true);
     }
@@ -133,6 +139,9 @@ export function BasicSettingsTab() {
       no_proxy: form.no_proxy || null,
       storage_host_root_dir: form.storage_host_root_dir || null,
       storage_docker_mount_dir: form.storage_docker_mount_dir || null,
+      service_port_start: form.service_port_start,
+      default_admin_username: form.default_admin_username.trim() || "admin",
+      default_admin_password: form.default_admin_password.trim(),
     });
   };
 
@@ -236,6 +245,93 @@ export function BasicSettingsTab() {
               </p>
             </div>
           </div>
+        </CardContent>
+      </Card>
+
+      {/* 服务端口配置 */}
+      <Card className="rounded-xl">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-base flex items-center gap-2">
+            <Plug className="h-4 w-4 text-muted-foreground" />
+            服务端口
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="space-y-1.5">
+            <Label htmlFor="service_port_start" className="text-xs font-medium">
+              服务起始端口
+            </Label>
+            <Input
+              id="service_port_start"
+              type="number"
+              min={1}
+              max={65535}
+              value={form.service_port_start}
+              onChange={(e) =>
+                setForm((prev) => ({
+                  ...prev,
+                  service_port_start:
+                    Number.parseInt(e.target.value, 10) || 10000,
+                }))
+              }
+              className="h-8 rounded-md border-input bg-white px-2 text-sm shadow-none"
+            />
+            <p className="text-xs text-muted-foreground">
+              创建服务时从该端口开始按顺序分配，自动跳过已占用端口。
+            </p>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* 统一服务账号 */}
+      <Card className="rounded-xl">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-base flex items-center gap-2">
+            <KeyRound className="h-4 w-4 text-muted-foreground" />
+            统一服务账号
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="space-y-1.5">
+              <Label
+                htmlFor="default_admin_username"
+                className="text-xs font-medium"
+              >
+                管理员用户名
+              </Label>
+              <Input
+                id="default_admin_username"
+                value={form.default_admin_username}
+                onChange={(e) =>
+                  handleChange("default_admin_username", e.target.value)
+                }
+                placeholder="admin"
+                className="h-8 rounded-md border-input bg-white px-2 text-sm shadow-none"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label
+                htmlFor="default_admin_password"
+                className="text-xs font-medium"
+              >
+                管理员密码
+              </Label>
+              <Input
+                id="default_admin_password"
+                type="password"
+                value={form.default_admin_password}
+                onChange={(e) =>
+                  handleChange("default_admin_password", e.target.value)
+                }
+                placeholder="留空则每次部署随机生成"
+                className="h-8 rounded-md border-input bg-white px-2 text-sm shadow-none"
+              />
+            </div>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            编排部署时自动配置到各服务（MoviePilot、qBittorrent、Jellyfin），部署完成后自动检测登录是否生效。
+          </p>
         </CardContent>
       </Card>
 

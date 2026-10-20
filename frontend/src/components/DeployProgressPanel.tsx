@@ -12,8 +12,9 @@ import {
 } from "@/hooks/useDeployTasks";
 import { Progress } from "@/components/ui/progress";
 import { Badge } from "@/components/ui/badge";
+import { AppIcon } from "@/pages/apps/AppIcon";
 import { cn } from "@/lib/utils";
-import { CheckCircle2, XCircle, Loader2, Terminal } from "lucide-react";
+import { CheckCircle2, XCircle, Loader2, Package, Terminal } from "lucide-react";
 
 interface DeployProgressPanelProps {
   taskIds: string[];
@@ -107,46 +108,70 @@ function DeployTaskCard({ state, logs }: { state: DeployTaskState; logs: string[
   const isCompleted = state.status === "completed";
   const isFailed = state.status === "failed";
   const statusConfig = statusVariantMap[state.status] || statusVariantMap.deploying;
+  const meta = state.meta || {};
+  const appName = meta.app_name as string | undefined;
+  const appIcon = meta.icon as string | undefined;
 
   return (
     <div
       className={cn(
-        "rounded-xl border bg-card p-4 shadow-sm",
+        "rounded-xl border bg-card p-4 shadow-sm transition-colors",
+        isCompleted && "border-green-500/40",
         isFailed && "border-destructive/50 bg-destructive/5"
       )}
     >
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex items-center gap-3 min-w-0">
-          <TaskTitle state={state} />
-        </div>
-        <div className="flex items-center gap-2 shrink-0">
+      <div className="flex items-center gap-3">
+        {appName ? (
+          <AppIcon
+            app={{ name: appName, icon: appIcon ?? null }}
+            className="h-10 w-10 shrink-0 border shadow-sm"
+          />
+        ) : (
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[22%] border bg-primary/10 shadow-sm">
+            <Package className="h-5 w-5 text-primary" aria-hidden="true" />
+          </div>
+        )}
+        <TaskTitle state={state} />
+        <div className="ml-auto flex items-center gap-2 shrink-0">
           <Badge variant={statusConfig.variant} className="text-[10px] h-5 px-1.5 gap-1">
             {statusConfig.icon}
             {stageMap[state.stage] || state.stage}
           </Badge>
-          <span className="text-xs text-muted-foreground w-9 text-right">
+          <span className="text-xs text-muted-foreground w-9 text-right tabular-nums">
             {state.progress.percentage}%
           </span>
         </div>
       </div>
 
-      <div className="mt-3">
-        <Progress
-          value={state.progress.percentage}
-          className={cn(
-            "h-1.5",
-            isCompleted && "[&_>div]:bg-green-500",
-            isFailed && "[&_>div]:bg-destructive"
-          )}
-        />
-      </div>
+      {!isCompleted && (
+        <div className="mt-3">
+          <Progress
+            value={state.progress.percentage}
+            className={cn("h-1.5", isFailed && "[&_>div]:bg-destructive")}
+          />
+        </div>
+      )}
 
-      <div className="mt-3 flex items-center gap-2 text-xs text-muted-foreground">
-        <Terminal className="h-3.5 w-3.5" />
-        <span className="truncate">{state.progress.message}</span>
-      </div>
+      {!isCompleted && !isFailed && (
+        <div className="mt-3 flex items-center gap-2 text-xs text-muted-foreground">
+          <Terminal className="h-3.5 w-3.5" aria-hidden="true" />
+          <span className="truncate">{state.progress.message}</span>
+        </div>
+      )}
 
-      <LogTerminal logs={logs} isFailed={isFailed} />
+      {isCompleted ? (
+        <div className="mt-3 flex items-center gap-2.5 rounded-lg border border-green-500/25 bg-green-500/10 px-3 py-2.5">
+          <CheckCircle2 className="h-4 w-4 shrink-0 text-green-600" aria-hidden="true" />
+          <div className="min-w-0">
+            <p className="text-xs font-medium text-green-700">部署完成，服务已启动</p>
+            <p className="text-[11px] text-green-600/80 truncate">
+              可在实例列表中查看访问地址与运行状态
+            </p>
+          </div>
+        </div>
+      ) : (
+        <LogTerminal logs={logs} isFailed={isFailed} />
+      )}
 
       {state.error && (
         <div className="mt-3 rounded-md bg-destructive/10 border border-destructive/20 p-3">
@@ -169,13 +194,22 @@ export function DeployProgressPanel({
   const activeTaskIds = useMemo(() => taskIds.filter(Boolean), [taskIds]);
   const states = useDeployTasksEvents(activeTaskIds, onComplete, onError);
 
+  // 已完成的任务排在前面，让用户一眼看到哪些部署完了；进行中/失败的保持在后
+  const orderedTaskIds = useMemo(() => {
+    const rank = (id: string) => {
+      const status = states[id]?.status;
+      return status === "completed" ? 0 : status === "failed" ? 1 : 2;
+    };
+    return [...activeTaskIds].sort((a, b) => rank(a) - rank(b));
+  }, [activeTaskIds, states]);
+
   if (activeTaskIds.length === 0) {
     return null;
   }
 
   return (
     <div className="space-y-4">
-      {activeTaskIds.map((taskId) => {
+      {orderedTaskIds.map((taskId) => {
         const state = states[taskId];
         if (!state) {
           return (

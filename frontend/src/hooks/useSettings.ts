@@ -10,6 +10,7 @@ import type { ApiError } from "@/api/types";
 import {
   getSystemConfig,
   updateSystemConfig,
+  getPortSuggestions,
   type SystemConfig,
   type SystemConfigUpdate,
 } from "@/api/settings";
@@ -56,6 +57,17 @@ export function useUpdateSystemConfig() {
     onError: (error: ApiError) => {
       toast.error(error.displayMessage || "保存失败");
     },
+  });
+}
+
+/**
+ * 查询服务端口分配建议（部署表单预填端口用）
+ */
+export function usePortSuggestions(count: number) {
+  return useQuery<number[]>({
+    queryKey: ["settings", "port-suggestions", count],
+    queryFn: () => getPortSuggestions(count),
+    enabled: count > 0,
   });
 }
 

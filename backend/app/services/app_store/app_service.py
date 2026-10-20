@@ -25,9 +25,14 @@ from app.services.app_store.app_validator import (
     validate_app_definition,
 )
 from app.services.compose import compose_manager
-from app.services.docker import docker_manager
 from app.services.orchestration.deploy_task_service import deploy_task_manager
-from app.services.system_config_service import (
+from app.services.system.port_allocator import (
+    allocate_free_ports,
+    get_used_ports,
+    release_ports,
+    reserve_ports,
+)
+from app.services.system import (
     StoragePathResolver,
     system_config_service,
 )
@@ -100,74 +105,6 @@ def _extract_app_ports(config_schema: dict) -> list[str]:
         if "port" in key.lower() and prop.get("type") == "integer":
             ports.append(key)
     return ports
-
-
-def _parse_proc_net_tcp(path: str) -> set[int]:
-    """读取 /proc/net/tcp 或 /proc/net/tcp6，提取处于 LISTEN 状态的本地端口。
-
-    当 NasDeck 以 host network 模式运行时，读取到的是宿主机的监听端口；
-    普通容器模式下读取的是容器自身命名空间内的端口，作为兜底信息使用。
-    """
-    listening: set[int] = set()
-    try:
-        with open(path, "r") as f:
-            # 跳过第一行表头
-            next(f, None)
-            for line in f:
-                parts = line.strip().split()
-                if len(parts) < 4:
-                    continue
-                # st 列：0A 表示 LISTEN
-                if parts[3] != "0A":
-                    continue
-                local_addr = parts[1]
-                if ":" not in local_addr:
-                    continue
-                _, port_hex = local_addr.rsplit(":", 1)
-                try:
-                    listening.add(int(port_hex, 16))
-                except ValueError:
-                    continue
-    except (OSError, StopIteration):
-        pass
-    return listening
-
-
-def _get_used_ports() -> set[int]:
-    """获取宿主机上已被占用的端口。
-
-    合并两个来源：
-    1. Docker 容器已映射的端口（需要能访问 Docker daemon）；
-    2. /proc/net/tcp* 中处于 LISTEN 状态的端口（host network 模式下为宿主机端口）。
-    """
-    used: set[int] = set()
-
-    # 1. Docker 容器端口映射
-    client = docker_manager._client
-    if client is not None:
-        try:
-            for container in client.containers.list(all=True):
-                host_config = container.attrs.get("HostConfig") or {}
-                bindings = host_config.get("PortBindings") or {}
-                for binding_list in bindings.values():
-                    if not isinstance(binding_list, list):
-                        continue
-                    for binding in binding_list:
-                        host_port = binding.get("HostPort")
-                        if host_port:
-                            try:
-                                used.add(int(host_port))
-                            except ValueError:
-                                pass
-        except Exception:
-            # Docker 不可用时跳过
-            logger.warning("获取 Docker 容器端口映射失败，跳过该来源", exc_info=True)
-
-    # 2. 从 /proc/net/tcp* 读取监听端口
-    used.update(_parse_proc_net_tcp("/proc/net/tcp"))
-    used.update(_parse_proc_net_tcp("/proc/net/tcp6"))
-
-    return used
 
 
 class AppService:
@@ -386,7 +323,7 @@ class AppService:
 
         # 1. JSON Schema 校验与端口预检失败时，把错误返回给前端展示
         try:
-            project_name = await self._validate_and_prepare(
+            project_name, _ = await self._validate_and_prepare(
                 db_app=db_app,
                 instance_name=instance_name,
                 config=config,
@@ -411,15 +348,23 @@ class AppService:
         instance_name: str,
         config: dict,
         check_ports: bool = True,
-    ) -> str:
-        """执行部署/预览前的公共校验，返回可用的项目名。
+        port_start: int = 10000,
+    ) -> tuple[str, list[int]]:
+        """执行部署/预览前的公共校验，返回 (可用的项目名, 分配的端口列表)。
 
         Args:
             db_app: 应用模型
             instance_name: 实例名称
-            config: 用户配置
-            check_ports: 是否检查端口冲突；预览阶段为 False，部署阶段为 True
+            config: 用户配置（部署时会原地改写其中的端口字段为自动分配的端口）
+            check_ports: 是否进行端口分配；预览阶段为 False，部署阶段为 True
+            port_start: 服务端口顺序分配的起始端口
+
+        Note:
+            返回的分配端口未预留，调用方需在部署前通过 reserve_ports 预留、
+            部署结束后 release_ports 释放，防止并发部署重复分配。
         """
+        allocated: list[int] = []
+
         # 1. JSON Schema 校验
         schema = db_app.config_schema or {}
         if schema:
@@ -428,33 +373,42 @@ class AppService:
             except ValidationError as e:
                 raise APIException(f"配置校验失败: {e.message}", 400) from e
 
-        # 2. 端口冲突预检（仅在部署时执行）
+        # 2. 端口顺序分配（仅在部署时执行）：
+        #    从起始端口开始按顺序分配，自动跳过已占用端口
         if check_ports:
-            used_ports = await asyncio.to_thread(_get_used_ports)
+            # 收集端口写入位置：(单端口字段名, None) 或 ("ports", 数组索引)
+            targets: list[tuple[str, int | None]] = []
 
-            # 2.1 单端口字段（如 moviepilot_port: 3000）
-            port_keys = _extract_app_ports(schema)
-            for key in port_keys:
-                value = config.get(key)
-                if value is not None and int(value) in used_ports:
-                    raise APIException(
-                        f"端口 {value} 已被占用，请修改 {key}", 409
-                    )
+            # 2.1 单端口字段（按 schema properties 顺序，如 moviepilot_port: 3000）
+            for key in _extract_app_ports(schema):
+                if config.get(key) is not None:
+                    targets.append((key, None))
 
-            # 2.2 端口数组（如 ports: [{local_port: 3000, ...}]
+            # 2.2 端口数组（按数组顺序，如 ports: [{local_port: 3000, ...}]）
             ports = config.get("ports")
             if isinstance(ports, list):
                 for index, port_entry in enumerate(ports):
                     if not isinstance(port_entry, dict):
                         continue
-                    local_port = port_entry.get("local_port")
-                    if local_port is not None and int(local_port) in used_ports:
-                        raise APIException(
-                            f"端口 {local_port} 已被占用，请修改 ports[{index}].local_port", 409
-                        )
+                    if port_entry.get("local_port") is not None:
+                        targets.append(("ports", index))
+
+            if targets:
+                used_ports = await asyncio.to_thread(get_used_ports)
+                try:
+                    allocated = allocate_free_ports(
+                        used_ports, len(targets), port_start
+                    )
+                except ValueError as e:
+                    raise APIException(str(e), 400) from e
+                for (key, index), port in zip(targets, allocated):
+                    if index is None:
+                        config[key] = port
+                    else:
+                        config["ports"][index]["local_port"] = port
 
         # 3. 生成项目名
-        return _slugify(instance_name)
+        return _slugify(instance_name), allocated
 
     async def deploy(
         self,
@@ -478,10 +432,11 @@ class AppService:
         )
         resolver.validate()
 
-        project_name = await self._validate_and_prepare(
+        project_name, allocated_ports = await self._validate_and_prepare(
             db_app=db_app,
             instance_name=instance_name,
             config=config,
+            port_start=system_config.service_port_start or 10000,
         )
 
         # 4. 检查项目名是否已存在
@@ -495,41 +450,57 @@ class AppService:
                 f"项目名 {project_name} 已存在，请更换实例名称", 409
             )
 
-        # 5. 渲染 YAML
-        rendered_yaml = self._render_app(
-            db_app=db_app,
-            config=config,
-            project_name=project_name,
-            resolver=resolver,
-        )
+        # 4.1 预留分配端口，防止并发部署（同组多应用同时部署）重复分配；
+        #     部署结束由 _do_deploy 释放，此处异常需主动释放
+        reserve_ports(allocated_ports)
 
-        # 6. 创建 deploying 状态实例
-        instance = AppInstance(
-            app_id=db_app.id,
-            instance_name=instance_name,
-            config=config,
-            orchestration_version=db_app.version,
-            status="deploying",
-        )
-        db.add(instance)
-        await db.flush()
-        await db.refresh(instance)
-        await db.commit()
+        # 5-7. 渲染 YAML、创建实例与部署任务；任一失败都要释放预留端口
+        try:
+            # 5. 渲染 YAML
+            rendered_yaml = self._render_app(
+                db_app=db_app,
+                config=config,
+                project_name=project_name,
+                resolver=resolver,
+            )
 
-        # 7. 创建部署任务并在主事件循环中启动后台协程
-        task_id = deploy_task_manager.create_task(
-            "app_deploy",
-            instance_id=instance.id,
-            meta={
-                "app_id": db_app.id,
-                "app_name": db_app.name,
-                "instance_name": instance_name,
-                "project_name": project_name,
-                "rendered_yaml": rendered_yaml,
-                "user_id": user_id,
-                "description": f"由应用 {db_app.display_name} 部署",
-            },
-        )
+            # 6. 创建 deploying 状态实例
+            instance = AppInstance(
+                app_id=db_app.id,
+                instance_name=instance_name,
+                config=config,
+                orchestration_version=db_app.version,
+                status="deploying",
+            )
+            db.add(instance)
+            await db.flush()
+            await db.refresh(instance)
+
+            # 7. 创建部署任务并在主事件循环中启动后台协程。
+            # 先建任务再提交实例：任务创建失败（如并发超限）时回滚，不留孤儿实例
+            try:
+                task_id = deploy_task_manager.create_task(
+                    "app_deploy",
+                    instance_id=instance.id,
+                    meta={
+                        "app_id": db_app.id,
+                        "app_name": db_app.name,
+                        "icon": db_app.icon,
+                        "instance_name": instance_name,
+                        "project_name": project_name,
+                        "rendered_yaml": rendered_yaml,
+                        "allocated_ports": allocated_ports,
+                        "user_id": user_id,
+                        "description": f"由应用 {db_app.display_name} 部署",
+                    },
+                )
+            except RuntimeError as e:
+                await db.rollback()
+                raise APIException(str(e), 409) from e
+            await db.commit()
+        except Exception:
+            release_ports(allocated_ports)
+            raise
 
         create_background_task(self._do_deploy(task_id, instance.id))
 
@@ -561,6 +532,8 @@ class AppService:
                     user_id=user_id,
                     description=description,
                     progress_callback=_progress,
+                    # 端口已在 deploy 阶段分配并预留，这里不再二次分配
+                    allocate_ports=False,
                 )
 
                 # 更新实例为 running 并关联 project
@@ -584,6 +557,10 @@ class AppService:
                     await db.commit()
                 except Exception:
                     logger.exception("更新实例失败状态失败")
+            finally:
+                # 部署结束（成功/失败/超时），释放预留端口。
+                # 成功时端口已绑定到容器，占用检测可接管；失败时端口未绑定，正确释放
+                release_ports(meta.get("allocated_ports") or [])
 
     def _render_app(
         self,

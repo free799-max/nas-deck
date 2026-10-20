@@ -3,7 +3,9 @@
 提供系统全局配置的查询、更新以及目录浏览/操作接口。
 """
 
-from fastapi import APIRouter, Depends
+import asyncio
+
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.custom_route import CustomAPIRoute
@@ -20,7 +22,8 @@ from app.schemas.docker import (
     DirectoryRenameRequest,
 )
 from app.services.host.filesystem_service import filesystem_service
-from app.services.system_config_service import system_config_service
+from app.services.system.port_allocator import allocate_free_ports, get_used_ports
+from app.services.system import system_config_service
 
 router = APIRouter(prefix="/api/settings", tags=["settings"], route_class=CustomAPIRoute)
 
@@ -47,6 +50,27 @@ async def update_system_config(
     """更新系统全局配置。"""
     config = await system_config_service.update(db, data)
     return system_config_service.to_dict(config)
+
+
+@router.get("/port-suggestions")
+async def get_port_suggestions(
+    count: int = Query(..., ge=1, le=200),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """获取服务端口分配建议。
+
+    从系统设置的 service_port_start 开始顺序挑选 count 个空闲端口，
+    供部署表单初始化时预填，与部署时的顺序分配结果保持一致。
+    """
+    config = await system_config_service.get_or_create(db)
+    start = config.service_port_start or 10000
+    used = await asyncio.to_thread(get_used_ports)
+    try:
+        ports = allocate_free_ports(used, count, start)
+    except ValueError as e:
+        raise APIException(str(e), 400) from e
+    return {"ports": ports}
 
 
 async def _get_host_root_dir(db: AsyncSession) -> str:

@@ -298,6 +298,7 @@ export function AutomationCategoryPage() {
     useState<AppOrchestration | null>(null);
   const [importOrchestration, setImportOrchestration] =
     useState<AppOrchestration | null>(null);
+  const [redeployId, setRedeployId] = useState<number | null>(null);
   const [selectedInstanceId, setSelectedInstanceId] = useState<number | null>(
     null
   );
@@ -341,6 +342,13 @@ export function AutomationCategoryPage() {
   const updateMutation = useUpdateOrchestrationInstance();
   const deleteMutation = useDeleteOrchestrationInstance();
 
+  // 修复：加载目标实例组详情，并找到对应的编排模板
+  const { data: redeployDetail } = useOrchestrationInstanceDetail(redeployId);
+  const redeployOrchestration = redeployDetail
+    ? (orchestrations.find((o) => o.name === redeployDetail.orchestration_name) ??
+      null)
+    : null;
+
   const hasInstances = instances.length > 0;
 
   return (
@@ -368,6 +376,7 @@ export function AutomationCategoryPage() {
                   updateMutation.mutate({ id, data: { instance_name: name } })
                 }
                 onDelete={(id) => deleteMutation.mutate(id)}
+                onRedeploy={(id) => setRedeployId(id)}
                 isPending={
                   updateMutation.isPending || deleteMutation.isPending
                 }
@@ -444,6 +453,13 @@ export function AutomationCategoryPage() {
         orchestration={deployOrchestration}
         open={!!deployOrchestration}
         onOpenChange={(open) => !open && setDeployOrchestration(null)}
+      />
+
+      <AutomationDeployWizard
+        orchestration={redeployOrchestration}
+        open={!!redeployOrchestration}
+        onOpenChange={(open) => !open && setRedeployId(null)}
+        redeployGroup={redeployDetail ?? null}
       />
 
       <AutomationImportDialog

@@ -8,4 +8,4 @@ export PYTHONPATH="$BACKEND_DIR"
 
 cd "$BACKEND_DIR"
 "$BACKEND_DIR/.venv/bin/python" -m alembic upgrade head
-exec "$BACKEND_DIR/.venv/bin/python" -m uvicorn app.main:app --host 0.0.0.0 --port 5001 --lifespan off
+exec "$BACKEND_DIR/.venv/bin/python" -m uvicorn app.main:app --reload --host 0.0.0.0 --port 5001 --lifespan off

@@ -14,7 +14,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Loader2, Settings, Shield } from "lucide-react";
+import { Loader2, Settings, Shield, ShieldCheck, AlertTriangle } from "lucide-react";
 import type {
   OrchestrationInstanceApp,
   OrchestrationInstanceDetail,
@@ -138,6 +138,19 @@ export function AppConfigPanel({
   const isValidUrl =
     url.startsWith("http://") || url.startsWith("https://");
 
+  // 部署后账号自动配置的结果（后端 provision 流程写入）
+  const rawEntry = (detail?.app_configs?.[app?.app_name ?? ""] ?? {}) as Record<
+    string,
+    unknown
+  >;
+  const provisioned = rawEntry.provisioned === true;
+  const provisionError =
+    typeof rawEntry.provision_error === "string"
+      ? rawEntry.provision_error
+      : "";
+  const autoUsername =
+    typeof rawEntry.username === "string" ? rawEntry.username : "";
+
   return (
     <>
       <div className="mt-4 rounded-xl border border-border bg-card p-4">
@@ -175,6 +188,19 @@ export function AppConfigPanel({
             <Shield className="h-4 w-4" />
           </Button>
         </div>
+
+        {provisioned && (
+          <div className="mt-2 flex items-center gap-1.5 text-xs text-emerald-600">
+            <ShieldCheck className="h-3.5 w-3.5" />
+            已自动配置账号{autoUsername ? `（${autoUsername}）` : ""}，登录检测通过
+          </div>
+        )}
+        {!provisioned && provisionError && (
+          <div className="mt-2 flex items-center gap-1.5 text-xs text-red-600">
+            <AlertTriangle className="h-3.5 w-3.5" />
+            账号自动配置失败：{provisionError}
+          </div>
+        )}
       </div>
 
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>

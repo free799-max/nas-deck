@@ -94,6 +94,98 @@ export function fillEmptyPasswords(
   return filled;
 }
 
+/**
+ * 统计配置中需要分配的端口数量。
+ *
+ * 顺序与后端 app_service._validate_and_prepare 一致：
+ * 先按 schema.properties 的 key 顺序统计单端口字段
+ * （type 为 integer 且 key 含 port，且 config 中值不为 null），
+ * 再按 ports 数组顺序统计 local_port 不为 null 的项。
+ */
+export function countSchemaPorts(
+  schema: Record<string, unknown>,
+  config: Record<string, unknown>
+): number {
+  let count = 0;
+  const properties = schema?.properties as
+    | Record<string, { type?: string }>
+    | undefined;
+  if (properties) {
+    for (const [key, prop] of Object.entries(properties)) {
+      if (
+        key.toLowerCase().includes("port") &&
+        prop?.type === "integer" &&
+        config[key] !== null &&
+        config[key] !== undefined
+      ) {
+        count += 1;
+      }
+    }
+  }
+  const portsValue = config["ports"];
+  if (Array.isArray(portsValue)) {
+    for (const entry of portsValue) {
+      if (!entry || typeof entry !== "object") continue;
+      const localPort = (entry as Record<string, unknown>)["local_port"];
+      if (localPort !== null && localPort !== undefined) {
+        count += 1;
+      }
+    }
+  }
+  return count;
+}
+
+/**
+ * 将建议端口按顺序写入配置的端口字段（不修改原对象）。
+ *
+ * 写入顺序与后端 _validate_and_prepare 一致（同 countSchemaPorts）：
+ * 先单端口字段，再 ports 数组的 local_port。
+ * 返回新配置与下一个可用的建议端口下标，供多个应用连续分配。
+ */
+export function applyPortSuggestions(
+  schema: Record<string, unknown>,
+  config: Record<string, unknown>,
+  ports: number[],
+  offset: number
+): { config: Record<string, unknown>; nextOffset: number } {
+  const next = structuredClone(config);
+  let cursor = offset;
+
+  const properties = schema?.properties as
+    | Record<string, { type?: string }>
+    | undefined;
+  if (properties) {
+    for (const [key, prop] of Object.entries(properties)) {
+      if (
+        key.toLowerCase().includes("port") &&
+        prop?.type === "integer" &&
+        next[key] !== null &&
+        next[key] !== undefined &&
+        cursor < ports.length
+      ) {
+        next[key] = ports[cursor];
+        cursor += 1;
+      }
+    }
+  }
+
+  const portsValue = next["ports"];
+  if (Array.isArray(portsValue)) {
+    for (const entry of portsValue) {
+      if (!entry || typeof entry !== "object") continue;
+      const record = entry as Record<string, unknown>;
+      if (record["local_port"] === null || record["local_port"] === undefined) {
+        continue;
+      }
+      if (cursor >= ports.length) break;
+      record["local_port"] = ports[cursor];
+      cursor += 1;
+    }
+  }
+
+  return { config: next, nextOffset: cursor };
+}
+
 /** Schema containers 中的设置项定义 */
 interface SchemaSetting {
   type?: string;

@@ -1,13 +1,29 @@
 """qBittorrent 应用客户端实现。"""
 
+import asyncio
+import json
 import logging
+import re
+import time
+from urllib.parse import urlparse
 
 import httpx
 
-from app.services.apps.base import AppClient, AuthVerifyResult
+from app.services.apps.base import (
+    AppClient,
+    AuthVerifyResult,
+    LogsReader,
+    ProvisionResult,
+)
 from app.services.apps.registry import register_client
 
 logger = logging.getLogger(__name__)
+
+# qBittorrent >= 4.6.1 未设密码时首次启动在日志输出临时密码（按界面语言可能是中文）
+_TEMP_PASSWORD_PATTERN = re.compile(
+    r"temporary password is provided for this session:\s*(\S+)"
+    r"|临时密码[：:]\s*(\S+)"
+)
 
 
 class QBittorrentClient(AppClient):
@@ -15,6 +31,143 @@ class QBittorrentClient(AppClient):
 
     name = "qbittorrent"
     TIMEOUT = 10.0
+    PROVISION_TIMEOUT = 300.0
+    supports_provision = True
+
+    async def provision(
+        self,
+        url: str,
+        username: str,
+        password: str,
+        api_key: str | None = None,
+        logs_reader: LogsReader | None = None,
+        previous_password: str | None = None,
+        host_header_port: int | None = None,
+    ) -> ProvisionResult:
+        """把统一账号密码配置进 qBittorrent 并复验。
+
+        qBittorrent 5.x 首次启动未设密码时会在日志输出临时密码：
+        解析临时密码（兜底尝试旧默认 adminadmin）登录后，
+        通过 setPreferences 修改为目标账号密码，再用新凭据登录复验。
+
+        Docker 端口映射场景下 Host 头端口与 WebUI 监听端口不一致，
+        会触发 Host 头校验拒绝请求（全站 401）：此时按容器内监听端口
+        伪装 Host/Referer 完成配置，并顺带关闭 Host 头校验，
+        保证用户浏览器直连宿主端口也能正常访问。
+        """
+        base_url = str(url or "").rstrip("/")
+        if not base_url:
+            return ProvisionResult(ok=False, message="访问地址不能为空")
+
+        parsed = urlparse(base_url)
+        plain_headers = {"Referer": base_url}
+        if host_header_port:
+            authority = f"{parsed.hostname}:{host_header_port}"
+            login_headers = {
+                "Host": authority,
+                "Referer": f"{parsed.scheme}://{authority}",
+            }
+        else:
+            login_headers = plain_headers
+
+        deadline = time.monotonic() + self.PROVISION_TIMEOUT
+        last_error = "服务未就绪"
+
+        while time.monotonic() < deadline:
+            try:
+                async with httpx.AsyncClient(
+                    timeout=self.TIMEOUT,
+                    follow_redirects=True,
+                ) as client:
+                    # 目标凭据已生效（重复执行/已配置过）则直接成功
+                    if await self._try_login(
+                        client, base_url, username, password, headers=plain_headers
+                    ):
+                        return ProvisionResult(ok=True, message="账号已配置并验证通过")
+
+                    candidates: list[tuple[str, str]] = []
+                    if logs_reader is not None:
+                        try:
+                            logs = await logs_reader()
+                        except Exception as exc:
+                            logger.warning("读取 qBittorrent 容器日志失败: %s", exc)
+                            logs = ""
+                        for match in _TEMP_PASSWORD_PATTERN.findall(logs):
+                            # 多语言正则分组：findall 返回元组，取第一个非空分组
+                            candidates.extend(
+                                ("admin", g) for g in match if g
+                            )
+                    # 配置卷复用（修复）时无临时密码输出，旧密码仍有效
+                    if previous_password:
+                        candidates.append((username, previous_password))
+                    candidates.append(("admin", "adminadmin"))
+
+                    last_error = "等待服务就绪或临时密码输出"
+                    for login_username, candidate in dict.fromkeys(candidates):
+                        if login_username == username and candidate == password:
+                            continue
+                        if not await self._try_login(
+                            client,
+                            base_url,
+                            login_username,
+                            candidate,
+                            headers=login_headers,
+                        ):
+                            continue
+                        preferences = {
+                            "web_ui_username": username,
+                            "web_ui_password": password,
+                        }
+                        if host_header_port:
+                            # 关闭 Host 头校验，否则外部经映射端口访问会被 401
+                            preferences["web_ui_host_header_validation_enabled"] = False
+                        resp = await client.post(
+                            f"{base_url}/api/v2/app/setPreferences",
+                            data={"json": json.dumps(preferences)},
+                            headers=login_headers,
+                        )
+                        if resp.status_code in (401, 403):
+                            last_error = "修改密码请求被拒绝"
+                            break
+                        resp.raise_for_status()
+                        # Host 头校验已关闭，按用户实际访问方式复验
+                        if await self._try_login(
+                            client, base_url, username, password, headers=plain_headers
+                        ):
+                            return ProvisionResult(ok=True, message="账号已配置并验证通过")
+                        last_error = "密码已提交但新凭据验证失败"
+                        break
+            except httpx.RequestError as exc:
+                last_error = f"无法连接到应用: {exc}"
+            await asyncio.sleep(5)
+
+        return ProvisionResult(ok=False, message=f"自动配置超时: {last_error}")
+
+    async def _try_login(
+        self,
+        client: httpx.AsyncClient,
+        base_url: str,
+        username: str,
+        password: str,
+        headers: dict | None = None,
+    ) -> bool:
+        """尝试登录，成功后会话 Cookie 保留在 client 中。"""
+        try:
+            resp = await client.post(
+                f"{base_url}/api/v2/auth/login",
+                data={"username": username, "password": password},
+                headers=headers or {"Referer": base_url},
+            )
+        except httpx.RequestError:
+            raise
+        if resp.status_code in (401, 403):
+            # 多次失败会被 qBittorrent 封禁 IP；Host 头校验不通过也是 401
+            logger.warning(
+                "qBittorrent 登录被拒绝(%s): %s", resp.status_code, resp.text[:120]
+            )
+            return False
+        text = resp.text.strip().lower()
+        return resp.status_code == 204 or text in ("ok.", "ok")
 
     async def verify_auth(self, config: dict) -> AuthVerifyResult:
         """校验 qBittorrent 访问地址与认证配置。"""

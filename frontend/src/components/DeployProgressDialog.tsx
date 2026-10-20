@@ -5,7 +5,8 @@
  * 关闭后可通过顶部栏的动态入口重新打开。
  */
 
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useRef } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   Dialog,
   DialogContent,
@@ -16,42 +17,49 @@ import { DeployProgressPanel } from "@/components/DeployProgressPanel";
 import { useDeployTasks } from "@/hooks/useDeployTasks";
 import { useToast } from "@/components/ui/toast";
 
-const DISMISS_DELAY_MS = 3000;
-
 export function DeployProgressDialog() {
   const { activeTaskIds, isPanelOpen, closePanel, removeTask } = useDeployTasks();
   const toast = useToast();
-  const timersRef = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
+  const queryClient = useQueryClient();
+  // 已结束（完成/失败）的任务：卡片保留展示，关闭弹窗时才清理
+  const finishedRef = useRef<Set<string>>(new Set());
 
-  useEffect(() => {
-    const timers = timersRef.current;
-    return () => {
-      timers.forEach((t) => clearTimeout(t));
-    };
-  }, []);
+  // 部署结束（无论成败）后刷新编排实例列表/详情与应用卡片状态
+  const invalidateInstances = useCallback(() => {
+    queryClient.invalidateQueries({ queryKey: ["orchestration-instances"] });
+    queryClient.invalidateQueries({ queryKey: ["apps", "instances"] });
+  }, [queryClient]);
 
   const handleComplete = useCallback(
     (taskId: string) => {
-      toast.success("部署完成");
-      const t = setTimeout(() => {
-        timersRef.current.delete(t);
-        removeTask(taskId);
-      }, DISMISS_DELAY_MS);
-      timersRef.current.add(t);
+      // SSE 断线重连后历史回放会重复触发终态事件，需要去重
+      if (finishedRef.current.has(taskId)) return;
+      finishedRef.current.add(taskId);
+      // 弹窗内已完成卡片已有提示，不再弹全局 toast
+      invalidateInstances();
     },
-    [removeTask, toast]
+    [invalidateInstances]
   );
 
   const handleError = useCallback(
     (taskId: string, state: { error?: string | null }) => {
+      if (finishedRef.current.has(taskId)) return;
+      finishedRef.current.add(taskId);
       toast.error(state.error || "部署失败");
-      const t = setTimeout(() => {
-        timersRef.current.delete(t);
-        removeTask(taskId);
-      }, DISMISS_DELAY_MS);
-      timersRef.current.add(t);
+      invalidateInstances();
     },
-    [removeTask, toast]
+    [toast, invalidateInstances]
+  );
+
+  const handleOpenChange = useCallback(
+    (open: boolean) => {
+      if (open) return;
+      closePanel();
+      // 关闭弹窗时清理已结束的任务，进行中的任务保留跟踪
+      finishedRef.current.forEach((id) => removeTask(id));
+      finishedRef.current.clear();
+    },
+    [closePanel, removeTask]
   );
 
   if (activeTaskIds.length === 0) {
@@ -59,7 +67,7 @@ export function DeployProgressDialog() {
   }
 
   return (
-    <Dialog open={isPanelOpen} onOpenChange={(open) => !open && closePanel()}>
+    <Dialog open={isPanelOpen} onOpenChange={handleOpenChange}>
       <DialogContent className="sm:max-w-3xl max-h-[85vh] flex flex-col p-0 overflow-hidden">
         <DialogHeader className="px-5 pt-5 pb-3 border-b shrink-0">
           <DialogTitle>部署进度</DialogTitle>

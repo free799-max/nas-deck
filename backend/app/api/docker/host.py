@@ -17,7 +17,7 @@ from app.schemas.docker import (
     HostInfo,
 )
 from app.services.docker import docker_manager
-from app.services.system_config_service import system_config_service
+from app.services.system import system_config_service
 
 router = APIRouter(route_class=CustomAPIRoute)
 

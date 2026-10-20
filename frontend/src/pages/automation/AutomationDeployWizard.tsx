@@ -4,7 +4,7 @@
  * 多步向导：选择应用 -> 共享配置 -> 各应用配置 -> 确认部署。
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Dialog,
   DialogContent,
@@ -21,11 +21,19 @@ import { SchemaForm } from "@/components/SchemaForm";
 import { CodeBlock } from "@/components/ui/code-block";
 import { useToast } from "@/components/ui/toast";
 import { previewApp } from "@/api/apps";
-import { useDeployOrchestration, type AppOrchestration } from "@/hooks/useOrchestrations";
+import {
+  useDeployOrchestration,
+  useRedeployOrchestrationInstance,
+  type AppOrchestration,
+  type OrchestrationInstanceDetail,
+} from "@/hooks/useOrchestrations";
 import { useApps } from "@/hooks/useApps";
 import { useDeployTasks } from "@/hooks/useDeployTasks";
+import { usePortSuggestions } from "@/hooks/useSettings";
 import { cn, sanitizeInstanceName, slugify } from "@/lib/utils";
 import {
+  applyPortSuggestions,
+  countSchemaPorts,
   extractDefaults,
   fillEmptyPasswords,
   mergeSharedConfig,
@@ -39,15 +47,20 @@ interface AutomationDeployWizardProps {
   orchestration: AppOrchestration | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** 提供时进入修复模式：预填组内配置并调用 redeploy 接口 */
+  redeployGroup?: OrchestrationInstanceDetail | null;
 }
 
 export function AutomationDeployWizard({
   orchestration,
   open,
   onOpenChange,
+  redeployGroup,
 }: AutomationDeployWizardProps) {
   const toast = useToast();
   const deployMutation = useDeployOrchestration();
+  const redeployMutation = useRedeployOrchestrationInstance();
+  const submitMutation = redeployGroup ? redeployMutation : deployMutation;
   const { startTask } = useDeployTasks();
 
   const [step, setStep] = useState<Step>("select");
@@ -77,6 +90,27 @@ export function AutomationDeployWizard({
     }
 
     setStep("select");
+
+    if (redeployGroup) {
+      // 修复模式：沿用组内的实例名称与历史配置，
+      // 预选只勾选未在运行的应用（error/deploying/stopped 等），运行中的应用不动
+      setInstanceName(redeployGroup.instance_name);
+      setSelectedApps(
+        new Set(
+          redeployGroup.apps
+            .filter((app) => app.status !== "running")
+            .map((app) => app.app_name)
+        )
+      );
+      setSharedConfig(redeployGroup.shared_config || {});
+      const initialConfigs: Record<string, Record<string, unknown>> = {};
+      for (const app of redeployGroup.apps) {
+        initialConfigs[app.app_name] = app.config || {};
+      }
+      setAppConfigs(initialConfigs);
+      return;
+    }
+
     setInstanceName(slugify(orchestration.display_name || ""));
     setSharedConfig(extractDefaults(orchestration.shared_config_schema));
 
@@ -88,7 +122,7 @@ export function AutomationDeployWizard({
     }
 
     setSelectedApps(initialSelected);
-  }, [orchestration]);
+  }, [orchestration, redeployGroup]);
 
   // 获取所有应用商店应用，用于渲染选中应用的配置表单
   const { data: allApps = [], isLoading: appsLoading } = useApps();
@@ -127,6 +161,71 @@ export function AutomationDeployWizard({
     () => Array.from(selectedApps),
     [selectedApps]
   );
+
+  // 端口顺序分配：统计选中应用的端口总数，向后端请求建议端口。
+  // 统计口径与后端 _validate_and_prepare 一致（单端口字段 + ports 数组项）。
+  const totalPorts = useMemo(() => {
+    let total = 0;
+    for (const appName of selectedAppList) {
+      const app = appDetailsMap[appName];
+      if (!app) continue;
+      total += countSchemaPorts(
+        app.config_schema,
+        extractDefaults(app.config_schema)
+      );
+    }
+    return total;
+  }, [selectedAppList, appDetailsMap]);
+
+  // 修复模式沿用旧配置中的端口，不再请求端口建议
+  const { data: portSuggestions } = usePortSuggestions(
+    redeployGroup ? 0 : totalPorts
+  );
+
+  // 记录已预填过建议端口的应用，避免覆盖用户手动修改
+  const portsFilledRef = useRef<Set<string>>(new Set());
+
+  // 组合或选中集合变化时重新分配（选中顺序变化会导致后续应用的端口偏移）
+  const selectedKey = selectedAppList.join(",");
+  useEffect(() => {
+    portsFilledRef.current = new Set();
+  }, [orchestration, selectedKey]);
+
+  // 建议端口到达后，按选中顺序为尚未填充的应用预填端口
+  useEffect(() => {
+    if (redeployGroup) return;
+    if (!orchestration || !portSuggestions || portSuggestions.length === 0) {
+      return;
+    }
+
+    const updates: Record<string, Record<string, unknown>> = {};
+    let offset = 0;
+    for (const appName of selectedAppList) {
+      const app = appDetailsMap[appName];
+      if (!app) continue;
+      const schema = app.config_schema;
+      const config = appConfigs[appName];
+      if (config === undefined) {
+        // 配置尚未初始化：仅推进偏移，待初始化后的下一轮再填充
+        offset += countSchemaPorts(schema, extractDefaults(schema));
+        continue;
+      }
+      if (portsFilledRef.current.has(appName)) {
+        offset += countSchemaPorts(schema, config);
+        continue;
+      }
+      const result = applyPortSuggestions(schema, config, portSuggestions, offset);
+      updates[appName] = result.config;
+      offset = result.nextOffset;
+    }
+
+    const names = Object.keys(updates);
+    if (names.length === 0) return;
+    for (const name of names) {
+      portsFilledRef.current.add(name);
+    }
+    setAppConfigs((prev) => ({ ...prev, ...updates }));
+  }, [orchestration, redeployGroup, portSuggestions, selectedAppList, appDetailsMap, appConfigs]);
 
   // 进入确认步骤后，并发加载各选中的应用 Compose YAML 预览
   useEffect(() => {
@@ -283,26 +382,27 @@ export function AutomationDeployWizard({
       filteredAppConfigs[appName] = appConfigs[appName] || {};
     }
 
-    deployMutation.mutate(
-      {
-        name: orchestration.name,
-        data: {
-          instance_name: projectName,
-          selected_apps: Array.from(selectedApps),
-          app_configs: filteredAppConfigs,
-          shared_config: sharedConfig,
-        },
+    const payload = {
+      instance_name: projectName,
+      selected_apps: Array.from(selectedApps),
+      app_configs: filteredAppConfigs,
+      shared_config: sharedConfig,
+    };
+    const options = {
+      onSuccess: (response: { task_ids: string[] }) => {
+        toast.success(redeployGroup ? "修复已启动" : "组合部署已启动");
+        for (const taskId of response.task_ids) {
+          startTask(taskId);
+        }
+        onOpenChange(false);
       },
-      {
-        onSuccess: (response) => {
-          toast.success("组合部署已启动");
-          for (const taskId of response.task_ids) {
-            startTask(taskId);
-          }
-          onOpenChange(false);
-        },
-      }
-    );
+    };
+
+    if (redeployGroup) {
+      redeployMutation.mutate({ id: redeployGroup.id, data: payload }, options);
+    } else {
+      deployMutation.mutate({ name: orchestration.name, data: payload }, options);
+    }
   };
 
   const togglePreview = (appName: string) => {
@@ -574,7 +674,9 @@ export function AutomationDeployWizard({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-3xl max-h-[90vh] flex flex-col overflow-hidden">
         <DialogHeader className="flex-shrink-0">
-          <DialogTitle>部署 {orchestration.display_name}</DialogTitle>
+          <DialogTitle>
+            {redeployGroup ? "修复" : "部署"} {orchestration.display_name}
+          </DialogTitle>
           <DialogDescription>
             {orchestration.description || "选择应用并填写配置后一键部署"}
           </DialogDescription>
@@ -625,7 +727,7 @@ export function AutomationDeployWizard({
           <Button
             variant="outline"
             onClick={() => onOpenChange(false)}
-            disabled={deployMutation.isPending}
+            disabled={submitMutation.isPending}
           >
             取消
           </Button>
@@ -644,9 +746,13 @@ export function AutomationDeployWizard({
             ) : (
               <Button
                 onClick={handleDeploy}
-                disabled={deployMutation.isPending}
+                disabled={submitMutation.isPending}
               >
-                {deployMutation.isPending ? "部署中..." : "确认部署"}
+                {submitMutation.isPending
+                  ? "部署中..."
+                  : redeployGroup
+                    ? "确认修复"
+                    : "确认部署"}
               </Button>
             )}
           </div>

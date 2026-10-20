@@ -21,7 +21,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { MoreHorizontal, Pencil, Trash2, AlertTriangle } from "lucide-react";
+import { MoreHorizontal, Pencil, Trash2, AlertTriangle, Wrench } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { OrchestrationInstanceGroup } from "@/hooks/useOrchestrations";
 
@@ -31,6 +31,7 @@ interface OrchestrationInstanceManagerProps {
   onSelect: (id: number) => void;
   onRename: (id: number, name: string) => void;
   onDelete: (id: number) => void;
+  onRedeploy: (id: number) => void;
   isPending?: boolean;
 }
 
@@ -40,6 +41,7 @@ export function OrchestrationInstanceManager({
   onSelect,
   onRename,
   onDelete,
+  onRedeploy,
   isPending = false,
 }: OrchestrationInstanceManagerProps) {
   const [renameInstance, setRenameInstance] =
@@ -98,6 +100,13 @@ export function OrchestrationInstanceManager({
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" alignOffset={-16} className="w-28 min-w-0 rounded-md p-1">
+            <DropdownMenuItem
+              onClick={() => onRedeploy(selectedInstance.id)}
+              className="gap-2 px-2 py-1.5 text-xs"
+            >
+              <Wrench className="h-3.5 w-3.5" />
+              修复
+            </DropdownMenuItem>
             <DropdownMenuItem
               onClick={() => handleOpenRename(selectedInstance)}
               className="gap-2 px-2 py-1.5 text-xs"
@@ -160,6 +169,15 @@ export function OrchestrationInstanceManager({
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" alignOffset={-16} className="w-28 min-w-0 rounded-md p-1">
+          <DropdownMenuItem
+            onClick={() => {
+              if (selectedInstance) onRedeploy(selectedInstance.id);
+            }}
+            className="gap-2 px-2 py-1.5 text-xs"
+          >
+            <Wrench className="h-3.5 w-3.5" />
+            修复
+          </DropdownMenuItem>
           <DropdownMenuItem
             onClick={() => {
               if (selectedInstance) handleOpenRename(selectedInstance);

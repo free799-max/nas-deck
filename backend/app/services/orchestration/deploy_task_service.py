@@ -5,15 +5,15 @@
 """
 
 import logging
-import re
 import uuid
 
-from app.services.task_manager_base import BaseTaskManager
+from app.services.orchestration.credentials import SENSITIVE_KEY_PATTERN
+from app.core.task_manager import BaseTaskManager
 
 logger = logging.getLogger(__name__)
 
 # meta 中需要脱敏的敏感字段名（密码/密钥/令牌类）
-_SENSITIVE_KEY_PATTERN = re.compile(r"password|secret|token|api_key|apikey|access_key", re.IGNORECASE)
+_SENSITIVE_KEY_PATTERN = SENSITIVE_KEY_PATTERN
 # meta 中完全不对外推送的字段（可能包含明文密码的渲染结果等）
 _META_EXCLUDED_KEYS = frozenset({"rendered_yaml"})
 _MASKED_VALUE = "***"

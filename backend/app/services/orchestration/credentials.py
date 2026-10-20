@@ -1,0 +1,141 @@
+"""部署凭据解析与注入。
+
+编排部署/修复时为各应用准备管理员账号密码与 API Key：
+- 系统设置中配置了统一密码时，所有支持的应用使用同一套凭据；
+- 未配置时保留用户已填写的值，或随机生成；
+- 修复（重新部署）时继承实例已存储的密钥类配置，避免与
+  保留的数据卷中已初始化的密码不匹配。
+
+env 类应用（MoviePilot）在部署前把凭据写入 env 数组；
+运行时装配类应用（qBittorrent / Jellyfin / Emby）只生成凭据，
+由部署后的 provision 流程配置进真实服务。
+"""
+
+import re
+import secrets
+import string
+
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.services.system import system_config_service
+
+# 密钥类环境变量名（密码/密钥/令牌），修复时从已存储配置继承
+SENSITIVE_KEY_PATTERN = re.compile(
+    r"password|secret|token|api_key|apikey|access_key", re.IGNORECASE
+)
+
+# env 注入类应用：env 数组键 -> 用户名/密码/API Token 的环境变量名
+_ENV_CREDENTIAL_SPECS: dict[str, dict[str, str]] = {
+    "moviepilot": {
+        "env_key": "moviepilot_env",
+        "username_key": "SUPERUSER",
+        "password_key": "SUPERUSER_PASSWORD",
+        "api_token_key": "API_TOKEN",
+    },
+}
+
+# 运行时装配类应用：凭据在部署后由应用客户端 provision 写入
+_PROVISION_ONLY_APPS = {"qbittorrent", "jellyfin", "emby"}
+
+
+def generate_password(length: int = 16) -> str:
+    """生成随机密码（字母+数字）。"""
+    alphabet = string.ascii_letters + string.digits
+    return "".join(secrets.choice(alphabet) for _ in range(length))
+
+
+def _get_env(config: dict, env_key: str, key: str) -> str | None:
+    for row in config.get(env_key) or []:
+        if row.get("key") == key:
+            return row.get("value")
+    return None
+
+
+def _set_env(config: dict, env_key: str, key: str, value: str) -> None:
+    rows = config.setdefault(env_key, [])
+    for row in rows:
+        if row.get("key") == key:
+            row["value"] = value
+            return
+    rows.append({"key": key, "value": value})
+
+
+def inherit_stored_secrets(stored_config: dict | None, config: dict) -> None:
+    """把上次部署配置中的密钥类 env 继承到新配置（原地修改 config）。
+
+    修复（重新部署）时数据卷保留，PostgreSQL/Redis 等密码仅在首次
+    初始化生效，重新随机生成必然与旧数据卷中的密码不匹配，因此
+    已存储的密钥始终优先于前端重新填写的值。
+    """
+    if not stored_config:
+        return
+    for env_key, rows in stored_config.items():
+        if not isinstance(rows, list):
+            continue
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            key = row.get("key")
+            value = row.get("value")
+            if not key or not value:
+                continue
+            if not SENSITIVE_KEY_PATTERN.search(str(key)):
+                continue
+            _set_env(config, env_key, str(key), str(value))
+
+
+async def prepare_app_credentials(
+    db: AsyncSession,
+    app_name: str,
+    config: dict,
+    fallback_password: str | None = None,
+) -> dict | None:
+    """为单个应用准备部署凭据，必要时注入 env。
+
+    Args:
+        db: 异步数据库会话
+        app_name: 应用名
+        config: 合并共享配置后的部署配置（可能被原地修改）
+        fallback_password: 修复场景下实例上次已配置的密码，
+            未设置统一密码时优先复用（数据卷保留，旧密码仍有效）
+
+    Returns:
+        provision 所需凭据 {"username", "password", "api_key"?}；
+        应用不支持自动配置时返回 None
+    """
+    spec = _ENV_CREDENTIAL_SPECS.get(app_name)
+    if spec is None and app_name not in _PROVISION_ONLY_APPS:
+        return None
+
+    sys_config = await system_config_service.get_or_create(db)
+    username = (sys_config.default_admin_username or "").strip() or "admin"
+    unified_password = (sys_config.default_admin_password or "").strip() or None
+
+    if spec is not None:
+        previous_password = _get_env(config, spec["env_key"], spec["password_key"])
+        password = unified_password
+        if password is None:
+            # 未设置统一密码时保留用户已填/前端随机生成的密码
+            password = previous_password
+        if not password:
+            password = generate_password()
+        _set_env(config, spec["env_key"], spec["username_key"], username)
+        _set_env(config, spec["env_key"], spec["password_key"], password)
+
+        api_token = _get_env(config, spec["env_key"], spec["api_token_key"])
+        if not api_token:
+            # MoviePilot 要求 API_TOKEN 为不少于 16 位的复杂字符串
+            api_token = generate_password(24)
+            _set_env(config, spec["env_key"], spec["api_token_key"], api_token)
+        creds = {"username": username, "password": password, "api_key": api_token}
+        if previous_password and previous_password != password:
+            # env 密码仅首次初始化生效，修复场景需用旧密码登录后改密
+            creds["previous_password"] = previous_password
+        return creds
+
+    password = unified_password or fallback_password or generate_password()
+    creds = {"username": username, "password": password}
+    if fallback_password and fallback_password != password:
+        # 配置卷复用时服务当前密码是旧密码，需用旧密码登录后改密
+        creds["previous_password"] = fallback_password
+    return creds

@@ -213,3 +213,32 @@ export function useDeployOrchestration() {
     },
   });
 }
+
+/**
+ * 修复编排实例组（重新部署失败/卡死的应用）
+ */
+export function useRedeployOrchestrationInstance() {
+  const qc = useQueryClient();
+  const toast = useToast();
+  return useMutation({
+    mutationFn: ({
+      id,
+      data,
+    }: {
+      id: number;
+      data: DeployOrchestrationRequest;
+    }) => orchestrationsApi.redeployOrchestrationInstance(id, data),
+    onSuccess: (_data, variables) => {
+      qc.invalidateQueries({ queryKey: ["compose", "projects"] });
+      qc.invalidateQueries({ queryKey: ["apps", "instances"] });
+      qc.invalidateQueries({ queryKey: ["orchestration-instances"] });
+      qc.invalidateQueries({
+        queryKey: ["orchestration-instances", variables.id, "detail"],
+      });
+      toast.success("修复已启动");
+    },
+    onError: (error: ApiError) => {
+      toast.error(error.displayMessage || "修复失败");
+    },
+  });
+}

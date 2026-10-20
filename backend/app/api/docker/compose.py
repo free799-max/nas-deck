@@ -118,6 +118,31 @@ def _build_project_out(
     )
 
 
+async def _live_status_or_none(project: DockerComposeProject) -> dict | None:
+    """获取项目实时状态；失败且环境中无存活容器时返回停止状态。
+
+    compose 文件缺失（如项目已随环境迁移消失）会导致 docker compose ps 报错，
+    此时再按项目标签确认容器是否存活：一个都没有说明项目在当前环境已不存在，
+    返回停止状态，避免调用方回退到数据库里过期的 running 缓存。
+    """
+    try:
+        return await compose_manager.get_status(project)
+    except Exception:
+        pass
+    if not compose_manager.docker_available:
+        return None
+    try:
+        containers = await docker_manager.run_sync(
+            docker_manager.list_containers,
+            filters={"label": [f"com.docker.compose.project={project.project_name}"]},
+        )
+    except Exception:
+        return None
+    if not containers:
+        return {"status": "stopped", "service_count": 0, "running_count": 0, "ports": []}
+    return None
+
+
 async def _get_compose_project(
     db: AsyncSession, project_id: int
 ) -> DockerComposeProject:
@@ -155,10 +180,7 @@ async def list_compose_projects(
     projects = result.scalars().all()
 
     async def _project_with_status(project: DockerComposeProject) -> ComposeProjectOut:
-        try:
-            status_info = await compose_manager.get_status(project)
-        except Exception:
-            status_info = None
+        status_info = await _live_status_or_none(project)
         return _build_project_out(project, status_info=status_info)
 
     return await asyncio.gather(*[_project_with_status(p) for p in projects])
@@ -176,15 +198,18 @@ async def create_compose_project(
     description = data.description
     user_id = current_user.id
 
-    task_id = deploy_task_manager.create_task(
-        "compose_deploy",
-        meta={
-            "project_name": project_name,
-            "content": content,
-            "description": description,
-            "user_id": user_id,
-        },
-    )
+    try:
+        task_id = deploy_task_manager.create_task(
+            "compose_deploy",
+            meta={
+                "project_name": project_name,
+                "content": content,
+                "description": description,
+                "user_id": user_id,
+            },
+        )
+    except RuntimeError as e:
+        raise APIException(str(e), 409) from e
 
     async def _task(task_id: str):
         async with async_session() as task_db:
@@ -233,7 +258,8 @@ async def get_compose_project(
 ):
     """获取单个 Compose 项目详情。"""
     project = await _get_compose_project(db, project_id)
-    return _build_project_out(project)
+    status_info = await _live_status_or_none(project)
+    return _build_project_out(project, status_info=status_info)
 
 
 @router.put("/compose/{project_id}", response_model=ComposeProjectOut)
@@ -272,16 +298,19 @@ async def edit_compose_project(
     description = data.description
     user_id = current_user.id
 
-    task_id = deploy_task_manager.create_task(
-        "compose_deploy",
-        project_id=project.id,
-        meta={
-            "content": content,
-            "comment": comment,
-            "description": description,
-            "user_id": user_id,
-        },
-    )
+    try:
+        task_id = deploy_task_manager.create_task(
+            "compose_deploy",
+            project_id=project.id,
+            meta={
+                "content": content,
+                "comment": comment,
+                "description": description,
+                "user_id": user_id,
+            },
+        )
+    except RuntimeError as e:
+        raise APIException(str(e), 409) from e
 
     async def _task(task_id: str):
         async with async_session() as task_db:
@@ -398,11 +427,14 @@ async def compose_action(
     project = await _get_compose_project(db, project_id)
     action = data.action
 
-    task_id = deploy_task_manager.create_task(
-        "compose_action",
-        project_id=project.id,
-        action=action,
-    )
+    try:
+        task_id = deploy_task_manager.create_task(
+            "compose_action",
+            project_id=project.id,
+            action=action,
+        )
+    except RuntimeError as e:
+        raise APIException(str(e), 409) from e
 
     async def _task(task_id: str):
         async with async_session() as task_db:

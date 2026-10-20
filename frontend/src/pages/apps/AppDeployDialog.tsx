@@ -4,7 +4,7 @@
  * 上下布局：上方为配置表单，下方实时展示渲染后的 Compose YAML。
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Dialog,
   DialogContent,
@@ -21,10 +21,13 @@ import { getApp } from "@/api/apps";
 import { getImageTags } from "@/api/docker";
 import { sanitizeInstanceName, slugify } from "@/lib/utils";
 import {
+  applyPortSuggestions,
+  countSchemaPorts,
   extractDefaults,
   fillEmptyPasswords,
 } from "@/lib/schema-utils";
 import { useAppPreview, type AppPreviewRequest } from "@/hooks/useApps";
+import { usePortSuggestions } from "@/hooks/useSettings";
 import type { App } from "@/hooks/useApps";
 import type { SchemaProperty } from "@/components/SchemaForm";
 
@@ -140,11 +143,30 @@ export function AppDeployDialog({
   const appDisplayName = app?.display_name || "";
   const appConfigSchema = useMemo(() => app?.config_schema || {}, [app]);
 
+  // 端口顺序分配：统计端口总数并请求建议端口，用于表单初始化预填
+  const totalPorts = useMemo(
+    () => countSchemaPorts(appConfigSchema, extractDefaults(appConfigSchema)),
+    [appConfigSchema]
+  );
+  const { data: portSuggestions } = usePortSuggestions(totalPorts);
+  const portsFilledRef = useRef(false);
+
   useEffect(() => {
     setInstanceName(slugify(appDisplayName));
     const defaults = extractDefaults(appConfigSchema);
     setConfig(fillEmptyPasswords(appConfigSchema, defaults));
+    portsFilledRef.current = false;
   }, [appDisplayName, appConfigSchema]);
+
+  // 建议端口到达后一次性预填，之后不再覆盖用户输入
+  useEffect(() => {
+    if (portsFilledRef.current) return;
+    if (!portSuggestions || portSuggestions.length === 0) return;
+    if (countSchemaPorts(appConfigSchema, config) === 0) return;
+    const result = applyPortSuggestions(appConfigSchema, config, portSuggestions, 0);
+    portsFilledRef.current = true;
+    setConfig(result.config);
+  }, [portSuggestions, appConfigSchema, config]);
 
   // 获取镜像可用标签列表
   const appImage = app?.image;

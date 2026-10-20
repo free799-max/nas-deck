@@ -220,3 +220,16 @@ export function deployOrchestration(
     .post<DeployOrchestrationResponse>(`/orchestrations/${name}/deploy`, data)
     .then((r) => r.data);
 }
+
+/** 修复编排实例组（重新部署失败/卡死的应用） */
+export function redeployOrchestrationInstance(
+  id: number,
+  data: DeployOrchestrationRequest
+) {
+  return api
+    .post<DeployOrchestrationResponse>(
+      `/orchestrations/instances/${id}/redeploy`,
+      data
+    )
+    .then((r) => r.data);
+}

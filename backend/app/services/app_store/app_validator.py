@@ -10,7 +10,7 @@ from jsonschema import ValidationError as JSONSchemaValidationError
 from jsonschema import validate as jsonschema_validate
 
 from app.core.exceptions import APIException
-from app.services.system_config_service import StoragePathResolver
+from app.services.system import StoragePathResolver
 
 
 def extract_default_values(config_schema: dict) -> dict:
