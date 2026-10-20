@@ -361,7 +361,7 @@ def test_merge_shared_config_without_shared_config():
 def test_shared_volume_render_skips_project_prefix():
     """渲染时共享 volumes 的相对路径直接相对于 Docker 挂载目录，不加项目名前缀。"""
     from app.services.app_store.app_service import _render_yaml_template
-    from app.services.system_config_service import StoragePathResolver
+    from app.services.system import StoragePathResolver
 
     template = (
         "services:\n"

@@ -4,7 +4,7 @@ import yaml
 import pytest
 
 from app.services.app_store.app_service import _render_yaml_template
-from app.services.system_config_service import StoragePathResolver
+from app.services.system import StoragePathResolver
 
 
 SAMPLE_MOVIEPILOT_SCHEMA = {

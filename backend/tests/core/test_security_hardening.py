@@ -13,7 +13,7 @@ import pytest
 
 from app.config import settings
 from app.services.orchestration.deploy_task_service import DeployTaskManager, sanitize_meta
-from app.services.orchestration.orchestration_service import OrchestrationService
+from app.services.orchestration import OrchestrationService
 
 
 async def _register_and_login(client, username: str, password: str = "pass123456") -> str:

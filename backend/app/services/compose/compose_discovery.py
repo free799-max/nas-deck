@@ -28,7 +28,7 @@ class ComposeDiscoveryService:
         避免容器标签指向任意宿主机文件被吸收入库。
         """
         from app.config import settings
-        from app.services.compose.compose_service import ComposeService
+        from app.services.compose.yaml_utils import validate_yaml
         from app.services.docker import docker_manager
 
         if not docker_manager.available:
@@ -100,7 +100,7 @@ class ComposeDiscoveryService:
                 elif resolved_file.exists():
                     try:
                         content = resolved_file.read_text(encoding="utf-8")
-                        ComposeService.validate_yaml(content)
+                        validate_yaml(content)
                         version = DockerComposeVersion(
                             project_id=project.id,
                             version_number=1,

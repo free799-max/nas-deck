@@ -13,7 +13,7 @@ from app.models.app_store import App
 
 
 # 通过文件路径加载 alembic 迁移模块（它不是 Python 包的一部分）
-_MIGRATION_PATH = Path(__file__).resolve().parent.parent / "alembic" / "versions" / "d552fb162f5c_fix_moviepilot_shared_passwords.py"
+_MIGRATION_PATH = Path(__file__).resolve().parent.parent.parent / "alembic" / "versions" / "d552fb162f5c_fix_moviepilot_shared_passwords.py"
 _spec = importlib.util.spec_from_file_location("fix_moviepilot_shared_passwords", _MIGRATION_PATH)
 _migration_module = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_migration_module)

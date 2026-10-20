@@ -1,14 +1,14 @@
-"""应用商店服务端口冲突检测单元测试。"""
+"""应用商店服务端口顺序分配单元测试。"""
 
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from app.core.exceptions import APIException
-from app.services.app_store.app_service import (
-    _extract_app_ports,
-    _get_used_ports,
+from app.services.app_store.app_service import _extract_app_ports
+from app.services.system.port_allocator import (
     _parse_proc_net_tcp,
+    get_used_ports,
 )
 
 
@@ -79,10 +79,10 @@ class TestGetUsedPorts:
 
         with patch.object(docker_manager, "_client_obj", mock_client):
             with patch(
-                "app.services.app_store.app_service._parse_proc_net_tcp"
+                "app.services.system.port_allocator._parse_proc_net_tcp"
             ) as mock_parse:
                 mock_parse.side_effect = lambda path: {3002} if "tcp6" in path else {3003}
-                used = _get_used_ports()
+                used = get_used_ports()
 
         assert used == {3000, 3001, 3002, 3003}
 
@@ -95,16 +95,16 @@ class TestGetUsedPorts:
 
         with patch.object(docker_manager, "_client_obj", mock_client):
             with patch(
-                "app.services.app_store.app_service._parse_proc_net_tcp"
+                "app.services.system.port_allocator._parse_proc_net_tcp"
             ) as mock_parse:
                 mock_parse.side_effect = lambda path: {8080} if "tcp6" in path else {80}
-                used = _get_used_ports()
+                used = get_used_ports()
 
         assert used == {80, 8080}
 
 
 class TestValidateAndPreparePorts:
-    """测试 _validate_and_prepare 中的端口预检。"""
+    """测试 _validate_and_prepare 中的端口顺序分配。"""
 
     @pytest.fixture
     def app_service(self):
@@ -139,53 +139,62 @@ class TestValidateAndPreparePorts:
         )()
 
     @pytest.mark.asyncio
-    async def test_detects_array_port_conflict(self, app_service, array_port_schema_app):
-        """检测到 ports 数组中的 local_port 冲突时抛 409。"""
+    async def test_allocates_array_ports_skipping_used(
+        self, app_service, array_port_schema_app
+    ):
+        """ports 数组的 local_port 从起始端口顺序分配，跳过已占用端口。"""
+        config = {
+            "ports": [
+                {"local_port": 3000, "container_port": 3000},
+                {"local_port": 3001, "container_port": 3001},
+            ]
+        }
         with patch(
-            "app.services.app_store.app_service._get_used_ports", return_value={3000}
+            "app.services.app_store.app_service.get_used_ports",
+            return_value={10000},
         ):
-            with pytest.raises(APIException) as exc_info:
-                await app_service._validate_and_prepare(
-                    db_app=array_port_schema_app,
-                    instance_name="test",
-                    config={
-                        "ports": [
-                            {"local_port": 3000, "container_port": 3000},
-                            {"local_port": 3001, "container_port": 3001},
-                        ]
-                    },
-                )
+            project_name, allocated = await app_service._validate_and_prepare(
+                db_app=array_port_schema_app,
+                instance_name="test",
+                config=config,
+            )
 
-        assert exc_info.value.status_code == 409
-        assert "3000" in exc_info.value.message
-        assert "ports[0].local_port" in exc_info.value.message
+        assert project_name == "test"
+        assert allocated == [10001, 10002]
+        assert config["ports"][0]["local_port"] == 10001
+        assert config["ports"][1]["local_port"] == 10002
+        # 容器端口不被改动
+        assert config["ports"][0]["container_port"] == 3000
 
     @pytest.mark.asyncio
     async def test_skips_port_check_when_check_ports_false(
         self, app_service, array_port_schema_app
     ):
-        """preview 阶段 check_ports=False 时不检测端口冲突。"""
+        """preview 阶段 check_ports=False 时不进行端口分配。"""
+        config = {
+            "ports": [
+                {"local_port": 3000, "container_port": 3000},
+            ]
+        }
         with patch(
-            "app.services.app_store.app_service._get_used_ports",
+            "app.services.app_store.app_service.get_used_ports",
             return_value={3000},
         ) as mock_get_used_ports:
-            result = await app_service._validate_and_prepare(
+            project_name, allocated = await app_service._validate_and_prepare(
                 db_app=array_port_schema_app,
                 instance_name="test",
-                config={
-                    "ports": [
-                        {"local_port": 3000, "container_port": 3000},
-                    ]
-                },
+                config=config,
                 check_ports=False,
             )
 
-        assert result == "test"
+        assert project_name == "test"
+        assert allocated == []
+        assert config["ports"][0]["local_port"] == 3000
         mock_get_used_ports.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_detects_integer_port_conflict(self, app_service):
-        """检测到单端口字段冲突时抛 409。"""
+    async def test_allocates_integer_port_field(self, app_service):
+        """单端口字段被自动分配的空闲端口替换，不再报 409。"""
         db_app = type(
             "App",
             (),
@@ -199,17 +208,50 @@ class TestValidateAndPreparePorts:
                 "yaml_template": "services:\n  app:\n    image: test",
             },
         )()
+        config = {"moviepilot_port": 8096}
 
         with patch(
-            "app.services.app_store.app_service._get_used_ports", return_value={8096}
+            "app.services.app_store.app_service.get_used_ports",
+            return_value={8096, 10000},
+        ):
+            project_name, allocated = await app_service._validate_and_prepare(
+                db_app=db_app,
+                instance_name="test",
+                config=config,
+                port_start=10000,
+            )
+
+        assert project_name == "test"
+        assert allocated == [10001]
+        assert config["moviepilot_port"] == 10001
+
+    @pytest.mark.asyncio
+    async def test_raises_400_when_no_free_ports(self, app_service):
+        """起始端口之后无可用端口时抛 400。"""
+        db_app = type(
+            "App",
+            (),
+            {
+                "config_schema": {
+                    "type": "object",
+                    "properties": {
+                        "web_port": {"type": "integer"}
+                    },
+                },
+                "yaml_template": "services:\n  app:\n    image: test",
+            },
+        )()
+
+        with patch(
+            "app.services.app_store.app_service.get_used_ports",
+            return_value={65535},
         ):
             with pytest.raises(APIException) as exc_info:
                 await app_service._validate_and_prepare(
                     db_app=db_app,
                     instance_name="test",
-                    config={"moviepilot_port": 8096},
+                    config={"web_port": 8080},
+                    port_start=65535,
                 )
 
-        assert exc_info.value.status_code == 409
-        assert "8096" in exc_info.value.message
-        assert "moviepilot_port" in exc_info.value.message
+        assert exc_info.value.status_code == 400

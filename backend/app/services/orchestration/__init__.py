@@ -1,6 +1,6 @@
 """应用编排业务服务包。"""
 
-from app.services.orchestration.orchestration_service import (
+from app.services.orchestration.service import (
     OrchestrationService,
     orchestration_service,
 )

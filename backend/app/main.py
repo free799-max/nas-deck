@@ -19,11 +19,9 @@ from app.core.custom_route import CustomAPIRoute
 
 from app.config import DEFAULT_SECRET_KEY, settings
 from app.api.auth import router as auth_router
-from app.api.orchestrations import router as orchestrations_router
+from app.api.orchestration import deploy_tasks_router, orchestrations_router
 from app.api.app_store import router as apps_router
-from app.api.orchestration.deploy_tasks import router as deploy_tasks_router
 from app.api.settings import router as settings_router
-# trigger-reload: docker_manager fixed
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +51,26 @@ async def lifespan(app: FastAPI):
     alembic_cfg = Config(str(backend_dir / "alembic.ini"))
     # alembic env 内部使用 asyncio.run，必须在独立线程执行以避免与当前事件循环冲突
     await asyncio.to_thread(command.upgrade, alembic_cfg, "head")
+
+    # 启动 reconciliation：进程重启后旧的部署协程已消亡，
+    # 残留的 deploying 实例不可能仍在部署，统一置为 error 以便用户重新部署
+    from sqlalchemy import update
+
+    from app.database import async_session
+    from app.models.orchestration import AppInstance
+
+    async with async_session() as session:
+        result = await session.execute(
+            update(AppInstance)
+            .where(AppInstance.status == "deploying")
+            .values(status="error")
+        )
+        await session.commit()
+        if result.rowcount:
+            logger.warning(
+                "启动 reconciliation：%s 个卡在 deploying 的实例已置为 error",
+                result.rowcount,
+            )
 
     yield
 

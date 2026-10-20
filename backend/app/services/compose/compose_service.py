@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import os
 import re
 import shutil
 from collections.abc import Callable
@@ -14,20 +15,28 @@ import yaml
 
 from app.config import settings
 from app.models.docker import (
-    COMPOSE_PROJECT_LABEL,
     DockerComposeProject,
     DockerComposeStack,
     DockerComposeVersion,
 )
 from app.models.orchestration import AppInstance
 from app.services.compose.compose_discovery import ComposeDiscoveryService
+from app.services.compose.log_utils import detect_stage, strip_ansi
+from app.services.compose.permissions import extract_bind_sources, parse_puid_pgid
+from app.services.compose.yaml_utils import (
+    inject_labels,
+    rewrite_ports,
+    validate_project_name,
+    validate_yaml,
+)
+from app.services.system.port_allocator import (
+    allocate_and_reserve,
+    get_used_ports,
+    release_ports,
+)
+from app.services.system import system_config_service
 
 logger = logging.getLogger(__name__)
-
-# 允许的项目名字符：小写字母、数字、下划线、连字符
-_PROJECT_NAME_PATTERN = re.compile(r"^[a-z0-9_-]+$")
-# ANSI 转义序列（颜色、光标移动、清行等），用于清理 compose 输出中的进度条控制符
-_ANSI_ESCAPE_PATTERN = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
 
 
 class ComposeService:
@@ -43,6 +52,7 @@ class ComposeService:
         self._locks: dict[int, asyncio.Lock] = {}
         self._docker_available: bool | None = None
         self._discovery = ComposeDiscoveryService()
+        self._image_user_cache: dict[str, tuple[int, int] | None] = {}
 
     @property
     def docker_available(self) -> bool:
@@ -82,53 +92,43 @@ class ComposeService:
             self._locks[project_id] = asyncio.Lock()
         return self._locks[project_id]
 
-    @staticmethod
-    def validate_project_name(project_name: str) -> None:
-        """校验项目名是否合法。"""
-        if not project_name:
-            raise ValueError("项目名不能为空")
-        if not _PROJECT_NAME_PATTERN.match(project_name):
-            raise ValueError("项目名只能包含小写字母、数字、下划线和连字符")
+    async def _auto_allocate_ports(self, db, content: str) -> tuple[str, list[int]]:
+        """按系统设置的起始端口，将 compose 内容中的宿主端口顺序分配为空闲端口。
 
-    @staticmethod
-    def validate_yaml(content: str) -> None:
-        """校验 YAML 内容是否合法。"""
+        分配的端口会被预留（防止并发部署重复分配），调用方在部署结束
+        （成功或失败）后需调用 release_ports 释放。
+        无端口映射或 YAML 无法解析时原样返回（空预留列表），不阻断创建。
+
+        Returns:
+            (重写后的 YAML 内容, 本次分配并预留的端口列表)
+        """
         try:
-            yaml.safe_load(content)
-        except yaml.YAMLError as e:
-            raise ValueError(f"YAML 格式错误: {e}") from e
-
-    @staticmethod
-    def _inject_labels(content: str, project_name: str) -> str:
-        """在 YAML 中为每个服务注入 Compose 项目归属标签。"""
-        data = yaml.safe_load(content) or {}
+            data = yaml.safe_load(content)
+        except yaml.YAMLError:
+            return content, []
+        if not isinstance(data, dict):
+            return content, []
         services = data.get("services")
         if not isinstance(services, dict):
-            return content
+            return content, []
+        has_ports = any(
+            isinstance(svc, dict) and svc.get("ports") for svc in services.values()
+        )
+        if not has_ports:
+            return content, []
 
-        label_key = COMPOSE_PROJECT_LABEL
-        label_value = project_name
-        for svc_name, svc in services.items():
-            if not isinstance(svc, dict):
-                continue
-            labels = svc.setdefault("labels", [])
-            if isinstance(labels, dict):
-                labels[label_key] = label_value
-            elif isinstance(labels, list):
-                exists = any(
-                    (
-                        isinstance(item, str)
-                        and item.startswith(f"{label_key}=")
-                    )
-                    or (
-                        isinstance(item, dict)
-                        and item.get(label_key) is not None
-                    )
-                    for item in labels
-                )
-                if not exists:
-                    labels.append(f"{label_key}={label_value}")
-        return yaml.safe_dump(data, sort_keys=False, allow_unicode=True)
+        system_config = await system_config_service.get_or_create(db)
+        port_start = system_config.service_port_start or 10000
+        used = await asyncio.to_thread(get_used_ports)
+        reserved: list[list[int]] = []
+
+        def _allocator(u: set[int], count: int, start: int) -> list[int]:
+            ports = allocate_and_reserve(u, count, start)
+            reserved.append(ports)
+            return ports
+
+        new_content = rewrite_ports(content, used, port_start, allocator=_allocator)
+        return new_content, (reserved[0] if reserved else [])
 
     async def _write_compose_file(
         self, project: DockerComposeProject, version: DockerComposeVersion
@@ -138,7 +138,7 @@ class ComposeService:
         compose_file = config_files[0]
         working_dir = self._working_dir(project)
         working_dir.mkdir(parents=True, exist_ok=True)
-        content = self._inject_labels(version.content, project.project_name)
+        content = inject_labels(version.content, project.project_name)
         compose_file.write_text(content, encoding="utf-8")
         return compose_file
 
@@ -217,7 +217,7 @@ class ComposeService:
                 line = await stream.readline()
                 if not line:
                     break
-                text = self._strip_ansi(
+                text = strip_ansi(
                     line.decode("utf-8", errors="replace")
                 ).rstrip("\n")
                 if text:
@@ -247,23 +247,6 @@ class ComposeService:
             "stderr": "\n".join(stderr_lines),
         }
 
-    @staticmethod
-    def _strip_ansi(text: str) -> str:
-        """移除 ANSI 转义序列，避免进度条控制符污染日志。"""
-        return _ANSI_ESCAPE_PATTERN.sub("", text)
-
-    @staticmethod
-    def _detect_stage(line: str) -> str | None:
-        """根据 compose 输出行推断当前阶段。"""
-        lowered = line.lower()
-        if any(k in lowered for k in ("pulling", "downloading", "extracting", "already exists", "pulled")):
-            return "pulling_images"
-        if any(k in lowered for k in ("preparing packages", "preparing metadata", "building wheel", "installing")):
-            return "preparing_packages"
-        if any(k in lowered for k in ("creating", "starting", "started", "container", "running")):
-            return "starting_services"
-        return None
-
     async def _run_up_with_progress(
         self,
         project: DockerComposeProject,
@@ -283,7 +266,7 @@ class ComposeService:
 
         if progress_callback:
             def _on_line(line: str, name: str):
-                detected = self._detect_stage(line)
+                detected = detect_stage(line)
                 nonlocal current_stage
                 if detected:
                     current_stage = detected
@@ -305,45 +288,131 @@ class ComposeService:
             raise RuntimeError(stderr or "docker compose up -d 执行失败")
         return result
 
-    @staticmethod
-    def _ensure_host_directories(content: str) -> None:
-        """解析 Compose YAML，为 bind mount 的宿主机路径自动创建目录。"""
+    async def _docker_cli(self, *args: str, timeout: int = 60) -> tuple[int, str]:
+        """执行 docker CLI 命令，返回 (returncode, stdout)。"""
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "docker", *args,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+            return proc.returncode or 0, stdout.decode("utf-8", errors="replace").strip()
+        except Exception:
+            return -1, ""
+
+    async def _inspect_image_user(self, image: str) -> str:
+        """查询镜像 Config.User；本地没有镜像时先拉取再查。"""
+        rc, out = await self._docker_cli(
+            "image", "inspect", image, "--format", "{{.Config.User}}"
+        )
+        if rc != 0:
+            rc, _ = await self._docker_cli("pull", image, timeout=600)
+            if rc == 0:
+                rc, out = await self._docker_cli(
+                    "image", "inspect", image, "--format", "{{.Config.User}}"
+                )
+        return out if rc == 0 else ""
+
+    async def _resolve_named_user(self, image: str, name: str) -> tuple[int, int] | None:
+        """在镜像内解析用户名对应的 UID/GID（id 优先，getent 兜底）。"""
+        rc, out = await self._docker_cli(
+            "run", "--rm", "--entrypoint", "id", image, name, timeout=60
+        )
+        if rc == 0:
+            match = re.search(r"uid=(\d+).*?gid=(\d+)", out)
+            if match:
+                return int(match.group(1)), int(match.group(2))
+        rc, out = await self._docker_cli(
+            "run", "--rm", "--entrypoint", "getent", image, "passwd", name, timeout=60
+        )
+        if rc == 0:
+            parts = out.splitlines()[0].split(":") if out else []
+            if len(parts) >= 4 and parts[2].isdigit() and parts[3].isdigit():
+                return int(parts[2]), int(parts[3])
+        return None
+
+    async def _resolve_service_user(self, svc: dict) -> tuple[int, int] | None:
+        """确定服务的容器运行用户 (uid, gid)；root 或无法确定时返回 None。
+
+        优先使用环境变量中显式配置的 PUID/PGID；
+        否则查询镜像 Config.User，数字直接使用，用户名则在镜像内解析。
+        结果按镜像名缓存。
+        """
+        puid_pgid = parse_puid_pgid(svc.get("environment"))
+        if puid_pgid:
+            return puid_pgid
+
+        image = svc.get("image")
+        if not image or not isinstance(image, str) or not self.docker_available:
+            return None
+        if image in self._image_user_cache:
+            return self._image_user_cache[image]
+
+        result: tuple[int, int] | None = None
+        user = (await self._inspect_image_user(image)).strip()
+        if user and user not in ("root", "0", "0:0"):
+            user_part, _, group_part = user.partition(":")
+            if user_part.isdigit():
+                uid = int(user_part)
+                gid = int(group_part) if group_part.isdigit() else uid
+                result = (uid, gid)
+            else:
+                result = await self._resolve_named_user(image, user_part)
+        self._image_user_cache[image] = result
+        if result:
+            logger.info("镜像 %s 运行用户: %s → uid=%d gid=%d", image, user, *result)
+        elif user:
+            logger.warning("无法确定镜像 %s 运行用户 %s 的 UID/GID", image, user)
+        return result
+
+    async def _ensure_host_directories(self, content: str) -> None:
+        """解析 Compose YAML，为 bind mount 的宿主机路径自动创建目录。
+
+        对本次新建的目录，若服务以非 root 用户运行（显式 PUID/PGID 或镜像
+        Config.User 非 root），将目录属主调整为容器运行用户，避免容器因
+        权限不足无法写入而反复重启。已存在的目录不做任何改动。
+        """
         try:
             data = yaml.safe_load(content) or {}
         except yaml.YAMLError:
             return
 
         services = data.get("services") or {}
-        host_paths: set[str] = set()
+        if not isinstance(services, dict):
+            return
 
         for svc in services.values():
             if not isinstance(svc, dict):
                 continue
-            volumes = svc.get("volumes") or []
-            if not isinstance(volumes, list):
+            new_paths: list[Path] = []
+            for source in extract_bind_sources(svc):
+                path = Path(source)
+                is_new = not path.exists()
+                try:
+                    path.mkdir(parents=True, exist_ok=True)
+                except OSError:
+                    # 权限不足或路径非法时跳过，避免阻塞部署
+                    logger.warning("自动创建宿主机目录失败: %s", source)
+                    continue
+                if is_new:
+                    new_paths.append(path)
+            if not new_paths:
                 continue
-            for vol in volumes:
-                source: str | None = None
-                if isinstance(vol, str):
-                    # 短语法：source:target[:mode]
-                    parts = vol.split(":")
-                    if parts:
-                        source = parts[0].strip()
-                elif isinstance(vol, dict):
-                    # 长语法
-                    if vol.get("type") == "bind" or "source" in vol:
-                        source = vol.get("source")
-                        if not source and "bind" in vol:
-                            source = vol["bind"].get("source")
-                if source and source.startswith("/"):
-                    host_paths.add(source)
 
-        for path_str in host_paths:
-            try:
-                Path(path_str).mkdir(parents=True, exist_ok=True)
-            except OSError:
-                # 权限不足或路径非法时跳过，避免阻塞部署
-                logger.warning("自动创建宿主机目录失败: %s", path_str)
+            uid_gid = await self._resolve_service_user(svc)
+            if not uid_gid:
+                continue
+            uid, gid = uid_gid
+            for path in new_paths:
+                try:
+                    os.chown(path, uid, gid)
+                    logger.info(
+                        "自动授权 %s → %d:%d（服务镜像 %s 以非 root 运行）",
+                        path, uid, gid, svc.get("image"),
+                    )
+                except OSError as e:
+                    logger.warning("自动授权失败 %s → %d:%d: %s", path, uid, gid, e)
 
     async def create_project(
         self,
@@ -370,10 +439,45 @@ class ComposeService:
         user_id: int | None = None,
         description: str | None = None,
         progress_callback: Callable[..., Any] | None = None,
+        allocate_ports: bool = True,
     ) -> DockerComposeProject:
-        """创建 Compose 项目并写入初始版本（支持进度回调）。"""
-        self.validate_project_name(project_name)
-        self.validate_yaml(content)
+        """创建 Compose 项目并写入初始版本（支持进度回调）。
+
+        Args:
+            allocate_ports: 是否对 YAML 宿主端口做顺序分配。应用商店部署
+                路径已在 deploy 阶段分配并预留端口，传 False 避免二次分配。
+        """
+        validate_project_name(project_name)
+        validate_yaml(content)
+
+        # 服务端口顺序分配：从起始端口开始重写宿主端口，跳过已占用端口。
+        # 分配的端口先预留，部署结束（成功或失败）后统一释放
+        reserved_ports: list[int] = []
+        if allocate_ports:
+            content, reserved_ports = await self._auto_allocate_ports(db, content)
+
+        try:
+            return await self._create_project_inner(
+                db,
+                project_name=project_name,
+                content=content,
+                user_id=user_id,
+                description=description,
+                progress_callback=progress_callback,
+            )
+        finally:
+            release_ports(reserved_ports)
+
+    async def _create_project_inner(
+        self,
+        db,
+        project_name: str,
+        content: str,
+        user_id: int | None,
+        description: str | None,
+        progress_callback: Callable[..., Any] | None,
+    ) -> DockerComposeProject:
+        """创建 Compose 项目的主体流程（端口分配与释放由外层负责）。"""
 
         def _progress(stage: str, percentage: int, message: str, detail: str | None = None):
             if progress_callback:
@@ -381,8 +485,8 @@ class ComposeService:
 
         _progress("preparing", 5, "准备部署")
 
-        # 自动创建 bind mount 所需的宿主机目录
-        self._ensure_host_directories(content)
+        # 自动创建 bind mount 所需的宿主机目录（新建目录按需授权给容器用户）
+        await self._ensure_host_directories(content)
 
         _progress("creating_project", 15, "创建 Compose 项目")
         project_dir = self._project_dir(project_name)
@@ -412,7 +516,8 @@ class ComposeService:
         _progress("writing_compose", 25, "写入 compose 文件")
         await self._write_compose_file(project, version)
 
-        await self._run_up_with_progress(project, progress_callback, timeout=300)
+        # 首次创建需要拉取镜像，大镜像耗时较长，超时放宽到 30 分钟
+        await self._run_up_with_progress(project, progress_callback, timeout=1800)
 
         _progress("syncing_status", 95, "同步服务状态")
         stack = await self.sync_stack_status(db, project, action="up")
@@ -504,7 +609,7 @@ class ComposeService:
         """为项目新增一个版本并设为当前版本。"""
         from sqlalchemy import select, update
 
-        self.validate_yaml(content)
+        validate_yaml(content)
 
         result = await db.execute(
             select(DockerComposeVersion.version_number)
@@ -570,7 +675,7 @@ class ComposeService:
             if progress_callback:
                 progress_callback(stage, percentage, message, detail)
 
-        self.validate_yaml(content)
+        validate_yaml(content)
 
         async with self._lock(project.id):
             _progress("preparing", 5, "准备编辑部署")
@@ -705,8 +810,8 @@ class ComposeService:
             args.extend(services)
         result = await self._run(project, *args, timeout=60)
         if result["returncode"] != 0:
-            raise RuntimeError(self._strip_ansi(result["stderr"]))
-        return self._strip_ansi(result["stdout"])
+            raise RuntimeError(strip_ansi(result["stderr"]))
+        return strip_ansi(result["stdout"])
 
     async def stream_logs(
         self,
@@ -741,7 +846,7 @@ class ComposeService:
 
         def _clean_log_line(raw: str) -> str:
             """清理日志行：移除 ANSI 转义序列并处理进度条的 \\r 覆盖。"""
-            cleaned = self._strip_ansi(raw)
+            cleaned = strip_ansi(raw)
             # 先统一去掉行尾换行符，避免 \\r\\n 被当成行内覆盖
             cleaned = cleaned.rstrip("\r\n")
             # 进度条通常使用 \\r 回到行首覆盖旧内容，只保留最后一次覆盖后的文本
@@ -757,7 +862,7 @@ class ComposeService:
                 yield _clean_log_line(line.decode("utf-8", errors="replace"))
 
             stderr_data = await proc.stderr.read()
-            stderr = self._strip_ansi(
+            stderr = strip_ansi(
                 stderr_data.decode("utf-8", errors="replace")
             ).strip()
             if stderr:

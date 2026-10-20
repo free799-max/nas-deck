@@ -3,7 +3,7 @@
 import pytest
 
 from app.core.exceptions import APIException
-from app.services.system_config_service import StoragePathResolver
+from app.services.system import StoragePathResolver
 
 
 class TestStoragePathResolver:

@@ -3,7 +3,7 @@
 import logging
 import uuid
 
-from app.services.task_manager_base import BaseTaskManager
+from app.core.task_manager import BaseTaskManager
 
 logger = logging.getLogger(__name__)
 

@@ -97,6 +97,23 @@ class BaseTaskManager:
                 self._check_task_timeout(task)
             return task
 
+    def has_active_task(
+        self,
+        *,
+        instance_id: int | None = None,
+        project_id: int | None = None,
+    ) -> bool:
+        """是否存在指定实例/项目的进行中任务。"""
+        with self._lock:
+            for task in self._tasks.values():
+                if task.get("status") != self._active_status:
+                    continue
+                if instance_id is not None and task.get("instance_id") == instance_id:
+                    return True
+                if project_id is not None and task.get("project_id") == project_id:
+                    return True
+            return False
+
     def register_listener(self, task_id: str) -> queue.Queue:
         """注册 SSE 监听器队列。"""
         q = queue.Queue(maxsize=100)

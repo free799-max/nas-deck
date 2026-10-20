@@ -148,6 +148,32 @@ async def delete_orchestration_instance(
     return Response(status_code=204)
 
 
+@router.post("/instances/{instance_id}/redeploy", response_model=OrchestrationDeployResponse)
+async def redeploy_orchestration_instance(
+    instance_id: int,
+    data: OrchestrationDeployRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    """重新部署编排实例组：清理旧实例与项目后按原路径重新部署。"""
+    group, task_ids = await orchestration_service.redeploy_instance(
+        db,
+        group_id=instance_id,
+        instance_name=data.instance_name,
+        selected_apps=data.selected_apps,
+        app_configs=data.app_configs,
+        shared_config=data.shared_config,
+        user_id=current_user.id,
+    )
+
+    return OrchestrationDeployResponse(
+        group_id=group.id,
+        instance_name=group.instance_name,
+        status=group.status,
+        task_ids=task_ids,
+    )
+
+
 @router.post("/auth/verify", response_model=AppAuthVerifyResponse)
 async def verify_app_auth(
     data: AppAuthVerifyRequest,

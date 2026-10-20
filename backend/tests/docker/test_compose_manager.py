@@ -3,6 +3,7 @@ from unittest.mock import MagicMock, patch, AsyncMock
 from pathlib import Path
 
 from app.services.compose import ComposeService as ComposeManager
+from app.services.compose.permissions import parse_puid_pgid
 from app.models.docker import DockerComposeProject, DockerComposeVersion
 
 
@@ -223,7 +224,8 @@ async def test_edit_and_deploy_invalid_yaml(compose_manager, tmp_path):
     db.commit.assert_not_awaited()
 
 
-def test_ensure_host_directories_creates_bind_mount_dirs(compose_manager, tmp_path):
+@pytest.mark.asyncio
+async def test_ensure_host_directories_creates_bind_mount_dirs(compose_manager, tmp_path):
     """解析 Compose YAML 并为 bind mount 的宿主机路径自动创建目录。"""
     host_dir = tmp_path / "host"
     content = f"""services:
@@ -239,14 +241,53 @@ def test_ensure_host_directories_creates_bind_mount_dirs(compose_manager, tmp_pa
         source: {host_dir}/db
         target: /var/lib/postgresql
 """
-    compose_manager._ensure_host_directories(content)
+    with patch.object(
+        compose_manager, "_resolve_service_user", new=AsyncMock(return_value=None)
+    ):
+        await compose_manager._ensure_host_directories(content)
 
     assert (host_dir / "data").is_dir()
     assert (host_dir / "config").is_dir()
     assert (host_dir / "db").is_dir()
 
 
-def test_ensure_host_directories_ignores_named_volumes(compose_manager, tmp_path):
+@pytest.mark.asyncio
+async def test_ensure_host_directories_chowns_new_dirs_for_non_root_image(
+    compose_manager, tmp_path
+):
+    """镜像以非 root 运行时，新建的宿主机目录授权给容器用户；已存在目录不动。"""
+    new_dir = tmp_path / "new-data"
+    existing_dir = tmp_path / "existing-data"
+    existing_dir.mkdir()
+    content = f"""services:
+  suwayomi:
+    image: ghcr.io/suwayomi/suwayomi-server
+    volumes:
+      - {new_dir}:/home/suwayomi/.local/share/Tachidesk
+      - {existing_dir}:/existing
+"""
+    with patch.object(
+        compose_manager, "_resolve_service_user", new=AsyncMock(return_value=(1000, 1000))
+    ), patch(
+        "app.services.compose.compose_service.os.chown"
+    ) as mock_chown:
+        await compose_manager._ensure_host_directories(content)
+
+    assert new_dir.is_dir()
+    mock_chown.assert_called_once_with(new_dir, 1000, 1000)
+
+
+def test_parse_puid_pgid():
+    """PUID/PGID 支持列表与字典两种环境变量形式，缺一或非法时不生效。"""
+    assert parse_puid_pgid(["PUID=1000", "PGID=100"]) == (1000, 100)
+    assert parse_puid_pgid({"PUID": "1000", "PGID": "100"}) == (1000, 100)
+    assert parse_puid_pgid(["PUID=1000"]) is None
+    assert parse_puid_pgid(["PUID=abc", "PGID=100"]) is None
+    assert parse_puid_pgid(None) is None
+
+
+@pytest.mark.asyncio
+async def test_ensure_host_directories_ignores_named_volumes(compose_manager, tmp_path):
     """命名卷和相对路径不应被创建为宿主机目录。"""
     content = """services:
   web:
@@ -255,7 +296,10 @@ def test_ensure_host_directories_ignores_named_volumes(compose_manager, tmp_path
       - data_volume:/data
       - ./relative:/app
 """
-    compose_manager._ensure_host_directories(content)
+    with patch.object(
+        compose_manager, "_resolve_service_user", new=AsyncMock(return_value=None)
+    ):
+        await compose_manager._ensure_host_directories(content)
 
     # 不应抛出异常，也不应在当前目录创建意外目录
     assert True
