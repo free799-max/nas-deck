@@ -22,10 +22,10 @@ PYTHONPATH=./app .venv/bin/python -m uvicorn app.main:app --reload --host 0.0.0.
 PYTHONPATH=./app .venv/bin/python -m pytest
 
 # 运行单个测试文件
-PYTHONPATH=./app .venv/bin/python -m pytest tests/test_docker_manager.py
+PYTHONPATH=./app .venv/bin/python -m pytest tests/docker/test_docker_manager.py
 
 # 运行单个测试函数
-PYTHONPATH=./app .venv/bin/python -m pytest tests/test_docker_manager.py::test_list_containers -v
+PYTHONPATH=./app .venv/bin/python -m pytest tests/docker/test_docker_manager.py::test_list_containers -v
 
 # 数据库迁移
 PYTHONPATH=./app .venv/bin/python -m alembic upgrade head
@@ -66,12 +66,12 @@ docker-compose up --build   # 构建并启动前后端容器（后端 :5001，�
 | 入口 | `main.py` | FastAPI 实例、lifespan（初始化DB）、CORS、路由注册、全局异常处理器 |
 | 配置 | `config.py` | pydantic-settings，从 `.env` 加载（APP_NAME/DATABASE_URL/SECRET_KEY/ACCESS_TOKEN_EXPIRE_MINUTES/PLUGIN_DIR/COMPOSE_WORKSPACE_DIR） |
 | 数据库 | `database.py` | SQLAlchemy 2.0 异步引擎(asyncpg/aiosqlite)、会话工厂、`get_db()` 依赖（自动 commit/rollback） |
-| API | `api/` | 路由模块（auth/app_store/orchestrations/settings），Docker 路由按领域拆分为 `api/docker/` 子包，部署任务在 `api/orchestration/deploy_tasks.py` |
-| 核心 | `core/` | 基础设施：security(JWT+bcrypt)、custom_route(响应包装)、exceptions。`docker_manager.py` 与 `compose_manager.py` 目前仅作为兼容入口保留 |
-| 业务服务 | `services/` | 按功能域拆分：`docker/`（容器/镜像/宿主机/拉取任务）、`compose/`（Compose 编排/自动发现）、`orchestration/`（编排与部署任务）、`apps/`（应用客户端）、`app_store/`、`host/` |
-| 初始化 | `initializers/` | 应用启动时的业务初始化，如默认 Docker Hub 镜像仓库配置 |
+| API | `api/` | 路由模块（auth/app_store/settings），编排路由在 `api/orchestration/` 子包（orchestrations/deploy_tasks），Docker 路由按领域拆分为 `api/docker/` 子包 |
+| 核心 | `core/` | 基础设施：security(JWT+bcrypt)、custom_route(响应包装)、exceptions、background(后台任务)、task_manager(任务管理器基类 BaseTaskManager) |
+| 业务服务 | `services/` | 按功能域拆分：`docker/`（容器/镜像/宿主机/拉取任务）、`compose/`（Compose 编排/自动发现/YAML 工具）、`orchestration/`（编排与部署任务，service 按职责拆为 deploy/importer/provisioning/instances mixin）、`apps/`（应用客户端）、`app_store/`、`host/`、`system/`（系统配置/存储路径解析/端口分配） |
 | 模型 | `models/` | SQLAlchemy ORM 模型；Docker 相关模型按领域拆分为 `models/docker/` 子包 |
-| Schema | `schemas/` | Pydantic 请求/响应模型；Docker 相关 Schema 按领域拆分为 `schemas/docker/` 子包 |
+| Schema | `schemas/` | Pydantic 请求/响应模型；Docker 与编排相关 Schema 分别拆分为 `schemas/docker/`、`schemas/orchestration/` 子包 |
+| 测试 | `tests/` | pytest，按领域分目录：core/、app_store/、docker/、orchestration/、system/ |
 
 ### 前端分层（`frontend/src/`）
 
@@ -121,13 +121,29 @@ services/
 │   ├── host_service.py
 │   ├── pull_task_service.py
 │   └── docker_common.py
-└── compose/             # Docker Compose 编排与自动发现
-    ├── __init__.py
-    ├── compose_service.py
-    └── compose_discovery.py
+├── compose/             # Docker Compose 编排与自动发现
+│   ├── __init__.py
+│   ├── compose_service.py    # 项目生命周期/命令执行/日志状态
+│   ├── compose_discovery.py
+│   ├── yaml_utils.py         # 项目名/YAML 校验、标签注入、端口改写（纯函数）
+│   ├── log_utils.py          # 日志输出处理（strip_ansi/detect_stage）
+│   └── permissions.py        # bind 挂载提取、PUID/PGID 解析
+├── orchestration/       # 编排与部署任务
+│   ├── __init__.py           # 导出 OrchestrationService、orchestration_service
+│   ├── service.py            # 主类（组合各 mixin）+ 模板查询/认证检测
+│   ├── deploy.py             # DeployMixin：部署/重新部署
+│   ├── importer.py           # ImportMixin：扫描导入候选/导入现有容器
+│   ├── provisioning.py       # ProvisionMixin：部署后配置下发
+│   ├── instances.py          # InstanceMixin：实例组 CRUD
+│   ├── credentials.py / shared_config.py / deploy_task_service.py
+└── system/              # 系统级共享服务
+    ├── __init__.py           # re-export 全部公开名
+    ├── config_service.py     # SystemConfigService + 单例
+    ├── storage.py            # StoragePathResolver
+    └── port_allocator.py     # 端口分配/预留
 ```
 
-`app/core/docker_manager.py` 与 `app/core/compose_manager.py` 目前保留为兼容入口，内部重新导出 `services.docker.*` / `services.compose.*` 中的实现，避免外部导入和测试一次性大面积改动。
+`api/orchestration/__init__.py` 统一导出 `orchestrations_router` 与 `deploy_tasks_router`，`main.py` 从该包一处导入。
 
 ## 数据模型关系
 
@@ -228,4 +244,4 @@ DockerComposeProject 1--1 DockerComposeStack
 - **Compose 管理**：通过 `docker compose` CLI 操作；`compose_service` 维护项目级异步锁防止并发操作冲突
 - **Toast 通知**：前端使用自定义 `ToastProvider`（`components/ui/toast.tsx`），通过 `useToast()` 调用
 - **页面拆分**：复杂页面按功能拆分为子组件，放在同目录下；Docker 跨页面共享组件在 `docker/shared/`
-- **业务下沉**：新增业务逻辑优先放到 `services/` 对应领域文件，避免再向 `core/docker_manager.py`、`core/compose_manager.py` 兼容入口追加代码
+- **业务下沉**：新增业务逻辑优先放到 `services/` 对应领域子包；跨领域共享的系统级能力（系统配置、存储路径、端口分配）放 `services/system/`，`core/` 只保留与业务无关的基础设施
