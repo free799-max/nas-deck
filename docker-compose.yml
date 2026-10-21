@@ -30,6 +30,9 @@ services:
         required: false
     volumes:
       - ./data:/data
+      # 存储目录（系统设置-存储配置中配置的宿主机路径，含应用数据目录）如需在后端容器内
+      # 浏览/新建子目录，需将宿主机路径按同样的容器内路径挂载进 backend 容器，例如：
+      # - /mnt/disk1:/mnt/disk1
       # 挂载 docker.sock 用于容器/Compose 管理功能。
       # 风险说明：拥有 docker.sock 即等同宿主机 root 权限，请仅在受信环境部署；
       # 如不需要 Docker 管理功能可删除此挂载（相关功能会自动降级）。

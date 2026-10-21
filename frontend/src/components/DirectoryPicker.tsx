@@ -57,14 +57,10 @@ interface DirectoryPickerProps {
   onOpenChange: (open: boolean) => void;
   /** 浏览根目录（绝对路径） */
   rootPath: string;
-  /** Docker 挂载目录（绝对路径）。若提供，选中该目录下的路径时返回相对于它的路径 */
-  dockerMountDir?: string;
-  /** 初始路径，可为绝对路径或相对 dockerMountDir/rootPath 的路径 */
+  /** 初始路径，可为绝对路径或相对 rootPath 的路径 */
   initialPath?: string;
   /** 选择后返回相对路径，否则返回绝对路径 */
   returnRelative?: boolean;
-  /** 实例名。提供时，相对路径按 dockerMountDir/instanceName 解析 */
-  instanceName?: string;
   onSelect: (path: string) => void;
   /** 自定义目录查询 hook */
   useDirectoriesQuery?: UseDirectoriesHook;
@@ -80,7 +76,6 @@ export function DirectoryPicker({
   open,
   onOpenChange,
   rootPath,
-  dockerMountDir,
   initialPath,
   returnRelative = false,
   onSelect,
@@ -88,12 +83,8 @@ export function DirectoryPicker({
   createDirectory,
   renameDirectory,
   deleteDirectory,
-  instanceName,
 }: DirectoryPickerProps) {
   const normalizedRoot = rootPath.replace(/\/+$/, "") || "/";
-  const normalizedDockerMountDir = dockerMountDir
-    ? dockerMountDir.replace(/\/+$/, "") || "/"
-    : "";
 
   const [currentAbsolutePath, setCurrentAbsolutePath] = useState(normalizedRoot);
   const [inputValue, setInputValue] = useState("");
@@ -116,23 +107,19 @@ export function DirectoryPicker({
     open
   ) ?? { data: undefined, isLoading: false, error: null, refetch: () => {} };
 
-  // 打开时根据 initialPath 定位；相对路径按 dockerMountDir/instanceName 解析
+  // 打开时根据 initialPath 定位；相对路径按 rootPath 解析
   useEffect(() => {
     if (!open) return;
-    const baseForInitial = normalizedDockerMountDir || normalizedRoot;
-    const instanceBase = instanceName
-      ? `${baseForInitial}/${instanceName}`.replace(/\/+/g, "/")
-      : baseForInitial;
     const abs = initialPath
-      ? toAbsolutePath(initialPath, instanceBase)
-      : instanceBase;
+      ? toAbsolutePath(initialPath, normalizedRoot)
+      : normalizedRoot;
     setCurrentAbsolutePath(abs);
     setInputValue(toRelativePath(abs, normalizedRoot));
     setSelectedEntry(null);
     setIsCreating(false);
     setIsRenaming(false);
     setIsDeleteConfirming(false);
-  }, [open, initialPath, normalizedRoot, normalizedDockerMountDir, instanceName]);
+  }, [open, initialPath, normalizedRoot]);
 
   // 当前路径变化时同步输入框
   useEffect(() => {
@@ -175,22 +162,9 @@ export function DirectoryPicker({
   };
 
   const handleSelect = () => {
-    let result: string;
-    const baseForRelative = instanceName
-      ? `${normalizedDockerMountDir}/${instanceName}`.replace(/\/+/g, "/")
-      : normalizedDockerMountDir;
-
-    if (
-      baseForRelative &&
-      (currentAbsolutePath === baseForRelative ||
-        currentAbsolutePath.startsWith(baseForRelative + "/"))
-    ) {
-      result = toRelativePath(currentAbsolutePath, baseForRelative);
-    } else if (returnRelative) {
-      result = toRelativePath(currentAbsolutePath, normalizedRoot);
-    } else {
-      result = currentAbsolutePath;
-    }
+    const result = returnRelative
+      ? toRelativePath(currentAbsolutePath, normalizedRoot)
+      : currentAbsolutePath;
     onSelect(result);
     onOpenChange(false);
   };

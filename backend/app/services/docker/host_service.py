@@ -12,34 +12,38 @@ class HostService(common.BaseDockerService):
     def list_directories(
         self,
         path: str,
-        root_path: str | None = None,
+        root_paths: list[str] | None = None,
     ) -> dict:
         """列出指定路径下的目录条目。
 
         委托给通用文件系统服务实现，保持 Docker 宿主机的 API 入口不变。
         """
-        return filesystem_service.list_directories(path, root_path=root_path)
+        return filesystem_service.list_directories(path, root_paths=root_paths)
 
-    def create_directory(self, path: str, root_path: str | None = None) -> dict:
+    def create_directory(
+        self, path: str, root_paths: list[str] | None = None
+    ) -> dict:
         """创建目录。"""
-        return filesystem_service.create_directory(path, root_path=root_path)
+        return filesystem_service.create_directory(path, root_paths=root_paths)
 
     def rename_directory(
         self,
         old_path: str,
         new_name: str,
-        root_path: str | None = None,
+        root_paths: list[str] | None = None,
     ) -> dict:
         """重命名目录。"""
         return filesystem_service.rename_directory(
             old_path,
             new_name,
-            root_path=root_path,
+            root_paths=root_paths,
         )
 
-    def delete_directory(self, path: str, root_path: str | None = None) -> None:
+    def delete_directory(
+        self, path: str, root_paths: list[str] | None = None
+    ) -> None:
         """删除目录（递归删除非空目录）。"""
-        filesystem_service.delete_directory(path, root_path=root_path)
+        filesystem_service.delete_directory(path, root_paths=root_paths)
 
     def get_host_info(self) -> dict | None:
         """获取 Docker 宿主机综合信息。"""

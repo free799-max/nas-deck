@@ -13,9 +13,17 @@ from app.services.system.port_allocator import (
     reserve_ports,
 )
 from app.services.system.storage import StoragePathResolver
+from app.services.system.storage_directory_service import (
+    StorageDirectoryService,
+    get_browse_roots,
+    storage_directory_service,
+)
 
 __all__ = [
     "StoragePathResolver",
+    "StorageDirectoryService",
+    "storage_directory_service",
+    "get_browse_roots",
     "SystemConfigService",
     "system_config_service",
     "allocate_and_reserve",

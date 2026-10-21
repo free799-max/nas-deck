@@ -8,16 +8,11 @@ import { useState } from "react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
-import { DirectoryPicker } from "@/components/DirectoryPicker";
-import { generatePassword, toDisplayPath } from "@/lib/utils";
-import { useSystemConfig } from "@/hooks/useSettings";
-import {
-  useCreateDirectory,
-  useDeleteDirectory,
-  useDirectories,
-  useRenameDirectory,
-} from "@/hooks/useHost";
-import { Minus, Plus, ChevronUp, ChevronDown, FolderOpen, RefreshCw, Package } from "lucide-react";
+import { DataDirPathInput } from "@/components/DataDirPathInput";
+import { generatePassword } from "@/lib/utils";
+import { useStorageDirectories } from "@/hooks/useSettings";
+import type { StorageDirectory } from "@/api/settings";
+import { Minus, Plus, ChevronUp, ChevronDown, RefreshCw, Package } from "lucide-react";
 
 /** Schema 属性定义 */
 export interface SchemaProperty {
@@ -63,8 +58,6 @@ interface SchemaFormProps {
   data: Record<string, unknown>;
   /** 表单数据变化回调 */
   onChange: (data: Record<string, unknown>) => void;
-  /** 实例名，用于相对路径展示 */
-  instanceName?: string;
   /** 应用镜像名，用于渲染镜像标签选择 */
   image?: string;
   /** 可用镜像标签列表 */
@@ -75,14 +68,13 @@ interface SchemaFormProps {
 
 /**
  * 目录字段相关服务，由 SchemaForm 顶层统一获取后逐级下发，
- * 避免每个字段实例各自调用 useSystemConfig 与目录 mutation hooks。
+ * 避免每个字段实例各自调用 useStorageDirectories。
  */
 interface DirectoryServices {
-  hostRootDir: string;
-  dockerMountDir: string;
-  createDirectory: ReturnType<typeof useCreateDirectory>;
-  renameDirectory: ReturnType<typeof useRenameDirectory>;
-  deleteDirectory: ReturnType<typeof useDeleteDirectory>;
+  /** 应用数据目录（is_app_data 的启用记录）；未配置时为 null */
+  appDataDir: StorageDirectory | null;
+  /** 已启用的普通数据目录，供目录字段的来源下拉使用 */
+  storageDirectories: StorageDirectory[];
 }
 
 interface FieldInputProps {
@@ -92,7 +84,6 @@ interface FieldInputProps {
   required: boolean;
   onChange: (key: string, value: unknown) => void;
   hideLabel?: boolean;
-  instanceName?: string;
   directoryServices: DirectoryServices;
 }
 
@@ -103,11 +94,9 @@ function FieldInput({
   required,
   onChange,
   hideLabel = false,
-  instanceName,
   directoryServices,
 }: FieldInputProps) {
   const label = prop.title || propKey;
-  const [pickerOpen, setPickerOpen] = useState(false);
 
   const handleChange = (next: unknown) => {
     onChange(propKey, next);
@@ -202,50 +191,22 @@ function FieldInput({
     />
   );
 
-  // 目录选择：输入框 + 浏览按钮
+  // 目录选择：目录来源下拉 + 子路径输入框 + 浏览按钮
   if (isDirectoryField) {
-    const { hostRootDir, dockerMountDir, createDirectory, renameDirectory, deleteDirectory } =
-      directoryServices;
+    const { appDataDir, storageDirectories } = directoryServices;
     const currentValue =
       value === undefined || value === null ? "" : String(value);
-    const displayValue = toDisplayPath(currentValue, hostRootDir, dockerMountDir, instanceName);
 
     return (
       <div className="space-y-1">
         {!hideLabel && labelNode}
-        <div className="flex items-center gap-2">
-          <Input
-            id={propKey}
-            type="text"
-            value={displayValue}
-            readOnly
-            placeholder={hideLabel ? label : prop.description}
-            className="h-8 rounded-md border-input bg-white px-2 text-sm shadow-none"
-          />
-          <Button
-            type="button"
-            variant="secondary"
-            size="icon"
-            className="h-8 w-8 shrink-0 rounded-md"
-            onClick={() => setPickerOpen(true)}
-            title="选择目录"
-          >
-            <FolderOpen className="h-4 w-4" />
-          </Button>
-        </div>
-        <DirectoryPicker
-          open={pickerOpen}
-          onOpenChange={setPickerOpen}
-          rootPath={hostRootDir}
-          dockerMountDir={dockerMountDir}
-          initialPath={currentValue}
-          returnRelative={false}
-          instanceName={instanceName}
-          onSelect={(path) => handleChange(path)}
-          useDirectoriesQuery={useDirectories}
-          createDirectory={createDirectory}
-          renameDirectory={renameDirectory}
-          deleteDirectory={deleteDirectory}
+        <DataDirPathInput
+          id={propKey}
+          value={currentValue}
+          onChange={(path) => handleChange(path)}
+          placeholder={hideLabel ? label : prop.description}
+          appDataDir={appDataDir}
+          storageDirectories={storageDirectories}
         />
       </div>
     );
@@ -287,7 +248,6 @@ interface ArrayFieldProps {
   value: unknown;
   required: boolean;
   onChange: (key: string, value: unknown) => void;
-  instanceName?: string;
   directoryServices: DirectoryServices;
 }
 
@@ -297,7 +257,6 @@ function ArrayField({
   value,
   required,
   onChange,
-  instanceName,
   directoryServices,
 }: ArrayFieldProps) {
   const rows = Array.isArray(value) ? (value as Record<string, unknown>[]) : [];
@@ -379,7 +338,6 @@ function ArrayField({
                   required={itemRequired.has(key)}
                   onChange={(_, val) => updateRow(index, key, val)}
                   hideLabel
-                  instanceName={instanceName}
                   directoryServices={directoryServices}
                 />
               </div>
@@ -475,7 +433,6 @@ function ContainerSchemaForm({
   schema,
   data,
   onChange,
-  instanceName,
   image,
   imageTags,
   imageTagsLoading,
@@ -484,7 +441,6 @@ function ContainerSchemaForm({
   schema: SchemaFormProps["schema"];
   data: Record<string, unknown>;
   onChange: (data: Record<string, unknown>) => void;
-  instanceName?: string;
   image?: string;
   imageTags?: string[];
   imageTagsLoading?: boolean;
@@ -540,7 +496,6 @@ function ContainerSchemaForm({
                   value={data[key]}
                   required={requiredSet.has(key)}
                   onChange={handleChange}
-                  instanceName={instanceName}
                   directoryServices={directoryServices}
                 />
               );
@@ -554,7 +509,6 @@ function ContainerSchemaForm({
                   required={requiredSet.has(key)}
                   onChange={handleChange}
                   hideLabel
-                  instanceName={instanceName}
                   directoryServices={directoryServices}
                 />
               </div>
@@ -652,7 +606,6 @@ function PlainSchemaForm({
   schema,
   data,
   onChange,
-  instanceName,
   image,
   imageTags,
   imageTagsLoading,
@@ -661,7 +614,6 @@ function PlainSchemaForm({
   schema: SchemaFormProps["schema"];
   data: Record<string, unknown>;
   onChange: (data: Record<string, unknown>) => void;
-  instanceName?: string;
   image?: string;
   imageTags?: string[];
   imageTagsLoading?: boolean;
@@ -720,7 +672,6 @@ function PlainSchemaForm({
                     value={data[key]}
                     required={required}
                     onChange={handleChange}
-                    instanceName={instanceName}
                     directoryServices={directoryServices}
                   />
                 </div>
@@ -735,7 +686,6 @@ function PlainSchemaForm({
               value={data[key]}
               required={requiredSet.has(key)}
               onChange={handleChange}
-              instanceName={instanceName}
               directoryServices={directoryServices}
             />
           );
@@ -748,25 +698,21 @@ export function SchemaForm({
   schema,
   data,
   onChange,
-  instanceName,
   image,
   imageTags,
   imageTagsLoading,
 }: SchemaFormProps) {
   const hasContainers = schema?.containers && schema.containers.length > 0;
 
-  // 目录字段依赖的系统配置与目录操作 hooks 统一在顶层获取一次
-  const { data: systemConfig } = useSystemConfig();
-  const createDirectory = useCreateDirectory();
-  const renameDirectory = useRenameDirectory();
-  const deleteDirectory = useDeleteDirectory();
-  const hostRootDir = systemConfig?.storage_host_root_dir || "/";
+  // 目录字段依赖的存储目录列表统一在顶层获取一次：
+  // is_app_data 的启用记录作为应用数据目录来源，其余启用记录为数据目录
+  const { data: storageDirectoriesData } = useStorageDirectories();
+  const enabledDirectories = (storageDirectoriesData ?? []).filter(
+    (d) => d.enabled
+  );
   const directoryServices: DirectoryServices = {
-    hostRootDir,
-    dockerMountDir: systemConfig?.storage_docker_mount_dir || hostRootDir,
-    createDirectory,
-    renameDirectory,
-    deleteDirectory,
+    appDataDir: enabledDirectories.find((d) => d.is_app_data) ?? null,
+    storageDirectories: enabledDirectories.filter((d) => !d.is_app_data),
   };
 
   if (!hasContainers) {
@@ -775,7 +721,6 @@ export function SchemaForm({
         schema={schema}
         data={data}
         onChange={onChange}
-        instanceName={instanceName}
         image={image}
         imageTags={imageTags}
         imageTagsLoading={imageTagsLoading}
@@ -789,7 +734,6 @@ export function SchemaForm({
       schema={schema}
       data={data}
       onChange={onChange}
-      instanceName={instanceName}
       image={image}
       imageTags={imageTags}
       imageTagsLoading={imageTagsLoading}

@@ -10,53 +10,39 @@ class TestStoragePathResolver:
     """测试宿主机/容器路径转换逻辑。"""
 
     def test_configured_property(self):
-        """configured 属性反映是否已配置两个目录。"""
-        assert StoragePathResolver("/mnt/data", "/mnt/data/docker").configured is True
-        assert StoragePathResolver("/mnt/data", None).configured is False
-        assert StoragePathResolver(None, "/mnt/data/docker").configured is False
+        """configured 属性反映是否已配置应用数据目录。"""
+        assert StoragePathResolver(app_data=("/mnt/data/docker", "/docker")).configured is True
+        assert StoragePathResolver(app_data=None).configured is False
+        assert StoragePathResolver().configured is False
 
-    def test_validate_requires_both_dirs(self):
-        """validate 在缺少任一配置时应抛出异常（用于实际部署校验）。"""
-        with pytest.raises(APIException):
-            StoragePathResolver("/mnt/data", None).validate()
-        with pytest.raises(APIException):
-            StoragePathResolver(None, "/mnt/data/docker").validate()
+    def test_validate_requires_app_data(self):
+        """validate 在未配置应用数据目录时应抛出异常（用于实际部署校验）。"""
+        with pytest.raises(APIException) as exc_info:
+            StoragePathResolver().validate()
+        assert exc_info.value.status_code == 400
+        assert "未配置应用数据目录" in exc_info.value.message
 
-    def test_validate_requires_docker_mount_under_host_root(self):
-        """Docker 挂载目录必须是宿主机根目录的子目录。"""
-        with pytest.raises(APIException):
-            StoragePathResolver("/mnt/data", "/opt/docker").validate()
-
-    def test_validate_accepts_root_as_host_root_dir(self):
-        """宿主机根目录为 / 时，任意非根 Docker 挂载目录应视为子目录。"""
-        resolver = StoragePathResolver("/", "/opt/docker")
+    def test_validate_accepts_explicit_mapping(self):
+        """应用数据目录为显式映射时 validate 通过，两个 base 直接取配置值。"""
+        resolver = StoragePathResolver(app_data=("/opt/docker", "/docker"))
         resolver.validate()
         assert resolver.host_mount_base == "/opt/docker"
-        assert resolver.container_mount_base == "/opt/docker"
-
-    def test_with_defaults_uses_root_when_unconfigured(self):
-        """未配置时 with_defaults 返回使用根目录的解析器，用于预览。"""
-        resolver = StoragePathResolver(None, None).with_defaults()
-        assert resolver.host_mount_base == "/"
-        assert resolver.container_mount_base == ""
-
-    def test_container_mount_base_when_nested(self):
-        """嵌套时容器基础路径为去掉根前缀后的相对路径。"""
-        resolver = StoragePathResolver("/mnt/data", "/mnt/data/docker")
-        resolver.validate()
-        assert resolver.host_mount_base == "/mnt/data/docker"
         assert resolver.container_mount_base == "/docker"
 
-    def test_container_mount_base_when_same(self):
-        """两者相同时容器基础路径为空。"""
-        resolver = StoragePathResolver("/mnt/data", "/mnt/data")
-        resolver.validate()
-        assert resolver.host_mount_base == "/mnt/data"
-        assert resolver.container_mount_base == ""
+    def test_with_defaults_uses_root_when_unconfigured(self):
+        """未配置时 with_defaults 返回使用根目录恒等映射的解析器，用于预览。"""
+        resolver = StoragePathResolver().with_defaults()
+        assert resolver.host_mount_base == "/"
+        assert resolver.container_mount_base == "/"
+
+    def test_with_defaults_keeps_configured_resolver(self):
+        """已配置时 with_defaults 返回自身。"""
+        resolver = StoragePathResolver(app_data=("/opt/docker", "/docker"))
+        assert resolver.with_defaults() is resolver
 
     def test_make_host_path(self):
         """自动生成宿主机挂载目录。"""
-        resolver = StoragePathResolver("/mnt/data", "/mnt/data/docker")
+        resolver = StoragePathResolver(app_data=("/mnt/data/docker", "/docker"))
         assert (
             resolver.make_host_path("moviepilot", "moviepilot", "config")
             == "/mnt/data/docker/moviepilot/moviepilot/config"
@@ -64,54 +50,63 @@ class TestStoragePathResolver:
 
     def test_make_container_path(self):
         """自动生成容器内挂载目录。"""
-        resolver = StoragePathResolver("/mnt/data", "/mnt/data/docker")
+        resolver = StoragePathResolver(app_data=("/mnt/data/docker", "/docker"))
         assert (
             resolver.make_container_path("moviepilot", "moviepilot", "config")
             == "/docker/moviepilot/moviepilot/config"
         )
 
-    def test_to_container_path_under_host_root(self):
-        """宿主机根目录下的路径转换为容器相对路径。"""
-        resolver = StoragePathResolver("/mnt/data", "/mnt/data/docker")
-        assert resolver.to_container_path("/mnt/data/movies") == "/movies"
-
-    def test_to_container_path_for_docker_mount(self):
-        """Docker 挂载目录本身转换为容器基础路径。"""
-        resolver = StoragePathResolver("/mnt/data", "/mnt/data/docker")
+    def test_to_container_path_from_app_data_host_prefix(self):
+        """应用数据目录宿主机视角前缀换成容器视角前缀。"""
+        resolver = StoragePathResolver(app_data=("/mnt/data/docker", "/docker"))
         assert resolver.to_container_path("/mnt/data/docker") == "/docker"
+        assert resolver.to_container_path("/mnt/data/docker/app") == "/docker/app"
 
-    def test_to_container_path_for_container_absolute(self):
-        """容器视角绝对路径保持原样。"""
-        resolver = StoragePathResolver("/mnt/data", "/mnt/data/docker")
+    def test_to_container_path_from_app_data_mount_prefix_passthrough(self):
+        """已是应用数据目录容器视角的路径原样返回。"""
+        resolver = StoragePathResolver(app_data=("/mnt/data/docker", "/docker"))
+        assert resolver.to_container_path("/docker/app/config") == "/docker/app/config"
+
+    def test_to_container_path_for_other_absolute(self):
+        """不受管的其他绝对路径保持原样。"""
+        resolver = StoragePathResolver(app_data=("/mnt/data/docker", "/docker"))
         assert resolver.to_container_path("/media") == "/media"
+        assert resolver.to_container_path("/mnt/data/movies") == "/mnt/data/movies"
 
     def test_to_container_path_for_relative(self):
-        """相对路径视为在 Docker 挂载目录下，按容器基础路径转换。"""
-        resolver = StoragePathResolver("/mnt/data", "/mnt/data/docker")
+        """相对路径视为在应用数据目录下，拼到容器挂载基础路径下。"""
+        resolver = StoragePathResolver(app_data=("/mnt/data/docker", "/docker"))
         assert resolver.to_container_path("movies") == "/docker/movies"
         assert (
             resolver.to_container_path("moviepilot/moviepilot/config")
             == "/docker/moviepilot/moviepilot/config"
         )
 
-    def test_to_host_path_for_host_absolute(self):
-        """宿主机根目录下的绝对路径保持原样。"""
-        resolver = StoragePathResolver("/mnt/data", "/mnt/data/docker")
-        assert resolver.to_host_path("/mnt/data/movies") == "/mnt/data/movies"
+    def test_to_container_path_empty(self):
+        """空字符串原样返回。"""
+        resolver = StoragePathResolver(app_data=("/mnt/data/docker", "/docker"))
+        assert resolver.to_container_path("") == ""
 
-    def test_to_host_path_for_container_base(self):
-        """以容器基础路径开头的路径还原为宿主机路径。"""
-        resolver = StoragePathResolver("/mnt/data", "/mnt/data/docker")
+    def test_to_host_path_from_app_data_mount_prefix(self):
+        """应用数据目录容器视角前缀还原为宿主机视角前缀。"""
+        resolver = StoragePathResolver(app_data=("/mnt/data/docker", "/docker"))
+        assert resolver.to_host_path("/docker") == "/mnt/data/docker"
         assert resolver.to_host_path("/docker/movies") == "/mnt/data/docker/movies"
+
+    def test_to_host_path_from_app_data_host_prefix_passthrough(self):
+        """已是应用数据目录宿主机视角的路径原样返回。"""
+        resolver = StoragePathResolver(app_data=("/mnt/data/docker", "/docker"))
+        assert resolver.to_host_path("/mnt/data/docker/app") == "/mnt/data/docker/app"
 
     def test_to_host_path_for_other_absolute(self):
         """其他绝对路径视为用户指定的宿主机路径。"""
-        resolver = StoragePathResolver("/mnt/data", "/mnt/data/docker")
+        resolver = StoragePathResolver(app_data=("/mnt/data/docker", "/docker"))
         assert resolver.to_host_path("/media") == "/media"
+        assert resolver.to_host_path("/mnt/data/movies") == "/mnt/data/movies"
 
     def test_to_host_path_for_relative(self):
-        """相对路径拼接到 Docker 挂载目录。"""
-        resolver = StoragePathResolver("/mnt/data", "/mnt/data/docker")
+        """相对路径拼接到应用数据目录（宿主机视角）。"""
+        resolver = StoragePathResolver(app_data=("/mnt/data/docker", "/docker"))
         assert (
             resolver.to_host_path("movies") == "/mnt/data/docker/movies"
         )
@@ -120,27 +115,111 @@ class TestStoragePathResolver:
             == "/mnt/data/docker/moviepilot/moviepilot/config"
         )
 
-    def test_to_host_path_with_root_slash(self):
-        """宿主机根目录为 / 时不应产生双斜杠。"""
-        resolver = StoragePathResolver("/", "/opt/docker")
-        assert resolver.to_host_path("movies") == "/opt/docker/movies"
-        assert (
-            resolver.to_host_path("moviepilot/moviepilot/config")
-            == "/opt/docker/moviepilot/moviepilot/config"
-        )
-
-    def test_to_container_path_with_root_slash(self):
-        """宿主机根目录为 / 时相对路径应转换为 /opt/docker/... 容器视角。"""
-        resolver = StoragePathResolver("/", "/opt/docker")
-        assert resolver.to_container_path("movies") == "/opt/docker/movies"
-        assert (
-            resolver.to_container_path("moviepilot/moviepilot/config")
-            == "/opt/docker/moviepilot/moviepilot/config"
-        )
+    def test_identity_mapping_round_trip(self):
+        """恒等映射（如 with_defaults 的根目录）下绝对路径双向原样。"""
+        resolver = StoragePathResolver(app_data=("/", "/"))
+        assert resolver.to_host_path("movies") == "/movies"
+        assert resolver.to_container_path("movies") == "/movies"
+        assert resolver.to_host_path("/opt/docker") == "/opt/docker"
+        assert resolver.to_container_path("/opt/docker") == "/opt/docker"
 
     def test_trailing_slashes_are_normalized(self):
         """尾部斜杠应被规范化。"""
-        resolver = StoragePathResolver("/mnt/data/", "/mnt/data/docker/")
+        resolver = StoragePathResolver(app_data=("/mnt/data/docker/", "/docker/"))
         resolver.validate()
         assert resolver.host_mount_base == "/mnt/data/docker"
         assert resolver.container_mount_base == "/docker"
+
+
+class TestStoragePathResolverDataDirectories:
+    """测试数据目录的路径转换与受管路径判断。"""
+
+    def _resolver(self) -> StoragePathResolver:
+        return StoragePathResolver(
+            app_data=("/mnt/data/docker", "/docker"),
+            data_directories=[("/mnt/media/", "/data/media/")],
+        )
+
+    def test_has_data_directories(self):
+        """has_data_directories 反映是否配置了任一存储目录（含应用数据目录）。"""
+        assert self._resolver().has_data_directories is True
+        # 仅配置应用数据目录也视为已配置存储目录
+        assert (
+            StoragePathResolver(app_data=("/mnt/data/docker", "/docker")).has_data_directories
+            is True
+        )
+        assert StoragePathResolver().has_data_directories is False
+        # 空对的条目会被忽略
+        assert (
+            StoragePathResolver(data_directories=[("", "")]).has_data_directories
+            is False
+        )
+
+    def test_data_directories_are_normalized(self):
+        """数据目录路径尾部斜杠被规范化。"""
+        resolver = self._resolver()
+        assert resolver.data_directories == [("/mnt/media", "/data/media")]
+
+    def test_to_container_path_from_host_path(self):
+        """数据目录 host_path 前缀换成 mount_path 前缀。"""
+        resolver = self._resolver()
+        assert resolver.to_container_path("/mnt/media/movies") == "/data/media/movies"
+        assert resolver.to_container_path("/mnt/media") == "/data/media"
+
+    def test_to_container_path_from_mount_path_passthrough(self):
+        """已是数据目录容器视角的路径原样返回。"""
+        resolver = self._resolver()
+        assert resolver.to_container_path("/data/media/movies") == "/data/media/movies"
+
+    def test_to_container_path_prefers_longest_prefix(self):
+        """前缀匹配按长度降序，避免短前缀抢先。"""
+        resolver = StoragePathResolver(
+            app_data=("/mnt/data", "/data"),
+            data_directories=[("/mnt/data/media", "/media")],
+        )
+        # host_path 嵌套在应用数据目录下时，优先命中更长的数据目录前缀
+        assert resolver.to_container_path("/mnt/data/media/movies") == "/media/movies"
+        assert resolver.to_container_path("/mnt/data/other") == "/data/other"
+
+    def test_to_container_path_regression_without_data_directories(self):
+        """无数据目录时行为不变。"""
+        resolver = StoragePathResolver(app_data=("/mnt/data/docker", "/docker"))
+        assert resolver.to_container_path("/mnt/media/movies") == "/mnt/media/movies"
+        assert resolver.to_container_path("/mnt/data/docker/movies") == "/docker/movies"
+        assert resolver.to_container_path("movies") == "/docker/movies"
+
+    def test_to_host_path_from_mount_path(self):
+        """数据目录 mount_path 前缀还原为 host_path 前缀。"""
+        resolver = self._resolver()
+        assert resolver.to_host_path("/data/media/movies") == "/mnt/media/movies"
+        assert resolver.to_host_path("/data/media") == "/mnt/media"
+
+    def test_to_host_path_from_host_path_passthrough(self):
+        """已是数据目录宿主机视角的路径原样返回。"""
+        resolver = self._resolver()
+        assert resolver.to_host_path("/mnt/media/movies") == "/mnt/media/movies"
+
+    def test_to_host_path_regression_without_data_directories(self):
+        """无数据目录时行为不变。"""
+        resolver = StoragePathResolver(app_data=("/mnt/data/docker", "/docker"))
+        assert resolver.to_host_path("/data/media/movies") == "/data/media/movies"
+        assert resolver.to_host_path("/docker/movies") == "/mnt/data/docker/movies"
+        assert resolver.to_host_path("movies") == "/mnt/data/docker/movies"
+
+    def test_is_managed_path(self):
+        """任一视角落在受管理目录下的路径返回 True。"""
+        resolver = self._resolver()
+        # 应用数据目录两个视角
+        assert resolver.is_managed_path("/mnt/data/docker/app/config") is True
+        assert resolver.is_managed_path("/docker/app/config") is True
+        # 数据目录两个视角
+        assert resolver.is_managed_path("/data/media/movies") is True
+        assert resolver.is_managed_path("/mnt/media/movies") is True
+        assert resolver.is_managed_path("/mnt/media") is True
+        # 不受管理的路径
+        assert resolver.is_managed_path("/etc/passwd") is False
+        # 路径段边界：/mnt/media2 不属于 /mnt/media
+        assert resolver.is_managed_path("/mnt/media2/x") is False
+        # 空路径
+        assert resolver.is_managed_path("") is False
+        assert resolver.is_managed_path(None) is False

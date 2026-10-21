@@ -30,25 +30,61 @@ class TestFilesystemService:
         outside = tmp_path / ".." / "outside"
 
         with pytest.raises(APIException):
-            service.list_directories(str(outside), root_path=str(allowed))
+            service.list_directories(str(outside), root_paths=[str(allowed)])
 
     def test_list_directories_with_root_path_slash(self, tmp_path):
         """root_path 为 / 时不应误判子目录越界。"""
         service = FilesystemService()
         (tmp_path / "subdir").mkdir()
 
-        result = service.list_directories(str(tmp_path), root_path="/")
+        result = service.list_directories(str(tmp_path), root_paths=["/"])
 
         assert result["path"] == str(tmp_path)
         names = {e["name"] for e in result["entries"]}
         assert "subdir" in names
+
+    def test_list_directories_with_multiple_root_paths(self, tmp_path):
+        """目标路径落在任一 root 下（含 root 本身）即允许。"""
+        service = FilesystemService()
+        root_a = tmp_path / "root_a"
+        root_b = tmp_path / "root_b"
+        root_a.mkdir()
+        root_b.mkdir()
+        outside = tmp_path / "outside"
+        outside.mkdir()
+
+        roots = [str(root_a), str(root_b)]
+        assert service.list_directories(str(root_b), root_paths=roots)["path"] == str(
+            root_b.resolve()
+        )
+        assert service.list_directories(str(root_a), root_paths=roots)["path"] == str(
+            root_a.resolve()
+        )
+        with pytest.raises(APIException) as exc_info:
+            service.list_directories(str(outside), root_paths=roots)
+        assert exc_info.value.status_code == 403
+
+    def test_delete_directory_any_root_itself_forbidden(self, tmp_path):
+        """删除任一允许访问的根目录本身都应被禁止。"""
+        service = FilesystemService()
+        root_a = tmp_path / "root_a"
+        root_b = tmp_path / "root_b"
+        root_a.mkdir()
+        root_b.mkdir()
+
+        with pytest.raises(APIException) as exc_info:
+            service.delete_directory(
+                str(root_b), root_paths=[str(root_a), str(root_b)]
+            )
+        assert exc_info.value.status_code == 403
+        assert root_b.is_dir()
 
     def test_create_directory(self, tmp_path):
         """创建目录。"""
         service = FilesystemService()
         result = service.create_directory(
             str(tmp_path / "newdir"),
-            root_path=str(tmp_path),
+            root_paths=[str(tmp_path)],
         )
         assert result["name"] == "newdir"
         assert (tmp_path / "newdir").is_dir()
@@ -61,7 +97,7 @@ class TestFilesystemService:
         with pytest.raises(APIException):
             service.create_directory(
                 str(tmp_path / "exists"),
-                root_path=str(tmp_path),
+                root_paths=[str(tmp_path)],
             )
 
     def test_create_directory_parent_missing(self, tmp_path):
@@ -71,7 +107,7 @@ class TestFilesystemService:
         with pytest.raises(APIException):
             service.create_directory(
                 str(tmp_path / "missing" / "child"),
-                root_path=str(tmp_path),
+                root_paths=[str(tmp_path)],
             )
 
     def test_create_directory_traversal_defense(self, tmp_path):
@@ -81,7 +117,7 @@ class TestFilesystemService:
         with pytest.raises(APIException):
             service.create_directory(
                 "/etc/nasdeck-test-dir",
-                root_path=str(tmp_path),
+                root_paths=[str(tmp_path)],
             )
 
     def test_rename_directory(self, tmp_path):
@@ -92,7 +128,7 @@ class TestFilesystemService:
         result = service.rename_directory(
             str(tmp_path / "old"),
             "new",
-            root_path=str(tmp_path),
+            root_paths=[str(tmp_path)],
         )
 
         assert result["name"] == "new"
@@ -109,7 +145,7 @@ class TestFilesystemService:
             service.rename_directory(
                 str(tmp_path / "old"),
                 "new",
-                root_path=str(tmp_path),
+                root_paths=[str(tmp_path)],
             )
 
     def test_rename_directory_traversal_defense(self, tmp_path):
@@ -120,7 +156,7 @@ class TestFilesystemService:
             service.rename_directory(
                 "/etc",
                 "new",
-                root_path=str(tmp_path),
+                root_paths=[str(tmp_path)],
             )
 
     def test_delete_directory(self, tmp_path):
@@ -131,7 +167,7 @@ class TestFilesystemService:
 
         service.delete_directory(
             str(tmp_path / "del"),
-            root_path=str(tmp_path),
+            root_paths=[str(tmp_path)],
         )
 
         assert not (tmp_path / "del").exists()
@@ -143,7 +179,7 @@ class TestFilesystemService:
         with pytest.raises(APIException):
             service.delete_directory(
                 "/etc",
-                root_path=str(tmp_path),
+                root_paths=[str(tmp_path)],
             )
 
     def test_delete_directory_root_path_itself_forbidden(self, tmp_path):
@@ -152,7 +188,7 @@ class TestFilesystemService:
         (tmp_path / "sub").mkdir()
 
         with pytest.raises(APIException) as exc_info:
-            service.delete_directory(str(tmp_path), root_path=str(tmp_path))
+            service.delete_directory(str(tmp_path), root_paths=[str(tmp_path)])
 
         assert exc_info.value.status_code == 403
         assert (tmp_path / "sub").is_dir()  # 目录未被删除
@@ -162,6 +198,6 @@ class TestFilesystemService:
         service = FilesystemService()
 
         with pytest.raises(APIException) as exc_info:
-            service.delete_directory("/", root_path="/")
+            service.delete_directory("/", root_paths=["/"])
 
         assert exc_info.value.status_code == 403

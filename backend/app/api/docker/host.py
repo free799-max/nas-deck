@@ -17,17 +17,9 @@ from app.schemas.docker import (
     HostInfo,
 )
 from app.services.docker import docker_manager
-from app.services.system import system_config_service
+from app.services.system import get_browse_roots
 
 router = APIRouter(route_class=CustomAPIRoute)
-
-
-async def _get_host_root_dir(db: AsyncSession) -> str:
-    """获取宿主机根目录，未配置时抛异常。"""
-    config = await system_config_service.get_or_create(db)
-    if not config.storage_host_root_dir:
-        raise APIException("未配置宿主机根目录", 400)
-    return config.storage_host_root_dir
 
 
 @router.get("/host/directories", response_model=DirectoryList)
@@ -39,12 +31,12 @@ async def list_host_directories(
     """列出宿主机指定路径下的目录列表。
 
     仅返回子目录，用于前端目录选择器浏览文件系统。
-    只能浏览已配置的宿主机根目录及其子目录。
+    只能浏览可见存储目录（含应用数据目录）及其子目录。
     目标路径不存在时返回空列表，避免前端目录选择器因自动生成的父路径报错。
     """
-    root_path = await _get_host_root_dir(db)
+    root_paths = await get_browse_roots(db)
     try:
-        return docker_manager.list_directories(path, root_path=root_path)
+        return docker_manager.list_directories(path, root_paths=root_paths)
     except APIException as exc:
         if exc.status_code == 404 and "路径不存在" in exc.message:
             return {"path": path, "entries": [], "exists": False}
@@ -58,9 +50,9 @@ async def create_host_directory(
     current_user: User = Depends(require_admin),
 ):
     """在指定父目录下创建子目录。"""
-    root_path = await _get_host_root_dir(db)
+    root_paths = await get_browse_roots(db)
     target_path = f"{data.path.rstrip('/')}/{data.name}"
-    return docker_manager.create_directory(target_path, root_path=root_path)
+    return docker_manager.create_directory(target_path, root_paths=root_paths)
 
 
 @router.put("/host/directories", response_model=DirectoryEntry)
@@ -70,11 +62,11 @@ async def rename_host_directory(
     current_user: User = Depends(require_admin),
 ):
     """重命名目录。"""
-    root_path = await _get_host_root_dir(db)
+    root_paths = await get_browse_roots(db)
     return docker_manager.rename_directory(
         data.old_path,
         data.new_name,
-        root_path=root_path,
+        root_paths=root_paths,
     )
 
 
@@ -85,8 +77,8 @@ async def delete_host_directory(
     current_user: User = Depends(require_admin),
 ):
     """删除目录（递归删除非空目录）。"""
-    root_path = await _get_host_root_dir(db)
-    docker_manager.delete_directory(data.path, root_path=root_path)
+    root_paths = await get_browse_roots(db)
+    docker_manager.delete_directory(data.path, root_paths=root_paths)
     return {"success": True}
 
 

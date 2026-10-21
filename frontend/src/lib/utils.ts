@@ -98,30 +98,6 @@ export function sanitizeInstanceName(name: string): string {
     .replace(/-+/g, "-")
     .slice(0, 50);
 }
-export function toDisplayPath(
-  value: string,
-  hostRootDir: string,
-  dockerMountDir: string,
-  instanceName?: string
-): string {
-  if (!value) return "";
-  if (value.startsWith("/")) {
-    const relative = toRelativePath(value, hostRootDir);
-    if (relative === "") return "/";
-    return `/${relative}`;
-  }
-  // 相对路径视为在 Docker 挂载目录下；若提供实例名，按实例隔离展示
-  const containerBase = toRelativePath(dockerMountDir, hostRootDir);
-  const prefix = containerBase ? `/${containerBase}` : "";
-  if (instanceName) {
-    return `${prefix}/${instanceName}/${value}`;
-  }
-  if (containerBase) {
-    return `/${containerBase}/${value}`;
-  }
-  return `/${value}`;
-}
-
 /** 将相对或绝对路径转换为基于 rootPath 的绝对路径 */
 export function toAbsolutePath(relativeOrAbsolute: string, rootPath: string): string {
   if (!relativeOrAbsolute) return rootPath;

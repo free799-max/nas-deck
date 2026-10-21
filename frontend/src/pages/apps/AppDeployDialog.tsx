@@ -280,7 +280,6 @@ export function AppDeployDialog({
                 }
                 data={config}
                 onChange={setConfig}
-                instanceName={instanceName}
                 image={app.image || ""}
                 imageTags={imageTags}
                 imageTagsLoading={imageTagsLoading}

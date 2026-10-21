@@ -11,6 +11,7 @@
 - DockerComposeProject: Docker Compose 项目模型
 - DockerComposeVersion: Docker Compose 版本模型
 - DockerComposeStack: Docker Compose Stack 运行时状态模型
+- StorageDirectory: 数据目录模型
 """
 
 from app.models.user import User
@@ -22,6 +23,7 @@ from app.models.orchestration import (
     AppInstanceBackup,
 )
 from app.models.system_config import SystemConfig
+from app.models.storage_directory import StorageDirectory
 from app.models.docker import (
     DockerMirrorConfig,
     DockerComposeProject,
@@ -33,7 +35,7 @@ from app.models.docker import (
 # __all__ 显式声明公开导出的模型名称，便于 `from app.models import *` 使用
 __all__ = [
     "User", "App", "AppOrchestration", "AppOrchestrationInstance", "AppInstance", "AppInstanceBackup",
-    "SystemConfig",
+    "SystemConfig", "StorageDirectory",
     "DockerMirrorConfig",
     "DockerComposeProject", "DockerComposeVersion", "DockerComposeStack",
     "COMPOSE_PROJECT_LABEL",

@@ -11,8 +11,15 @@ import {
   getSystemConfig,
   updateSystemConfig,
   getPortSuggestions,
+  listStorageDirectories,
+  createStorageDirectory,
+  updateStorageDirectory,
+  deleteStorageDirectory,
   type SystemConfig,
   type SystemConfigUpdate,
+  type StorageDirectory,
+  type StorageDirectoryCreate,
+  type StorageDirectoryUpdate,
 } from "@/api/settings";
 import {
   settingsDirectoriesApi,
@@ -24,6 +31,11 @@ import {
 
 // 保持既有导出，页面侧 import 路径无需变更
 export type { SystemConfig, SystemConfigUpdate } from "@/api/settings";
+export type {
+  StorageDirectory,
+  StorageDirectoryCreate,
+  StorageDirectoryUpdate,
+} from "@/api/settings";
 export type {
   DirectoryList,
   CreateDirectoryRequest,
@@ -68,6 +80,74 @@ export function usePortSuggestions(count: number) {
     queryKey: ["settings", "port-suggestions", count],
     queryFn: () => getPortSuggestions(count),
     enabled: count > 0,
+  });
+}
+
+/**
+ * 查询数据目录列表
+ */
+export function useStorageDirectories() {
+  return useQuery<StorageDirectory[]>({
+    queryKey: ["settings", "storage-directories"],
+    queryFn: listStorageDirectories,
+  });
+}
+
+/**
+ * 新建数据目录
+ */
+export function useCreateStorageDirectory() {
+  const qc = useQueryClient();
+  const toast = useToast();
+
+  return useMutation({
+    mutationFn: (data: StorageDirectoryCreate) => createStorageDirectory(data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["settings", "storage-directories"] });
+      toast.success("创建成功");
+    },
+    onError: (error: ApiError) => {
+      toast.error(error.displayMessage || "创建失败");
+    },
+  });
+}
+
+/**
+ * 更新数据目录
+ */
+export function useUpdateStorageDirectory() {
+  const qc = useQueryClient();
+  const toast = useToast();
+
+  return useMutation({
+    mutationFn: ({ id, data }: { id: number; data: StorageDirectoryUpdate }) =>
+      updateStorageDirectory(id, data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["settings", "storage-directories"] });
+      toast.success("保存成功");
+    },
+    onError: (error: ApiError) => {
+      toast.error(error.displayMessage || "保存失败");
+    },
+  });
+}
+
+/**
+ * 删除数据目录
+ */
+export function useDeleteStorageDirectory() {
+  const qc = useQueryClient();
+  const toast = useToast();
+
+  return useMutation({
+    mutationFn: (id: number) => deleteStorageDirectory(id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["settings", "storage-directories"] });
+      toast.success("删除成功");
+    },
+    onError: (error: ApiError) => {
+      toast.error(error.displayMessage || "删除失败");
+    },
   });
 }
 

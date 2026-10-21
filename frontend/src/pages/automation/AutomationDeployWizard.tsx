@@ -559,7 +559,6 @@ export function AutomationDeployWizard({
                 onChange={(data) =>
                   setAppConfigs((prev) => ({ ...prev, [appName]: data }))
                 }
-                instanceName={`${instanceName}-${appName}`}
                 image={app.image || undefined}
               />
             </div>

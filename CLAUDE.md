@@ -68,7 +68,7 @@ docker-compose up --build   # 构建并启动前后端容器（后端 :5001，�
 | 数据库 | `database.py` | SQLAlchemy 2.0 异步引擎(asyncpg/aiosqlite)、会话工厂、`get_db()` 依赖（自动 commit/rollback） |
 | API | `api/` | 路由模块（auth/app_store/settings），编排路由在 `api/orchestration/` 子包（orchestrations/deploy_tasks），Docker 路由按领域拆分为 `api/docker/` 子包 |
 | 核心 | `core/` | 基础设施：security(JWT+bcrypt)、custom_route(响应包装)、exceptions、background(后台任务)、task_manager(任务管理器基类 BaseTaskManager) |
-| 业务服务 | `services/` | 按功能域拆分：`docker/`（容器/镜像/宿主机/拉取任务）、`compose/`（Compose 编排/自动发现/YAML 工具）、`orchestration/`（编排与部署任务，service 按职责拆为 deploy/importer/provisioning/instances mixin）、`apps/`（应用客户端）、`app_store/`、`host/`、`system/`（系统配置/存储路径解析/端口分配） |
+| 业务服务 | `services/` | 按功能域拆分：`docker/`（容器/镜像/宿主机/拉取任务）、`compose/`（Compose 编排/自动发现/YAML 工具）、`orchestration/`（编排与部署任务，service 按职责拆为 deploy/importer/provisioning/instances mixin）、`apps/`（应用客户端）、`app_store/`、`host/`、`system/`（系统配置/存储路径解析/数据目录/端口分配） |
 | 模型 | `models/` | SQLAlchemy ORM 模型；Docker 相关模型按领域拆分为 `models/docker/` 子包 |
 | Schema | `schemas/` | Pydantic 请求/响应模型；Docker 与编排相关 Schema 分别拆分为 `schemas/docker/`、`schemas/orchestration/` 子包 |
 | 测试 | `tests/` | pytest，按领域分目录：core/、app_store/、docker/、orchestration/、system/ |
@@ -134,12 +134,15 @@ services/
 │   ├── deploy.py             # DeployMixin：部署/重新部署
 │   ├── importer.py           # ImportMixin：扫描导入候选/导入现有容器
 │   ├── provisioning.py       # ProvisionMixin：部署后配置下发
+│   ├── wiring.py             # WiringMixin：部署后跨应用自动装配（如 qb/jellyfin 配进 MoviePilot）
+│   ├── inspection.py         # InspectionMixin：应用检测/修复调度、插件管理
 │   ├── instances.py          # InstanceMixin：实例组 CRUD
 │   ├── credentials.py / shared_config.py / deploy_task_service.py
 └── system/              # 系统级共享服务
     ├── __init__.py           # re-export 全部公开名
     ├── config_service.py     # SystemConfigService + 单例
-    ├── storage.py            # StoragePathResolver
+    ├── storage.py            # StoragePathResolver（含数据目录 host_path ↔ mount_path 前缀互转）
+    ├── storage_directory_service.py  # 数据目录 CRUD（storage_directories 表，含容器内可见性校验）
     └── port_allocator.py     # 端口分配/预留
 ```
 
@@ -155,6 +158,12 @@ DockerComposeProject 1--1 DockerComposeStack
 
 - `DockerComposeProject` 是独立实体，不依赖插件实例；其当前激活版本通过 `DockerComposeVersion.is_current` 标识。
 - Compose 运行时文件写入 `COMPOSE_WORKSPACE_DIR`（默认 `./data/compose`），并自动注入 `nasdeck.compose.project` 标签用于归属识别。
+
+## 存储目录约定
+
+- **存储目录**统一由 `storage_directories` 表管理（CRUD 在 `/api/settings/storage-directories`），每条维护 `host_path`（宿主机路径，compose bind source）↔ `mount_path`（容器内/表单视角路径）对应关系；保存时校验 `mount_path` 在后端容器内可见，其宿主机路径需挂载进 backend 容器（见 docker-compose.yml 注释示例）。
+- **应用数据目录**（`is_app_data=True`，全局至多一条）是特殊的存储目录，存应用自身持久化小数据，自动按 `<dir>/<app>/<service>/<mount>` 生成挂载；其余为普通**数据目录**（多条），供大数据量应用使用。
+- 部署表单的目录字段强制落在应用数据目录或某个启用数据目录下；部署时 volumes 的绝对 `host_path` 会经 `StoragePathResolver.is_managed_path` 校验。
 
 ## API 响应格式规范
 
@@ -210,16 +219,25 @@ DockerComposeProject 1--1 DockerComposeStack
 
   ```text
   services/apps/
-  ├── base.py              # AppClient 抽象基类、AuthVerifyResult
+  ├── base.py              # AppClient 抽象基类、AuthVerifyResult、InspectReport 等
   ├── registry.py          # app_name -> client_class 注册表
   └── <app>/
       ├── __init__.py
-      └── client.py        # 继承 AppClient，实现 verify_auth，并 register_client
+      ├── client.py        # 继承 AppClient（组合各 mixin），实现 verify_auth，并 register_client
+      ├── inspection.py    # 可选：检测项/自动修复（inspect / apply_fix）
+      └── integration.py   # 可选：业务 API 集成（如 MoviePilot 系统设置/插件）
   ```
 
 - `verify_auth(config: dict)` 接收编排实例中保存的认证配置（`url`、`auth_type`、`username`、`password`、`api_key` 等），返回 `AuthVerifyResult(valid, message)`。
 - 统一检测入口为 `POST /api/orchestrations/auth/verify`，由 `orchestration_service.verify_app_auth()` 根据 `app_name` 调度对应客户端。
 - 新增应用时，只需新增客户端子包并注册，无需修改 API 路由或 Service 调度逻辑。
+
+### 应用检测/优化与自动装配
+
+- `AppClient.inspect(ctx)` / `apply_fix(ctx, item_ids)` 提供每应用检测项与一键修复（qBittorrent 优化项、Jellyfin 库/Webhook、MoviePilot 装配完整性）；调度入口为 `GET/POST /api/orchestrations/instances/{id}/apps/{app}/inspect[/fix]`。
+- 部署/修复后 `WiringMixin._wire_group` 按编排模板 `app_composition` 条目里的 `integrations` 声明自动装配跨应用集成（当前：把 qBittorrent、Jellyfin/Emby 写入 MoviePilot 的 `Downloaders`/`MediaServers` 系统设置），结果落库 `group.app_configs[app]['integrations']`；手动重跑：`POST /api/orchestrations/instances/{id}/wire`。
+- MoviePilot 插件管理：`GET/POST /api/orchestrations/instances/{id}/apps/moviepilot/plugins[/install]`。
+- 前端：`AppConfigPanel` 分 Tab（概览/检测优化/集成），检测面板 `AppInspectPanel`、MoviePilot 集成面板 `MoviePilotIntegrationPanel` 均在 `pages/automation/`。
 
 ### 前端
 

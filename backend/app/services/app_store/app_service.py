@@ -34,6 +34,7 @@ from app.services.system.port_allocator import (
 )
 from app.services.system import (
     StoragePathResolver,
+    storage_directory_service,
     system_config_service,
 )
 
@@ -143,11 +144,13 @@ class AppService:
         return app
 
     async def _get_resolver(self, db: AsyncSession) -> StoragePathResolver:
-        """读取系统存储配置构建路径解析器；未配置时使用根目录默认值。"""
-        system_config = await system_config_service.get_or_create(db)
+        """读取存储目录配置构建路径解析器；未配置应用数据目录时使用根目录默认值。
+
+        同时注入启用的数据目录，供模板渲染时做数据目录的路径前缀转换。
+        """
         resolver = StoragePathResolver(
-            system_config.storage_host_root_dir,
-            system_config.storage_docker_mount_dir,
+            app_data=await storage_directory_service.get_app_data_pair(db),
+            data_directories=await storage_directory_service.list_enabled_pairs(db),
         )
         if not resolver.configured:
             resolver = resolver.with_defaults()
@@ -328,6 +331,7 @@ class AppService:
                 instance_name=instance_name,
                 config=config,
                 check_ports=False,
+                resolver=resolver,
             )
         except APIException as e:
             return {"yaml": None, "error": e.message}
@@ -349,6 +353,7 @@ class AppService:
         config: dict,
         check_ports: bool = True,
         port_start: int = 10000,
+        resolver: StoragePathResolver | None = None,
     ) -> tuple[str, list[int]]:
         """执行部署/预览前的公共校验，返回 (可用的项目名, 分配的端口列表)。
 
@@ -358,6 +363,8 @@ class AppService:
             config: 用户配置（部署时会原地改写其中的端口字段为自动分配的端口）
             check_ports: 是否进行端口分配；预览阶段为 False，部署阶段为 True
             port_start: 服务端口顺序分配的起始端口
+            resolver: 存储路径解析器；配置了数据目录时用于校验 volumes 的
+                宿主机路径是否落在受管理的存储目录下
 
         Note:
             返回的分配端口未预留，调用方需在部署前通过 reserve_ports 预留、
@@ -372,6 +379,25 @@ class AppService:
                 validate(instance=config, schema=schema)
             except ValidationError as e:
                 raise APIException(f"配置校验失败: {e.message}", 400) from e
+
+        # 1.5 数据目录受管路径校验（仅在配置了数据目录时执行）：
+        #     此处校验的是应用自身的 volumes，共享配置合并在更上层发生；
+        #     host_path 为空或相对路径会自动拼到 Docker 挂载目录下，视为受管，跳过校验
+        if resolver is not None and resolver.has_data_directories:
+            volumes = config.get("volumes")
+            if isinstance(volumes, list):
+                for volume in volumes:
+                    if not isinstance(volume, dict):
+                        continue
+                    host_path = str(volume.get("host_path") or "").strip()
+                    if not host_path or not host_path.startswith("/"):
+                        continue
+                    if not resolver.is_managed_path(host_path):
+                        raise APIException(
+                            f"路径 {host_path} 不在已配置的应用数据目录或数据目录下，"
+                            "请前往系统设置-数据目录配置",
+                            400,
+                        )
 
         # 2. 端口顺序分配（仅在部署时执行）：
         #    从起始端口开始按顺序分配，自动跳过已占用端口
@@ -424,11 +450,11 @@ class AppService:
         """
         db_app = await self.get_app(db, app_name)
 
-        # 0. 读取并校验系统存储配置
+        # 0. 读取并校验存储配置（应用数据目录 + 启用的数据目录）
         system_config = await system_config_service.get_or_create(db)
         resolver = StoragePathResolver(
-            system_config.storage_host_root_dir,
-            system_config.storage_docker_mount_dir,
+            app_data=await storage_directory_service.get_app_data_pair(db),
+            data_directories=await storage_directory_service.list_enabled_pairs(db),
         )
         resolver.validate()
 
@@ -437,6 +463,7 @@ class AppService:
             instance_name=instance_name,
             config=config,
             port_start=system_config.service_port_start or 10000,
+            resolver=resolver,
         )
 
         # 4. 检查项目名是否已存在

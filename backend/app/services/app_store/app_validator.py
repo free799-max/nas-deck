@@ -48,7 +48,7 @@ def validate_yaml_template(yaml_template: str, config_schema: dict, image: str =
         "image": image or "example/image",
     }
 
-    resolver = StoragePathResolver(None, None).with_defaults()
+    resolver = StoragePathResolver().with_defaults()
     try:
         env = Environment(loader=BaseLoader(), autoescape=False)
         env.globals["make_host_path"] = resolver.make_host_path

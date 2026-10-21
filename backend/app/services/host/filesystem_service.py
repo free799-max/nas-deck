@@ -16,14 +16,15 @@ class FilesystemService:
     def _resolve_and_defend(
         self,
         path: str,
-        root_path: str | None,
+        root_paths: list[str] | None,
         strict: bool = True,
     ) -> Path:
         """解析路径并做路径遍历防护。
 
         Args:
             path: 用户传入的路径
-            root_path: 允许访问的根目录，若提供则目标路径必须位于其下
+            root_paths: 允许访问的根目录列表，若提供则目标路径必须位于其任一根目录下
+                （根目录本身也允许访问）
             strict: 是否要求路径已存在（Path.resolve 的 strict 参数）
 
         Returns:
@@ -41,24 +42,35 @@ class FilesystemService:
         except Exception as exc:
             raise APIException(f"无效路径: {path}", 400) from exc
 
-        if root_path:
+        for root_path in root_paths or []:
             try:
                 root = Path(root_path).expanduser().resolve()
             except Exception as exc:
                 raise APIException(f"无效根目录: {root_path}", 400) from exc
-            if not target.is_relative_to(root):
-                raise APIException("路径越界，禁止访问该目录", 403)
+            if target.is_relative_to(root):
+                return target
+
+        if root_paths:
+            raise APIException("路径越界，禁止访问该目录", 403)
 
         return target
 
-    def list_directories(self, path: str, root_path: str | None = None) -> dict:
+    def _resolve_roots(self, root_paths: list[str] | None) -> list[Path]:
+        """解析允许访问的根目录列表为真实路径。"""
+        return [
+            Path(root_path).expanduser().resolve() for root_path in (root_paths or [])
+        ]
+
+    def list_directories(
+        self, path: str, root_paths: list[str] | None = None
+    ) -> dict:
         """列出指定路径下的目录条目。
 
         仅返回目录，不返回文件；解析真实路径以防御路径遍历。
 
         Args:
             path: 要浏览的目录路径
-            root_path: 允许访问的根目录
+            root_paths: 允许访问的根目录列表
 
         Returns:
             dict: 包含当前路径和目录条目的字典
@@ -66,7 +78,7 @@ class FilesystemService:
         Raises:
             APIException: 路径无效、不存在、不是目录或无权限访问时
         """
-        target = self._resolve_and_defend(path, root_path)
+        target = self._resolve_and_defend(path, root_paths)
 
         if not target.exists():
             raise APIException(f"路径不存在: {path}", 404)
@@ -92,12 +104,14 @@ class FilesystemService:
             "entries": entries,
         }
 
-    def create_directory(self, path: str, root_path: str | None = None) -> dict:
+    def create_directory(
+        self, path: str, root_paths: list[str] | None = None
+    ) -> dict:
         """创建目录。
 
         Args:
             path: 要创建的目录完整路径
-            root_path: 允许访问的根目录
+            root_paths: 允许访问的根目录列表
 
         Returns:
             dict: 新目录条目
@@ -106,7 +120,7 @@ class FilesystemService:
             APIException: 路径越界、父目录不存在、目录已存在或创建失败时
         """
         # 目标路径可能不存在，使用 strict=False 做遍历防护
-        target = self._resolve_and_defend(path, root_path, strict=False)
+        target = self._resolve_and_defend(path, root_paths, strict=False)
 
         if target.exists():
             raise APIException(f"目录已存在: {path}", 409)
@@ -132,14 +146,14 @@ class FilesystemService:
         self,
         old_path: str,
         new_name: str,
-        root_path: str | None = None,
+        root_paths: list[str] | None = None,
     ) -> dict:
         """重命名目录。
 
         Args:
             old_path: 原目录路径
             new_name: 新目录名（仅名称，不含路径）
-            root_path: 允许访问的根目录
+            root_paths: 允许访问的根目录列表
 
         Returns:
             dict: 新目录条目
@@ -147,13 +161,13 @@ class FilesystemService:
         Raises:
             APIException: 路径越界、原目录不存在、目标已存在或重命名失败时
         """
-        source = self._resolve_and_defend(old_path, root_path)
+        source = self._resolve_and_defend(old_path, root_paths)
         if not source.is_dir():
             raise APIException(f"不是目录: {old_path}", 400)
 
         destination = source.parent / new_name
         # 目标可能不存在，使用 strict=False 做遍历防护
-        self._resolve_and_defend(str(destination), root_path, strict=False)
+        self._resolve_and_defend(str(destination), root_paths, strict=False)
 
         if destination.exists():
             raise APIException(f"目标目录已存在: {new_name}", 409)
@@ -171,27 +185,27 @@ class FilesystemService:
             "is_directory": True,
         }
 
-    def delete_directory(self, path: str, root_path: str | None = None) -> None:
+    def delete_directory(
+        self, path: str, root_paths: list[str] | None = None
+    ) -> None:
         """删除目录（递归删除非空目录）。
 
         Args:
             path: 要删除的目录路径
-            root_path: 允许访问的根目录
+            root_paths: 允许访问的根目录列表
 
         Raises:
             APIException: 路径越界、不存在、不是目录或删除失败时
         """
-        target = self._resolve_and_defend(path, root_path)
+        target = self._resolve_and_defend(path, root_paths)
         if not target.is_dir():
             raise APIException(f"不是目录: {path}", 400)
 
         # 根目录保护：禁止删除文件系统根目录与允许访问的根目录本身
         if target.parent == target:
             raise APIException("禁止删除根目录", 403)
-        if root_path:
-            root = Path(root_path).expanduser().resolve()
-            if target == root:
-                raise APIException("禁止删除根目录本身", 403)
+        if target in self._resolve_roots(root_paths):
+            raise APIException("禁止删除根目录本身", 403)
 
         try:
             shutil.rmtree(target)

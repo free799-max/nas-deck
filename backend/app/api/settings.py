@@ -1,6 +1,6 @@
 """系统设置 API 模块。
 
-提供系统全局配置的查询、更新以及目录浏览/操作接口。
+提供系统全局配置的查询、更新、数据目录管理以及目录浏览/操作接口。
 """
 
 import asyncio
@@ -14,6 +14,11 @@ from app.core.security import get_current_user, require_admin
 from app.database import get_db
 from app.models.user import User
 from app.schemas.system_config import SystemConfigOut, SystemConfigUpdate
+from app.schemas.storage_directory import (
+    StorageDirectoryCreate,
+    StorageDirectoryOut,
+    StorageDirectoryUpdate,
+)
 from app.schemas.docker import (
     DirectoryCreateRequest,
     DirectoryDeleteRequest,
@@ -23,7 +28,11 @@ from app.schemas.docker import (
 )
 from app.services.host.filesystem_service import filesystem_service
 from app.services.system.port_allocator import allocate_free_ports, get_used_ports
-from app.services.system import system_config_service
+from app.services.system import (
+    get_browse_roots,
+    storage_directory_service,
+    system_config_service,
+)
 
 router = APIRouter(prefix="/api/settings", tags=["settings"], route_class=CustomAPIRoute)
 
@@ -73,14 +82,6 @@ async def get_port_suggestions(
     return {"ports": ports}
 
 
-async def _get_host_root_dir(db: AsyncSession) -> str:
-    """获取宿主机根目录，未配置时抛异常。"""
-    config = await system_config_service.get_or_create(db)
-    if not config.storage_host_root_dir:
-        raise APIException("未配置宿主机根目录", 400)
-    return config.storage_host_root_dir
-
-
 @router.get("/directories", response_model=DirectoryList)
 async def list_directories(
     path: str,
@@ -90,12 +91,12 @@ async def list_directories(
     """列出宿主机指定路径下的目录列表。
 
     用于前端目录选择器浏览文件系统，与 Docker 无关。
-    只能浏览已配置的宿主机根目录及其子目录。
+    只能浏览可见存储目录（含应用数据目录）及其子目录。
     目标路径不存在时返回空列表，避免前端目录选择器因自动生成的父路径报错。
     """
-    root_path = await _get_host_root_dir(db)
+    root_paths = await get_browse_roots(db)
     try:
-        return filesystem_service.list_directories(path, root_path=root_path)
+        return filesystem_service.list_directories(path, root_paths=root_paths)
     except APIException as exc:
         if exc.status_code == 404 and "路径不存在" in exc.message:
             return {"path": path, "entries": [], "exists": False}
@@ -109,9 +110,9 @@ async def create_directory(
     current_user: User = Depends(require_admin),
 ):
     """在指定父目录下创建子目录。"""
-    root_path = await _get_host_root_dir(db)
+    root_paths = await get_browse_roots(db)
     target_path = f"{data.path.rstrip('/')}/{data.name}"
-    return filesystem_service.create_directory(target_path, root_path=root_path)
+    return filesystem_service.create_directory(target_path, root_paths=root_paths)
 
 
 @router.put("/directories", response_model=DirectoryEntry)
@@ -121,11 +122,11 @@ async def rename_directory(
     current_user: User = Depends(require_admin),
 ):
     """重命名目录。"""
-    root_path = await _get_host_root_dir(db)
+    root_paths = await get_browse_roots(db)
     return filesystem_service.rename_directory(
         data.old_path,
         data.new_name,
-        root_path=root_path,
+        root_paths=root_paths,
     )
 
 
@@ -136,6 +137,53 @@ async def delete_directory(
     current_user: User = Depends(require_admin),
 ):
     """删除目录（递归删除非空目录）。"""
-    root_path = await _get_host_root_dir(db)
-    filesystem_service.delete_directory(data.path, root_path=root_path)
+    root_paths = await get_browse_roots(db)
+    filesystem_service.delete_directory(data.path, root_paths=root_paths)
+    return {"success": True}
+
+
+# ---------- 数据目录管理 ----------
+
+
+@router.get("/storage-directories", response_model=list[StorageDirectoryOut])
+async def list_storage_directories(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """列出全部数据目录（按 sort_order、id 排序），附带容器可见性。"""
+    directories = await storage_directory_service.list(db)
+    return [storage_directory_service.to_dict(d) for d in directories]
+
+
+@router.post("/storage-directories", response_model=StorageDirectoryOut)
+async def create_storage_directory(
+    data: StorageDirectoryCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    """创建数据目录。"""
+    directory = await storage_directory_service.create(db, data)
+    return storage_directory_service.to_dict(directory)
+
+
+@router.put("/storage-directories/{dir_id}", response_model=StorageDirectoryOut)
+async def update_storage_directory(
+    dir_id: int,
+    data: StorageDirectoryUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    """更新数据目录，不存在时返回 404。"""
+    directory = await storage_directory_service.update(db, dir_id, data)
+    return storage_directory_service.to_dict(directory)
+
+
+@router.delete("/storage-directories/{dir_id}")
+async def delete_storage_directory(
+    dir_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    """删除数据目录，不存在时返回 404。"""
+    await storage_directory_service.delete(db, dir_id)
     return {"success": True}
