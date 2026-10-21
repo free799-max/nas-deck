@@ -126,6 +126,15 @@ class ProvisionMixin:
             except Exception:
                 logger.exception("应用 %s 账号自动配置调度失败", app_name)
 
+        # 所有应用账号配置完毕后，按模板 integrations 声明把来源应用
+        # （下载器/媒体服务器）自动装配进目标应用（如 MoviePilot）。
+        # 注：无任何待配置应用时 _schedule_provisioning 不会调度本协程，
+        # 该场景下自动装配也不触发（没有已配置应用可装配），属预期行为。
+        try:
+            await self._wire_group(group_id)
+        except Exception:
+            logger.exception("实例组 %s 自动装配调度失败", group_id)
+
     async def _write_provision_result(
         self,
         group_id: int,
@@ -154,8 +163,8 @@ class ProvisionMixin:
             group.app_configs = app_configs
             await db.commit()
 
-    def _resolve_provision_client(self, app_name: str):
-        """按应用名获取支持自动配置的客户端实例，emby 复用 jellyfin 流程。"""
+    def _resolve_app_client(self, app_name: str):
+        """按应用名获取客户端实例，emby 复用 jellyfin 客户端。"""
         try:
             client_cls = get_client(app_name)
         except APIException:
@@ -165,8 +174,12 @@ class ProvisionMixin:
                 client_cls = get_client("jellyfin")
             except APIException:
                 return None
-        client = client_cls()
-        return client if client.supports_provision else None
+        return client_cls()
+
+    def _resolve_provision_client(self, app_name: str):
+        """按应用名获取支持自动配置的客户端实例。"""
+        client = self._resolve_app_client(app_name)
+        return client if client is not None and client.supports_provision else None
 
     @staticmethod
     def _get_project_container(project_name: str):

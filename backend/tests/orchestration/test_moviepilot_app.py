@@ -108,7 +108,7 @@ def sample_config():
 
 @pytest.fixture
 def resolver():
-    return StoragePathResolver(None, None).with_defaults()
+    return StoragePathResolver().with_defaults()
 
 
 def test_render_moviepilot_shared_passwords(sample_config, resolver):

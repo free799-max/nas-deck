@@ -144,6 +144,76 @@ export interface AppAuthVerifyResponse {
   message?: string;
 }
 
+/** 检测项状态 */
+export type InspectItemStatus = "ok" | "warn" | "error";
+
+/** 应用配置健康检测项 */
+export interface AppInspectItem {
+  id: string;
+  title: string;
+  status: InspectItemStatus;
+  message?: string | null;
+  current_value?: string | null;
+  expected_value?: string | null;
+  fixable: boolean;
+  /** 展示分组（可选），如「核心配置」 */
+  category?: string | null;
+}
+
+/** 应用配置健康检测报告 */
+export interface AppInspectReport {
+  supported: boolean;
+  items: AppInspectItem[];
+}
+
+/** 单个检测项的自动修复结果 */
+export interface AppFixResultItem {
+  id: string;
+  ok: boolean;
+  message?: string | null;
+}
+
+/** 检测项自动修复响应 */
+export interface AppFixResponse {
+  results: AppFixResultItem[];
+}
+
+/** 应用插件（MoviePilot 原始结构透传，字段做容错读取） */
+export interface AppPlugin {
+  id?: string;
+  plugin_id?: string;
+  plugin_name?: string;
+  plugin_desc?: string;
+  plugin_version?: string;
+  plugin_author?: string;
+  repo_url?: string;
+  installed?: boolean;
+  [key: string]: unknown;
+}
+
+/** 应用插件列表响应 */
+export interface AppPluginsResponse {
+  installed: AppPlugin[];
+  market: AppPlugin[];
+}
+
+/** 装配记录（下载器/媒体服务器） */
+export interface IntegrationRecord {
+  name: string;
+  type?: string;
+  url?: string | null;
+  status: "ok" | "error";
+  message?: string;
+  webhook_url?: string;
+}
+
+/** 应用间自动装配结果（存于 app_configs[目标应用].integrations） */
+export interface AppIntegrations {
+  wired_at?: string;
+  downloaders: IntegrationRecord[];
+  mediaservers: IntegrationRecord[];
+}
+
 /** 查询应用编排列表，支持分类筛选 */
 export function listOrchestrations(category?: string) {
   return api
@@ -229,6 +299,64 @@ export function redeployOrchestrationInstance(
   return api
     .post<DeployOrchestrationResponse>(
       `/orchestrations/instances/${id}/redeploy`,
+      data
+    )
+    .then((r) => r.data);
+}
+
+/** 手动重跑应用间自动装配（后台执行，立即返回） */
+export function wireOrchestrationInstance(id: number) {
+  return api
+    .post<{ ok: boolean; message?: string }>(
+      `/orchestrations/instances/${id}/wire`
+    )
+    .then((r) => r.data);
+}
+
+/** 对组内指定应用执行配置健康检测 */
+export function inspectOrchestrationApp(instanceId: number, appName: string) {
+  return api
+    .get<AppInspectReport>(
+      `/orchestrations/instances/${instanceId}/apps/${appName}/inspect`
+    )
+    .then((r) => r.data);
+}
+
+/** 对组内指定应用的检测项执行自动修复 */
+export function fixOrchestrationAppInspect(
+  instanceId: number,
+  appName: string,
+  itemIds: string[]
+) {
+  return api
+    .post<AppFixResponse>(
+      `/orchestrations/instances/${instanceId}/apps/${appName}/inspect/fix`,
+      { item_ids: itemIds }
+    )
+    .then((r) => r.data);
+}
+
+/** 查询应用已安装插件与插件市场列表（当前仅 MoviePilot 支持） */
+export function listOrchestrationAppPlugins(
+  instanceId: number,
+  appName: string
+) {
+  return api
+    .get<AppPluginsResponse>(
+      `/orchestrations/instances/${instanceId}/apps/${appName}/plugins`
+    )
+    .then((r) => r.data);
+}
+
+/** 安装应用插件（当前仅 MoviePilot 支持） */
+export function installOrchestrationAppPlugin(
+  instanceId: number,
+  appName: string,
+  data: { plugin_id: string; repo_url?: string }
+) {
+  return api
+    .post<{ ok: boolean; message?: string }>(
+      `/orchestrations/instances/${instanceId}/apps/${appName}/plugins/install`,
       data
     )
     .then((r) => r.data);

@@ -12,10 +12,12 @@ from app.services.apps.base import (
     LogsReader,
     ProvisionResult,
 )
+from app.services.apps.moviepilot.inspection import MoviePilotInspectionMixin
+from app.services.apps.moviepilot.integration import MoviePilotIntegrationMixin
 from app.services.apps.registry import register_client
 
 
-class MoviePilotClient(AppClient):
+class MoviePilotClient(MoviePilotIntegrationMixin, MoviePilotInspectionMixin, AppClient):
     """MoviePilot 应用客户端。"""
 
     name = "moviepilot"

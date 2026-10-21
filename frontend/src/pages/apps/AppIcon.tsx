@@ -7,6 +7,7 @@
  */
 
 import { useState } from "react";
+import { Rocket } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { App } from "@/hooks/useApps";
 
@@ -27,11 +28,11 @@ export function AppIcon({ app, className }: AppIconProps) {
     return (
       <div
         className={cn(
-          "flex items-center justify-center rounded-[22%] bg-gradient-to-br from-primary/15 to-primary/5 text-2xl",
+          "flex items-center justify-center rounded-[22%] bg-gradient-to-br from-primary/15 to-primary/5 text-primary",
           className
         )}
       >
-        🚀
+        <Rocket className="h-1/2 w-1/2" />
       </div>
     );
   }

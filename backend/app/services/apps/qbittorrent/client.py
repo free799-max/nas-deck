@@ -15,6 +15,7 @@ from app.services.apps.base import (
     LogsReader,
     ProvisionResult,
 )
+from app.services.apps.qbittorrent.inspection import QBittorrentInspectionMixin
 from app.services.apps.registry import register_client
 
 logger = logging.getLogger(__name__)
@@ -26,7 +27,7 @@ _TEMP_PASSWORD_PATTERN = re.compile(
 )
 
 
-class QBittorrentClient(AppClient):
+class QBittorrentClient(QBittorrentInspectionMixin, AppClient):
     """qBittorrent 应用客户端。"""
 
     name = "qbittorrent"

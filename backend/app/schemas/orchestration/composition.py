@@ -12,6 +12,8 @@ class AppCompositionItem(BaseModel):
     relation: str  # required / optional / suggested / conflicting
     group: str | None = None
     conflict_with: list[str] = []
+    # 部署后自动装配声明，如 [{"type": "downloader", "from": "qbittorrent"}]
+    integrations: list[dict] | None = None
 
 
 class ContainerMatch(BaseModel):

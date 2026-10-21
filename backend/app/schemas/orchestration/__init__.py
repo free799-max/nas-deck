@@ -22,10 +22,12 @@ from app.schemas.orchestration.deploy_task import (
     DeployTaskType,
 )
 from app.schemas.orchestration.instance import (
+    InspectFixRequest,
     OrchestrationInstanceAppOut,
     OrchestrationInstanceDetailOut,
     OrchestrationInstanceGroupOut,
     OrchestrationInstanceUpdateRequest,
+    PluginInstallRequest,
 )
 from app.schemas.orchestration.orchestration import (
     OrchestrationDeployRequest,
@@ -44,6 +46,7 @@ __all__ = [
     "DeployTaskStatus",
     "DeployTaskType",
     "ImportCandidateApp",
+    "InspectFixRequest",
     "OrchestrationDeployRequest",
     "OrchestrationDeployResponse",
     "OrchestrationDetailOut",
@@ -55,4 +58,5 @@ __all__ = [
     "OrchestrationInstanceGroupOut",
     "OrchestrationInstanceUpdateRequest",
     "OrchestrationOut",
+    "PluginInstallRequest",
 ]

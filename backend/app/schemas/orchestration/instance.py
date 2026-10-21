@@ -43,3 +43,16 @@ class OrchestrationInstanceUpdateRequest(BaseModel):
     instance_name: str | None = Field(None, min_length=1, max_length=100)
     shared_config: dict | None = None
     app_configs: dict | None = None
+
+
+class InspectFixRequest(BaseModel):
+    """检测项自动修复请求。"""
+
+    item_ids: list[str] = []
+
+
+class PluginInstallRequest(BaseModel):
+    """应用插件安装请求。"""
+
+    plugin_id: str = Field(..., min_length=1, max_length=100)
+    repo_url: str | None = None

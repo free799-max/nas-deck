@@ -378,7 +378,7 @@ def test_shared_volume_render_skips_project_prefix():
             {"mode": "rw", "host_path": "media", "container_path": "/media", "shared": True},
         ],
     }
-    resolver = StoragePathResolver("/opt", "/opt/docker")
+    resolver = StoragePathResolver(app_data=("/opt/docker", "/docker"))
     rendered = _render_yaml_template(
         template, {}, config, "movie-auto-emby", "emby", resolver
     )

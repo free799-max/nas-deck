@@ -12,10 +12,11 @@ from app.services.apps.base import (
     LogsReader,
     ProvisionResult,
 )
+from app.services.apps.jellyfin.inspection import JellyfinInspectionMixin
 from app.services.apps.registry import register_client
 
 
-class JellyfinClient(AppClient):
+class JellyfinClient(JellyfinInspectionMixin, AppClient):
     """Jellyfin 应用客户端。"""
 
     name = "jellyfin"
@@ -132,10 +133,7 @@ class JellyfinClient(AppClient):
             user_id = (login_data.get("User") or {}).get("Id")
             if not token or not user_id:
                 return False
-            auth_headers = {
-                "Authorization": self._AUTHORIZATION_HEADER,
-                "X-Emby-Token": token,
-            }
+            auth_headers = self._token_headers(token)
             resp = await client.post(
                 f"{base_url}/Users/{user_id}/Password",
                 headers=auth_headers,
@@ -145,10 +143,17 @@ class JellyfinClient(AppClient):
         except (httpx.RequestError, json.JSONDecodeError):
             return False
 
-    # Jellyfin/Emby 统一要求的设备信息头
+    # Jellyfin/Emby 统一要求的设备信息头（持久化 Token 使用该设备）
     _AUTHORIZATION_HEADER = (
         'MediaBrowser Client="NasDeck", Device="NAS", DeviceId="nasdeck", Version="1.0.0"'
     )
+    # 持久化 Token 使用的设备号
+    _API_DEVICE_ID = "nasdeck"
+    # 仅用于校验账号密码的独立设备号：Jellyfin 12 中同设备重新登录会顶掉旧 Token，
+    # 校验必须使用不同设备，避免把已保存的 API Token 挤下线
+    _INSPECT_DEVICE_ID = "nasdeck-inspect"
+    # 手动“验证认证”使用的独立设备号（校验后不保存 Token）
+    _VERIFY_DEVICE_ID = "nasdeck-verify"
 
     async def verify_auth(self, config: dict) -> AuthVerifyResult:
         """校验 Jellyfin 访问地址与认证配置。"""
@@ -181,10 +186,7 @@ class JellyfinClient(AppClient):
         async with httpx.AsyncClient(timeout=self.TIMEOUT, follow_redirects=True) as client:
             response = await client.get(
                 f"{base_url}/System/Info",
-                headers={
-                    "X-Emby-Token": api_key,
-                    "Authorization": self._AUTHORIZATION_HEADER,
-                },
+                headers=self._token_headers(api_key),
             )
             if response.status_code in (401, 403):
                 return AuthVerifyResult(valid=False, message="API Key 认证失败")
@@ -204,7 +206,9 @@ class JellyfinClient(AppClient):
         async with httpx.AsyncClient(timeout=self.TIMEOUT, follow_redirects=True) as client:
             login_resp = await client.post(
                 f"{base_url}/Users/AuthenticateByName",
-                headers={"Authorization": self._AUTHORIZATION_HEADER},
+                headers={
+                    "Authorization": self._device_header(self._VERIFY_DEVICE_ID)
+                },
                 json={"Username": username, "Pw": password},
             )
             if login_resp.status_code in (401, 403):
@@ -222,10 +226,7 @@ class JellyfinClient(AppClient):
 
             info_resp = await client.get(
                 f"{base_url}/System/Info",
-                headers={
-                    "X-Emby-Token": access_token,
-                    "Authorization": self._AUTHORIZATION_HEADER,
-                },
+                headers=self._token_headers(access_token),
             )
             if info_resp.status_code in (401, 403):
                 return AuthVerifyResult(valid=False, message="Token 验证失败")

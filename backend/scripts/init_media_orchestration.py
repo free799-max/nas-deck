@@ -13,7 +13,16 @@ from app.models.orchestration import AppOrchestration
 
 
 MEDIA_COMPOSITION = [
-    {"app_name": "moviepilot", "relation": "required"},
+    {
+        "app_name": "moviepilot",
+        "relation": "required",
+        # 部署后自动装配：把 qBittorrent 配为下载器，
+        # Jellyfin/Emby（取实际部署的那个）配为媒体服务器
+        "integrations": [
+            {"type": "downloader", "from": "qbittorrent"},
+            {"type": "mediaserver", "from": ["jellyfin", "emby"]},
+        ],
+    },
     {"app_name": "qbittorrent", "relation": "required"},
     {"app_name": "jellyfin", "relation": "optional", "group": "player"},
     {"app_name": "emby", "relation": "optional", "group": "player"},

@@ -2,7 +2,7 @@
 
 from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass
@@ -20,6 +20,40 @@ class ProvisionResult:
     ok: bool
     message: str | None = None
     api_key: str | None = None
+
+
+@dataclass
+class InspectItem:
+    """应用配置健康检测项。"""
+
+    id: str
+    title: str
+    # 检测结论：ok / warn / error
+    status: str
+    message: str | None = None
+    current_value: str | None = None
+    expected_value: str | None = None
+    # 是否支持通过 apply_fix 自动修复
+    fixable: bool = False
+    # 前端展示分组（可选），如“核心配置”
+    category: str | None = None
+
+
+@dataclass
+class InspectReport:
+    """应用配置健康检测报告。"""
+
+    supported: bool
+    items: list[InspectItem] = field(default_factory=list)
+
+
+@dataclass
+class FixResultItem:
+    """单个检测项的自动修复结果。"""
+
+    id: str
+    ok: bool
+    message: str | None = None
 
 
 # 读取容器日志的异步回调，由调度方注入（避免客户端依赖 docker SDK）
@@ -76,3 +110,30 @@ class AppClient(ABC):
                 校验会拒绝请求，需按此端口伪装 Host/Referer 头
         """
         return ProvisionResult(ok=False, message="该应用不支持自动配置")
+
+    async def inspect(self, ctx: dict) -> InspectReport:
+        """检测应用配置健康度（默认不支持）。
+
+        Args:
+            ctx: 检测上下文。基础键为 ``url``/``username``/``password``/``api_key``；
+                调度方按需注入扩展键：``logs_reader``（读容器日志回调）、
+                ``host_header_port``（容器内 WebUI 端口）、``container_name``
+                （Compose 主容器名）、``shared_config``（编排共享配置）、
+                ``integrations``（该应用 app_configs 里的装配结果）、
+                ``expected_listen_port``（期望的容器内监听端口）、
+                ``save_app_config``（把检测/修复结果回写 app_configs 的异步回调）、
+                ``wire``（重跑所在组自动装配的异步回调）
+        """
+        return InspectReport(supported=False, items=[])
+
+    async def apply_fix(self, ctx: dict, item_ids: list[str]) -> list[FixResultItem]:
+        """自动修复指定检测项（默认不支持）。
+
+        Args:
+            ctx: 与 ``inspect`` 相同的检测上下文
+            item_ids: 待修复的检测项 ID 列表
+        """
+        return [
+            FixResultItem(id=item_id, ok=False, message="该应用不支持自动修复")
+            for item_id in item_ids
+        ]

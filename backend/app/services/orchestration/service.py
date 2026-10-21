@@ -14,13 +14,17 @@ from app.models.orchestration import AppOrchestration
 from app.services.apps import AuthVerifyResult, get_client
 from app.services.orchestration.deploy import DeployMixin
 from app.services.orchestration.importer import ImportMixin
+from app.services.orchestration.inspection import InspectionMixin
 from app.services.orchestration.instances import InstanceMixin
 from app.services.orchestration.provisioning import ProvisionMixin
+from app.services.orchestration.wiring import WiringMixin
 
 logger = logging.getLogger(__name__)
 
 
-class OrchestrationService(DeployMixin, ImportMixin, ProvisionMixin, InstanceMixin):
+class OrchestrationService(
+    DeployMixin, ImportMixin, ProvisionMixin, WiringMixin, InspectionMixin, InstanceMixin
+):
     """应用编排服务。
 
     负责自动化分类组合模板的查询与组合部署。

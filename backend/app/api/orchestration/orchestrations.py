@@ -3,6 +3,7 @@
 提供自动化分类组合模板的浏览与组合部署接口。
 """
 
+from dataclasses import asdict
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, Response
@@ -20,6 +21,7 @@ from app.schemas.app_auth import (
     AppAuthVerifyResponse,
 )
 from app.schemas.orchestration import (
+    InspectFixRequest,
     OrchestrationDeployRequest,
     OrchestrationDeployResponse,
     OrchestrationDetailOut,
@@ -30,6 +32,7 @@ from app.schemas.orchestration import (
     OrchestrationInstanceGroupOut,
     OrchestrationInstanceUpdateRequest,
     OrchestrationOut,
+    PluginInstallRequest,
 )
 from app.services.orchestration import orchestration_service
 
@@ -172,6 +175,81 @@ async def redeploy_orchestration_instance(
         status=group.status,
         task_ids=task_ids,
     )
+
+
+@router.post("/instances/{instance_id}/wire")
+async def wire_orchestration_instance(
+    instance_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    """手动重跑自动装配：把来源应用（下载器/媒体服务器）配置进目标应用。
+
+    后台协程执行，立即返回；装配结果写入实例组 app_configs 的 integrations 字段。
+    """
+    # 校验实例组存在（不存在抛 404）
+    await orchestration_service.get_group(db, instance_id)
+    orchestration_service.schedule_wiring(instance_id)
+    return {"ok": True, "message": "装配已开始"}
+
+
+@router.get("/instances/{instance_id}/apps/{app_name}/inspect")
+async def inspect_orchestration_app(
+    instance_id: int,
+    app_name: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    """对组内指定应用执行配置健康检测。
+
+    应用不支持检测时返回 supported=false 而非报错。
+    """
+    report = await orchestration_service.inspect_app(db, instance_id, app_name)
+    return {
+        "supported": report.supported,
+        "items": [asdict(item) for item in report.items],
+    }
+
+
+@router.post("/instances/{instance_id}/apps/{app_name}/inspect/fix")
+async def fix_orchestration_app(
+    instance_id: int,
+    app_name: str,
+    data: InspectFixRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    """对组内指定应用的检测项执行自动修复。"""
+    results = await orchestration_service.apply_fixes(
+        db, instance_id, app_name, data.item_ids
+    )
+    return {"results": [asdict(item) for item in results]}
+
+
+@router.get("/instances/{instance_id}/apps/{app_name}/plugins")
+async def list_app_plugins(
+    instance_id: int,
+    app_name: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    """查询应用已安装插件与插件市场列表（当前仅 MoviePilot 支持）。"""
+    return await orchestration_service.list_app_plugins(db, instance_id, app_name)
+
+
+@router.post("/instances/{instance_id}/apps/{app_name}/plugins/install")
+async def install_app_plugin(
+    instance_id: int,
+    app_name: str,
+    data: PluginInstallRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    """安装应用插件（当前仅 MoviePilot 支持）。"""
+    await orchestration_service.install_app_plugin(
+        db, instance_id, app_name, data.plugin_id, repo_url=data.repo_url
+    )
+    return {"ok": True, "message": "插件安装成功"}
 
 
 @router.post("/auth/verify", response_model=AppAuthVerifyResponse)
