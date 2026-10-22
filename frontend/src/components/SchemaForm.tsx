@@ -6,6 +6,7 @@
 
 import { useState } from "react";
 import { Input } from "@/components/ui/input";
+import { PasswordInput } from "@/components/ui/password-input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { DataDirPathInput } from "@/components/DataDirPathInput";
@@ -13,6 +14,21 @@ import { generatePassword } from "@/lib/utils";
 import { useStorageDirectories } from "@/hooks/useSettings";
 import type { StorageDirectory } from "@/api/settings";
 import { Minus, Plus, ChevronUp, ChevronDown, RefreshCw, Package } from "lucide-react";
+
+/** 数组字段是否包含目录选择（本地路径列需要更宽） */
+function hasDirectoryItem(prop: SchemaProperty): boolean {
+  const itemProps = prop.items?.properties ?? {};
+  return Object.values(itemProps).some(
+    (item) => item?.format === "directory"
+  );
+}
+
+/** 数组行网格：含目录字段时给第一列（本地路径）更多宽度 */
+function arrayGridClass(hasDirectory: boolean): string {
+  return hasDirectory
+    ? "grid-cols-[minmax(0,4fr)_minmax(0,1fr)_90px_auto]"
+    : "grid-cols-[1fr_1fr_90px_auto]";
+}
 
 /** Schema 属性定义 */
 export interface SchemaProperty {
@@ -64,6 +80,13 @@ interface SchemaFormProps {
   imageTags?: string[];
   /** 是否正在加载镜像标签 */
   imageTagsLoading?: boolean;
+  /** 目录字段选中来源后子路径为空时自动填入的默认值（如实例名称） */
+  defaultDirectorySubPath?: string;
+  /**
+   * 相对路径是否归属应用数据目录（默认 true）。
+   * 公共配置等共享目录场景传 false，来源下拉默认留空。
+   */
+  relativeToAppDataDir?: boolean;
 }
 
 /**
@@ -75,6 +98,8 @@ interface DirectoryServices {
   appDataDir: StorageDirectory | null;
   /** 已启用的普通数据目录，供目录字段的来源下拉使用 */
   storageDirectories: StorageDirectory[];
+  /** 相对路径是否归属应用数据目录 */
+  relativeToAppDataDir: boolean;
 }
 
 interface FieldInputProps {
@@ -85,6 +110,7 @@ interface FieldInputProps {
   onChange: (key: string, value: unknown) => void;
   hideLabel?: boolean;
   directoryServices: DirectoryServices;
+  defaultDirectorySubPath?: string;
 }
 
 function FieldInput({
@@ -95,6 +121,7 @@ function FieldInput({
   onChange,
   hideLabel = false,
   directoryServices,
+  defaultDirectorySubPath,
 }: FieldInputProps) {
   const label = prop.title || propKey;
 
@@ -193,7 +220,8 @@ function FieldInput({
 
   // 目录选择：目录来源下拉 + 子路径输入框 + 浏览按钮
   if (isDirectoryField) {
-    const { appDataDir, storageDirectories } = directoryServices;
+    const { appDataDir, storageDirectories, relativeToAppDataDir } =
+      directoryServices;
     const currentValue =
       value === undefined || value === null ? "" : String(value);
 
@@ -205,20 +233,29 @@ function FieldInput({
           value={currentValue}
           onChange={(path) => handleChange(path)}
           placeholder={hideLabel ? label : prop.description}
+          defaultSubPath={defaultDirectorySubPath}
           appDataDir={appDataDir}
           storageDirectories={storageDirectories}
+          relativeToAppDataDir={relativeToAppDataDir}
         />
       </div>
     );
   }
 
-  // 密码生成：输入框 + 生成按钮（默认明文显示）
+  // 密码生成：输入框（默认隐藏，可切换明文）+ 生成按钮
   if (isPasswordField) {
     return (
       <div className="space-y-1">
         {!hideLabel && labelNode}
         <div className="flex items-center gap-2">
-          {inputNode}
+          <PasswordInput
+            id={propKey}
+            value={value === undefined || value === null ? "" : String(value)}
+            onChange={(e) => handleChange(e.target.value)}
+            placeholder={hideLabel ? label : prop.description}
+            className="h-8 rounded-md border-input bg-white px-2 text-sm shadow-none"
+            containerClassName="min-w-0 flex-1"
+          />
           <Button
             type="button"
             variant="secondary"
@@ -249,6 +286,7 @@ interface ArrayFieldProps {
   required: boolean;
   onChange: (key: string, value: unknown) => void;
   directoryServices: DirectoryServices;
+  defaultDirectorySubPath?: string;
 }
 
 function ArrayField({
@@ -258,6 +296,7 @@ function ArrayField({
   required,
   onChange,
   directoryServices,
+  defaultDirectorySubPath,
 }: ArrayFieldProps) {
   const rows = Array.isArray(value) ? (value as Record<string, unknown>[]) : [];
   const items = prop.items || {};
@@ -339,6 +378,7 @@ function ArrayField({
                   onChange={(_, val) => updateRow(index, key, val)}
                   hideLabel
                   directoryServices={directoryServices}
+                  defaultDirectorySubPath={defaultDirectorySubPath}
                 />
               </div>
             );
@@ -437,6 +477,7 @@ function ContainerSchemaForm({
   imageTags,
   imageTagsLoading,
   directoryServices,
+  defaultDirectorySubPath,
 }: {
   schema: SchemaFormProps["schema"];
   data: Record<string, unknown>;
@@ -445,6 +486,7 @@ function ContainerSchemaForm({
   imageTags?: string[];
   imageTagsLoading?: boolean;
   directoryServices: DirectoryServices;
+  defaultDirectorySubPath?: string;
 }) {
   const properties = schema.properties || {};
   const requiredSet = new Set(schema.required || []);
@@ -480,7 +522,12 @@ function ContainerSchemaForm({
   const renderFields = (fields: string[]) => {
     // 端口/存储空间：3 字段，协议/权限列占 90px，按钮在 auto 列
     // 环境变量：2 字段，按钮直接放 auto 列，由相同按钮组自然对齐，不留空白列
-    const gridClass = "grid-cols-[1fr_1fr_90px_auto]";
+    // 存储空间含目录选择，第一列需要更宽，避免目录来源和子路径被挤得看不清
+    const hasDirectory = fields.some((key) => {
+      const prop = properties[key];
+      return prop?.type === "array" && prop.items && hasDirectoryItem(prop);
+    });
+    const gridClass = arrayGridClass(Boolean(hasDirectory));
     return (
       <div className={`grid ${gridClass} gap-2`}>
         {fields
@@ -497,6 +544,7 @@ function ContainerSchemaForm({
                   required={requiredSet.has(key)}
                   onChange={handleChange}
                   directoryServices={directoryServices}
+                  defaultDirectorySubPath={defaultDirectorySubPath}
                 />
               );
             }
@@ -510,6 +558,7 @@ function ContainerSchemaForm({
                   onChange={handleChange}
                   hideLabel
                   directoryServices={directoryServices}
+                  defaultDirectorySubPath={defaultDirectorySubPath}
                 />
               </div>
             );
@@ -610,6 +659,7 @@ function PlainSchemaForm({
   imageTags,
   imageTagsLoading,
   directoryServices,
+  defaultDirectorySubPath,
 }: {
   schema: SchemaFormProps["schema"];
   data: Record<string, unknown>;
@@ -618,6 +668,7 @@ function PlainSchemaForm({
   imageTags?: string[];
   imageTagsLoading?: boolean;
   directoryServices: DirectoryServices;
+  defaultDirectorySubPath?: string;
 }) {
   const properties = schema.properties || {};
   const requiredSet = new Set(schema.required || []);
@@ -665,7 +716,9 @@ function PlainSchemaForm({
                     {prop.description}
                   </p>
                 )}
-                <div className="grid grid-cols-[1fr_1fr_90px_auto] gap-2">
+                <div
+                  className={`grid ${arrayGridClass(hasDirectoryItem(prop))} gap-2`}
+                >
                   <ArrayField
                     propKey={key}
                     prop={prop}
@@ -673,6 +726,7 @@ function PlainSchemaForm({
                     required={required}
                     onChange={handleChange}
                     directoryServices={directoryServices}
+                    defaultDirectorySubPath={defaultDirectorySubPath}
                   />
                 </div>
               </div>
@@ -687,6 +741,7 @@ function PlainSchemaForm({
               required={requiredSet.has(key)}
               onChange={handleChange}
               directoryServices={directoryServices}
+              defaultDirectorySubPath={defaultDirectorySubPath}
             />
           );
         })}
@@ -701,6 +756,8 @@ export function SchemaForm({
   image,
   imageTags,
   imageTagsLoading,
+  defaultDirectorySubPath,
+  relativeToAppDataDir = true,
 }: SchemaFormProps) {
   const hasContainers = schema?.containers && schema.containers.length > 0;
 
@@ -713,6 +770,7 @@ export function SchemaForm({
   const directoryServices: DirectoryServices = {
     appDataDir: enabledDirectories.find((d) => d.is_app_data) ?? null,
     storageDirectories: enabledDirectories.filter((d) => !d.is_app_data),
+    relativeToAppDataDir,
   };
 
   if (!hasContainers) {
@@ -725,6 +783,7 @@ export function SchemaForm({
         imageTags={imageTags}
         imageTagsLoading={imageTagsLoading}
         directoryServices={directoryServices}
+        defaultDirectorySubPath={defaultDirectorySubPath}
       />
     );
   }
@@ -738,6 +797,7 @@ export function SchemaForm({
       imageTags={imageTags}
       imageTagsLoading={imageTagsLoading}
       directoryServices={directoryServices}
+      defaultDirectorySubPath={defaultDirectorySubPath}
     />
   );
 }

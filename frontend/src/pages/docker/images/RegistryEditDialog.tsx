@@ -16,6 +16,7 @@ import {
   type RegistryCreate,
 } from "@/hooks/useDocker";
 import { useToast } from "@/components/ui/toast";
+import { PasswordInput } from "@/components/ui/password-input";
 import { Plus, Minus, Loader2 } from "lucide-react";
 
 interface RegistryEditDialogProps {
@@ -281,8 +282,7 @@ export function RegistryEditDialog({
                 </FormRow>
 
                 <FormRow label="密码：">
-                  <input
-                    type="password"
+                  <PasswordInput
                     value={form.password}
                     onChange={(e) =>
                       setForm((prev) => ({ ...prev, password: e.target.value }))

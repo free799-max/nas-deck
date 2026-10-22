@@ -103,7 +103,7 @@ export interface OrchestrationInstanceApp {
   config: Record<string, unknown>;
 }
 
-/** 编排实例组（一次部署/导入记录） */
+/** 编排实例组 */
 export interface OrchestrationInstanceGroup {
   id: number;
   instance_name: string;
@@ -112,6 +112,27 @@ export interface OrchestrationInstanceGroup {
   status: string;
   created_at: string;
   apps: OrchestrationInstanceApp[];
+}
+
+/** 备份中的应用数据目录 */
+export interface OrchestrationBackupApp {
+  app_name: string;
+  instance_name?: string | null;
+}
+
+/** 可恢复的实例组备份 */
+export interface OrchestrationBackup {
+  name: string;
+  instance_name: string;
+  orchestration_name?: string | null;
+  deleted_at?: string | null;
+  apps: OrchestrationBackupApp[];
+}
+
+/** 从备份恢复请求 */
+export interface RestoreOrchestrationRequest {
+  backup: string;
+  instance_name?: string | null;
 }
 
 /** 编排实例组详情 */
@@ -252,9 +273,35 @@ export function updateOrchestrationInstance(
     .then((r) => r.data);
 }
 
-/** 删除编排实例组 */
+/** 删除实例组响应（后台任务） */
+export interface DeleteOrchestrationResponse {
+  task_id: string;
+}
+
+/** 删除编排实例组（后台任务，返回任务 ID） */
 export function deleteOrchestrationInstance(id: number) {
-  return api.delete(`/orchestrations/instances/${id}`).then((r) => r.data);
+  return api
+    .delete<DeleteOrchestrationResponse>(`/orchestrations/instances/${id}`)
+    .then((r) => r.data);
+}
+
+/** 列出可恢复的实例组备份 */
+export function listOrchestrationBackups(orchestration?: string) {
+  return api
+    .get<OrchestrationBackup[]>("/orchestrations/backups", {
+      params: { orchestration },
+    })
+    .then((r) => r.data);
+}
+
+/** 从备份恢复实例组（移回数据目录并重新部署） */
+export function restoreOrchestrationBackup(data: RestoreOrchestrationRequest) {
+  return api
+    .post<DeployOrchestrationResponse>(
+      "/orchestrations/backups/restore",
+      data
+    )
+    .then((r) => r.data);
 }
 
 /** 查询可导入的 Docker 容器候选 */

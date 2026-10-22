@@ -341,10 +341,51 @@ export function OrchestrationInstanceManager({
               删除实例组
             </DialogTitle>
           </DialogHeader>
-          <p className="py-2 text-sm text-muted-foreground">
-            确认删除实例组「{deleteInstance?.instance_name}」？
-            关联的应用实例和 Docker 项目将被一并清理，此操作不可撤销。
-          </p>
+          <div className="space-y-3 py-2 text-sm text-muted-foreground">
+            <p>
+              确认删除实例组
+              <span className="font-medium text-foreground">
+                「{deleteInstance?.instance_name}」
+              </span>
+              ？删除后可通过「恢复」找回应用数据。
+            </p>
+
+            {deleteInstance && deleteInstance.apps.length > 0 && (
+              <div className="flex flex-wrap gap-1.5">
+                {deleteInstance.apps.map((app) => (
+                  <span
+                    key={app.id}
+                    className="inline-flex items-center gap-1.5 rounded-full border bg-muted/40 px-2 py-1 text-xs text-foreground/80"
+                  >
+                    <AppIcon
+                      app={
+                        {
+                          name: app.app_name,
+                          display_name: app.display_name,
+                          icon: app.icon,
+                        } as App
+                      }
+                      className="h-4 w-4"
+                    />
+                    {app.display_name}
+                  </span>
+                ))}
+              </div>
+            )}
+
+            <div className="space-y-2 rounded-lg border border-destructive/25 bg-destructive/5 px-3 py-2.5 text-xs leading-relaxed">
+              <p className="font-medium text-destructive">删除说明</p>
+              <ul className="list-disc space-y-1 pl-4">
+                <li>容器和 Docker Compose 项目会被停止并移除。</li>
+                <li>
+                  各应用的数据目录会移入备份目录，不会直接删除，之后可通过
+                  「恢复」找回。
+                </li>
+                <li>共享的媒体、下载文件不受影响。</li>
+                <li>删除在后台执行，可在弹出的任务进度中查看。</li>
+              </ul>
+            </div>
+          </div>
           <DialogFooter>
             <Button
               variant="outline"

@@ -14,6 +14,8 @@ import type {
   OrchestrationInstanceGroup,
   OrchestrationInstanceDetail,
   OrchestrationInstanceUpdatePayload,
+  OrchestrationBackup,
+  RestoreOrchestrationRequest,
   AppAuthVerifyRequest,
   AppInspectReport,
   AppPluginsResponse,
@@ -34,6 +36,9 @@ export type {
   OrchestrationInstanceGroup,
   OrchestrationInstanceDetail,
   OrchestrationInstanceUpdatePayload,
+  OrchestrationBackup,
+  OrchestrationBackupApp,
+  RestoreOrchestrationRequest,
   AppAuthVerifyRequest,
   AppAuthVerifyResponse,
   InspectItemStatus,
@@ -118,7 +123,9 @@ export function useUpdateOrchestrationInstance() {
 }
 
 /**
- * 删除编排实例组
+ * 删除编排实例组（后台任务）
+ *
+ * 返回任务 ID，由调用方接入全局任务进度弹窗。
  */
 export function useDeleteOrchestrationInstance() {
   const qc = useQueryClient();
@@ -127,11 +134,48 @@ export function useDeleteOrchestrationInstance() {
     mutationFn: (id: number) =>
       orchestrationsApi.deleteOrchestrationInstance(id),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["orchestration-instances"] });
-      toast.success("实例组已删除");
+      // 删除仍在后台进行，完成后由进度弹窗统一刷新实例列表
+      qc.invalidateQueries({ queryKey: ["orchestration-backups"] });
     },
     onError: (error: ApiError) => {
       toast.error(error.displayMessage || "删除失败");
+    },
+  });
+}
+
+/**
+ * 查询可恢复的实例组备份
+ */
+export function useOrchestrationBackups(
+  orchestrationName: string | null,
+  enabled = true
+) {
+  return useQuery<OrchestrationBackup[]>({
+    queryKey: ["orchestration-backups", orchestrationName],
+    queryFn: () =>
+      orchestrationsApi.listOrchestrationBackups(orchestrationName ?? undefined),
+    enabled: enabled && !!orchestrationName,
+  });
+}
+
+/**
+ * 从备份恢复实例组
+ */
+export function useRestoreOrchestrationBackup() {
+  const qc = useQueryClient();
+  const toast = useToast();
+  return useMutation({
+    mutationFn: (data: RestoreOrchestrationRequest) =>
+      orchestrationsApi.restoreOrchestrationBackup(data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["compose", "projects"] });
+      qc.invalidateQueries({ queryKey: ["apps", "instances"] });
+      qc.invalidateQueries({ queryKey: ["orchestration-instances"] });
+      qc.invalidateQueries({ queryKey: ["orchestration-backups"] });
+      toast.success("恢复已启动，正在重新部署");
+    },
+    onError: (error: ApiError) => {
+      toast.error(error.displayMessage || "恢复失败");
     },
   });
 }

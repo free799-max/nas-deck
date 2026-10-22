@@ -111,7 +111,16 @@ export function AutomationDeployWizard({
       return;
     }
 
-    setInstanceName(slugify(orchestration.display_name || ""));
+    // 默认实例名：优先取可转为 Compose 项目名的显示名；
+    // 中文名称会被 slugify 清空，此时回退到首个必选应用名（如 comic-auto）。
+    const primaryApp = orchestration.app_composition.find(
+      (item) => item.relation === "required"
+    );
+    setInstanceName(
+      slugify(orchestration.display_name || "") ||
+        primaryApp?.app_name ||
+        slugify(orchestration.name)
+    );
     setSharedConfig(extractDefaults(orchestration.shared_config_schema));
 
     const initialSelected = new Set<string>();
@@ -425,6 +434,9 @@ export function AutomationDeployWizard({
           onBlur={() => setInstanceName(slugify(instanceName))}
           placeholder="如：my-media-stack"
         />
+        <p className="text-xs text-muted-foreground">
+          仅支持小写字母、数字、- 和 _，不能包含中文或特殊字符
+        </p>
       </div>
 
       <div className="space-y-2">
@@ -511,9 +523,19 @@ export function AutomationDeployWizard({
   );
 
   const renderSharedStep = () => {
-    const hasSchema = Object.keys(
-      (orchestration.shared_config_schema as Record<string, unknown>)?.properties || {}
-    ).length > 0;
+    const sharedProperties = (
+      orchestration.shared_config_schema as {
+        properties?: Record<string, { default?: unknown }>;
+      }
+    )?.properties;
+    const hasSchema = Object.keys(sharedProperties || {}).length > 0;
+    // 仅单个共享目录的组合（如漫画）用实例名作为默认子路径，
+    // 多目录组合（如影视的 media/downloads）仍由用户分别填写
+    const volumeDefaults = sharedProperties?.volumes?.default;
+    const defaultDirectorySubPath =
+      Array.isArray(volumeDefaults) && volumeDefaults.length === 1
+        ? slugify(instanceName)
+        : undefined;
 
     return (
       <div className="space-y-4">
@@ -525,6 +547,8 @@ export function AutomationDeployWizard({
             schema={orchestration.shared_config_schema as never}
             data={sharedConfig}
             onChange={setSharedConfig}
+            defaultDirectorySubPath={defaultDirectorySubPath}
+            relativeToAppDataDir={false}
           />
         ) : (
           <div className="rounded-xl border border-dashed p-8 text-center">
@@ -671,7 +695,7 @@ export function AutomationDeployWizard({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-3xl max-h-[90vh] flex flex-col overflow-hidden">
+      <DialogContent className="sm:max-w-4xl max-h-[90vh] flex flex-col overflow-hidden">
         <DialogHeader className="flex-shrink-0">
           <DialogTitle>
             {redeployGroup ? "修复" : "部署"} {orchestration.display_name}

@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { PasswordInput } from "@/components/ui/password-input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -511,8 +512,7 @@ export function AutomationImportDialog({
                               </div>
                               <div className="space-y-1">
                                 <Label className="text-xs">密码</Label>
-                                <Input
-                                  type="password"
+                                <PasswordInput
                                   value={appConfigs[item.app_name]?.password ?? ""}
                                   onChange={(e) =>
                                     updateConfig(item.app_name, {

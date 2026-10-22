@@ -11,6 +11,7 @@
 import { useEffect, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { PasswordInput } from "@/components/ui/password-input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { useSystemConfig, useUpdateSystemConfig } from "@/hooks/useSettings";
@@ -219,9 +220,8 @@ export function BasicSettingsTab() {
               >
                 管理员密码
               </Label>
-              <Input
+              <PasswordInput
                 id="default_admin_password"
-                type="password"
                 value={form.default_admin_password}
                 onChange={(e) =>
                   setForm((prev) => ({

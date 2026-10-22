@@ -16,6 +16,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { PasswordInput } from "@/components/ui/password-input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
@@ -36,6 +37,7 @@ import {
   Layers,
   LayoutGrid,
   Plug,
+  RefreshCw,
   Stethoscope,
   type LucideIcon,
 } from "lucide-react";
@@ -49,7 +51,10 @@ import type {
   OrchestrationInstanceDetail,
   OrchestrationInstanceUpdatePayload,
 } from "@/hooks/useOrchestrations";
-import { useVerifyAppAuth } from "@/hooks/useOrchestrations";
+import {
+  useVerifyAppAuth,
+  useWireOrchestrationInstance,
+} from "@/hooks/useOrchestrations";
 import { isAuthConfigReady } from "./auth-config-utils";
 import { AppInspectPanel } from "./AppInspectPanel";
 import { MoviePilotIntegrationPanel } from "./MoviePilotIntegrationPanel";
@@ -111,17 +116,22 @@ function buildAuthConfig(values: AppAuthConfig): Record<string, unknown> {
 function InfoSection({
   icon: Icon,
   title,
+  action,
   children,
 }: {
   icon: LucideIcon;
   title: string;
+  action?: ReactNode;
   children: ReactNode;
 }) {
   return (
     <section className="overflow-hidden rounded-xl border border-border/70 bg-card">
       <div className="flex items-center gap-2 border-b border-border/60 bg-muted/20 px-4 py-2.5">
-        <Icon className="h-3.5 w-3.5 text-muted-foreground" />
-        <h3 className="text-xs font-medium text-muted-foreground">{title}</h3>
+        <Icon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+        <h3 className="min-w-0 flex-1 truncate text-xs font-medium text-muted-foreground">
+          {title}
+        </h3>
+        {action}
       </div>
       <dl className="divide-y divide-border/60 px-4">{children}</dl>
     </section>
@@ -156,6 +166,7 @@ export function AppConfigPanel({
   const [isVerifying, setIsVerifying] = useState(false);
   const [copiedUrl, setCopiedUrl] = useState(false);
   const verifyMutation = useVerifyAppAuth();
+  const wireMutation = useWireOrchestrationInstance();
 
   useEffect(() => {
     const next = getInitialAuthConfig(detail?.app_configs?.[app?.app_name ?? ""]);
@@ -454,7 +465,31 @@ export function AppConfigPanel({
               </InfoRow>
             </InfoSection>
 
-            <InfoSection icon={Layers} title="编排与集成">
+            <InfoSection
+              icon={Layers}
+              title="编排与集成"
+              action={
+                (integrationRecords.length > 0 ||
+                  !!provisionError ||
+                  app.app_name === "moviepilot" ||
+                  app.app_name === "comic-auto") && (
+                  <Button
+                    size="xs"
+                    variant="outline"
+                    className="h-6 shrink-0 gap-1 bg-card px-2 text-[11px] font-normal"
+                    onClick={() => wireMutation.mutate(detail.id)}
+                    disabled={wireMutation.isPending}
+                  >
+                    {wireMutation.isPending ? (
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                    ) : (
+                      <RefreshCw className="h-3 w-3" />
+                    )}
+                    重新装配
+                  </Button>
+                )
+              }
+            >
               {orchestration && (
                 <InfoRow label="所属组合">
                   <div className="flex flex-wrap items-center gap-2">
@@ -474,9 +509,9 @@ export function AppConfigPanel({
               )}
 
               <InfoRow label="应用集成">
-                {app.app_name === "moviepilot" ? (
-                  integrationRecords.length > 0 ? (
-                    <div className="space-y-2">
+                <div className="space-y-2">
+                  {integrationRecords.length > 0 ? (
+                    <>
                       <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5">
                         <span
                           className={cn(
@@ -489,8 +524,19 @@ export function AppConfigPanel({
                           {integrationOk}/{integrationRecords.length} 项装配成功
                         </span>
                         <span className="text-xs text-muted-foreground">
-                          下载器 {downloaderOk}/{downloaders.length} · 媒体服务器{" "}
-                          {mediaserverOk}/{mediaservers.length}
+                          {downloaders.length > 0 && (
+                            <>
+                              下载器 {downloaderOk}/{downloaders.length}
+                            </>
+                          )}
+                          {downloaders.length > 0 &&
+                            mediaservers.length > 0 &&
+                            " · "}
+                          {mediaservers.length > 0 && (
+                            <>
+                              媒体服务器 {mediaserverOk}/{mediaservers.length}
+                            </>
+                          )}
                         </span>
                       </div>
                       <Progress
@@ -499,13 +545,16 @@ export function AppConfigPanel({
                         }
                         className="h-1"
                       />
-                    </div>
+                    </>
                   ) : (
-                    <span className="text-muted-foreground">尚未装配</span>
-                  )
-                ) : (
-                  <span className="text-muted-foreground">无额外集成</span>
-                )}
+                    <span className="text-muted-foreground">
+                      {app.app_name === "moviepilot" ||
+                      app.app_name === "comic-auto"
+                        ? "尚未装配"
+                        : "无额外集成"}
+                    </span>
+                  )}
+                </div>
               </InfoRow>
             </InfoSection>
           </div>
@@ -594,9 +643,8 @@ export function AppConfigPanel({
                 </div>
                 <div className="space-y-1.5">
                   <Label htmlFor="config-password">密码</Label>
-                  <Input
+                  <PasswordInput
                     id="config-password"
-                    type="password"
                     value={draft.password}
                     onChange={(e) =>
                       setDraft((prev) => ({

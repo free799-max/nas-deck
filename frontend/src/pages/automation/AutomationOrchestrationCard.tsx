@@ -31,7 +31,8 @@ export function AutomationOrchestrationCard({
             {orchestration.icon ? (
               <img
                 src={
-                  orchestration.icon.startsWith("http")
+                  orchestration.icon.startsWith("http") ||
+                  orchestration.icon.startsWith("/")
                     ? orchestration.icon
                     : `/api/orchestrations/${orchestration.name}/icon`
                 }
