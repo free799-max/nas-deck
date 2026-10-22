@@ -8,7 +8,6 @@ from urllib.parse import urlparse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import APIException
-from app.services.app_store.app_service import _slugify
 from app.services.apps import FixResultItem, InspectReport
 
 logger = logging.getLogger(__name__)
@@ -115,6 +114,10 @@ class InspectionMixin:
         entry: dict,
     ) -> dict:
         """构建应用客户端 inspect/apply_fix 的检测上下文。"""
+        # 延迟导入：app_service 在模块初始化时会加载编排服务，
+        # 顶层导入会形成 app_store -> orchestration -> inspection 的循环。
+        from app.services.app_store.app_service import _slugify
+
         container_name = _slugify(f"{group.instance_name}-{app_name}")
         ctx: dict = {
             "url": entry.get("url"),

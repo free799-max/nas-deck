@@ -8,7 +8,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { useContext } from "react";
 import { DeployTaskContext } from "@/contexts/DeployTaskContext";
-import { getToken } from "@/lib/api";
+import api, { getToken } from "@/lib/api";
 
 /** 获取全局部署任务上下文 */
 export function useDeployTasks() {
@@ -216,11 +216,47 @@ export function useDeployTasksEvents(
     const baseUrl = getApiBaseUrl();
     const token = getToken() || "";
     const sources: Record<string, EventSource> = {};
+    let disposed = false;
+    // EventSource 读不到 HTTP 状态码，连接异常时用状态接口兜底判断：
+    // - 404：任务已结束/过期或后端重启，结束占位并提示
+    // - 401：token 过期，交给 axios 拦截器统一跳转登录
+    // 每个任务 5 秒内最多探测一次，避免 EventSource 重连时刷接口
+    const lastProbeAt: Record<string, number> = {};
+
+    const probeTask = (taskId: string) => {
+      const now = Date.now();
+      if (now - (lastProbeAt[taskId] ?? 0) < 5000) return;
+      lastProbeAt[taskId] = now;
+      api.get(`/deploy-tasks/${taskId}/status`).catch((error) => {
+        const status = (error as { response?: { status?: number } })?.response
+          ?.status;
+        if (disposed || status !== 404) return;
+        const failed: DeployTaskState = {
+          taskId,
+          type: "app_deploy",
+          status: "failed",
+          stage: "failed",
+          progress: {
+            stage: "failed",
+            percentage: 100,
+            message: "任务已不存在",
+          },
+          error:
+            "部署任务已不存在（可能已结束、已过期或后端已重启），无法获取进度",
+        };
+        sources[taskId]?.close();
+        setStates((prev) => ({ ...prev, [taskId]: failed }));
+        onErrorRef.current?.(taskId, failed);
+      });
+    };
 
     ids.forEach((taskId) => {
       const url = `${baseUrl}/api/deploy-tasks/${taskId}/events?token=${encodeURIComponent(token)}`;
       const es = new EventSource(url);
       sources[taskId] = es;
+
+      // 连接 SSE 前先确认任务仍在后端，避免卡片永远停在“连接任务…”
+      probeTask(taskId);
 
       es.onmessage = (event) => {
         const newState = parseDeployEvent(taskId, event.data);
@@ -245,10 +281,13 @@ export function useDeployTasksEvents(
         // 不主动 close：让 EventSource 自动重连。
         // 后端 SSE 会回放历史事件，重连后能恢复到最新状态（含终态），
         // 避免网络抖动导致任务卡片永远停在“连接任务…”占位。
+        // 但若任务已不存在或 token 已过期，重连不会恢复，需探测后结束占位。
+        probeTask(taskId);
       };
     });
 
     return () => {
+      disposed = true;
       Object.values(sources).forEach((es) => es.close());
     };
   }, [taskIdsKey]);

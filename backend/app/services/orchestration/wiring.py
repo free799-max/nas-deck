@@ -13,8 +13,8 @@ from datetime import datetime, timezone
 from urllib.parse import urlparse
 
 from app.core.background import create_background_task
+from app.core.exceptions import APIException
 from app.database import async_session
-from app.services.app_store.app_service import _slugify
 from app.services.apps import get_client
 
 logger = logging.getLogger(__name__)
@@ -24,8 +24,8 @@ class WiringMixin:
     """把编排内来源应用自动装配进目标应用的能力。"""
 
     def schedule_wiring(self, group_id: int) -> None:
-        """后台重跑自动装配（手动触发入口，立即返回）。"""
-        create_background_task(self._wire_group(group_id))
+        """后台重跑自动配置与自动装配（手动触发入口，立即返回）。"""
+        create_background_task(self._reprovision_and_wire(group_id))
 
     async def _wire_group(self, group_id: int) -> None:
         """按模板 integrations 声明执行装配并落库，异常只记日志。"""
@@ -54,7 +54,8 @@ class WiringMixin:
             if not target_name:
                 continue
             target_cfg = app_configs.get(target_name) or {}
-            target_error = self._check_target(target_cfg)
+            requires_api_key = self._target_requires_api_key(target_name)
+            target_error = self._check_target(target_cfg, requires_api_key)
             results = target_results.setdefault(
                 target_name,
                 {
@@ -88,6 +89,7 @@ class WiringMixin:
                     type_,
                     source_name,
                     app_configs.get(source_name) or {},
+                    spec=spec,
                 )
                 results[bucket].append(record)
 
@@ -114,6 +116,7 @@ class WiringMixin:
         type_: str,
         source_name: str,
         source_cfg: dict,
+        spec: dict | None = None,
     ) -> dict:
         """装配单个来源应用，返回记录（name/type/url/status/message）。"""
         record = {"name": source_name, "type": source_name, "url": None}
@@ -141,14 +144,23 @@ class WiringMixin:
                     password=source_cfg["password"],
                 )
             else:
+                # 集成声明里可携带目标应用专属参数（如 Comic Auto 的目录）
+                extras = {
+                    key: (spec or {}).get(key)
+                    for key in ("library_path", "download_dir", "cache_dir")
+                    if (spec or {}).get(key)
+                }
                 ok, message = await client.setup_mediaserver(
                     target_cfg["url"].rstrip("/"),
-                    target_cfg["api_key"],
+                    target_cfg.get("api_key", ""),
                     name=source_name,
                     type_=source_name,
                     host=url,
                     api_key_ms=source_cfg["api_key"],
                     play_host=source_cfg["url"],
+                    username=target_cfg.get("username"),
+                    password=target_cfg.get("password"),
+                    **extras,
                 )
         except Exception as exc:
             logger.exception("装配 %s -> %s 异常", source_name, target_name)
@@ -156,7 +168,7 @@ class WiringMixin:
 
         record["status"] = "ok" if ok else "error"
         record["message"] = message or ("装配成功" if ok else "装配失败")
-        if ok and type_ == "mediaserver":
+        if ok and type_ == "mediaserver" and target_name == "moviepilot":
             # 媒体服务器侧需手动把 webhook 指回 MoviePilot（无稳定配置 API），
             # 记录建议的回调地址供前端展示给用户填写
             record["webhook_url"] = (
@@ -166,14 +178,29 @@ class WiringMixin:
         return record
 
     @staticmethod
-    def _check_target(target_cfg: dict) -> str | None:
+    def _target_requires_api_key(target_name: str) -> bool:
+        """目标应用装配是否需要 API Key（Comic Auto 使用账号密码换取 JWT）。"""
+        try:
+            client_cls = get_client(target_name)
+        except APIException:
+            return True
+        return getattr(client_cls, "requires_api_key", True)
+
+    @staticmethod
+    def _check_target(
+        target_cfg: dict,
+        requires_api_key: bool = True,
+    ) -> str | None:
         """目标应用前置条件检查，不满足返回原因。"""
         if not target_cfg.get("provisioned"):
             return "目标应用账号自动配置未完成"
         if not target_cfg.get("url"):
             return "目标应用缺少访问地址"
-        if not target_cfg.get("api_key"):
-            return "目标应用缺少 API Key"
+        if requires_api_key:
+            if not target_cfg.get("api_key"):
+                return "目标应用缺少 API Key"
+        elif not (target_cfg.get("username") and target_cfg.get("password")):
+            return "目标应用缺少账号密码"
         return None
 
     @staticmethod
@@ -207,6 +234,9 @@ class WiringMixin:
            网络重建变化，仅作最后兜底）。
         docker exec 探测不可用时跳过探测，直接用内网地址。
         """
+        # 延迟导入：避免 app_store -> orchestration -> wiring 的循环依赖
+        from app.services.app_store.app_service import _slugify
+
         parsed = urlparse(source_url)
         host_port = parsed.port
         if not host_port:

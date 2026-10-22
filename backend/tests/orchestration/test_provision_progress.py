@@ -1,0 +1,166 @@
+"""部署后账号自动配置与装配的进度任务测试。"""
+
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+
+import pytest
+
+from app.services.apps import ProvisionResult
+from app.services.orchestration import orchestration_service
+from app.services.orchestration import provisioning as provisioning_module
+from app.services.orchestration.deploy_task_service import DeployTaskManager
+
+
+class _FakeSession:
+    """替换真实数据库会话上下文，仅用于单元测试。"""
+
+    async def __aenter__(self):
+        return None
+
+    async def __aexit__(self, *exc_info):
+        return False
+
+
+def _patch_group(monkeypatch, app_configs: dict) -> None:
+    monkeypatch.setattr(provisioning_module, "async_session", lambda: _FakeSession())
+    monkeypatch.setattr(
+        orchestration_service,
+        "get_group",
+        AsyncMock(return_value=SimpleNamespace(app_configs=app_configs)),
+    )
+
+
+def _items() -> list[dict]:
+    return [
+        {
+            "app_name": "moviepilot",
+            "task_id": "task-moviepilot",
+            "project_name": "test-stack-moviepilot",
+            "credentials": {"username": "admin", "password": "pass"},
+        },
+        {
+            "app_name": "qbittorrent",
+            "task_id": "task-qbittorrent",
+            "project_name": "test-stack-qbittorrent",
+            "credentials": {"username": "admin", "password": "pass"},
+        },
+    ]
+
+
+@pytest.mark.asyncio
+async def test_provision_group_reports_progress_and_completes(monkeypatch):
+    """配置与装配各阶段应推送到跟踪任务，全部成功后标记完成。"""
+    manager = DeployTaskManager()
+    monkeypatch.setattr(provisioning_module, "deploy_task_manager", manager)
+    _patch_group(
+        monkeypatch,
+        {
+            "moviepilot": {"url": "http://host:3000"},
+            "qbittorrent": {"url": "http://host:8080"},
+        },
+    )
+    monkeypatch.setattr(
+        orchestration_service,
+        "_wait_task_terminal",
+        AsyncMock(return_value="completed"),
+    )
+    provision = AsyncMock(return_value=ProvisionResult(ok=True, message="ok"))
+    monkeypatch.setattr(orchestration_service, "_provision_app", provision)
+    wire = AsyncMock(return_value=None)
+    monkeypatch.setattr(orchestration_service, "_wire_group", wire)
+
+    task_id = manager.create_task(
+        "orchestration_provision",
+        meta={"operation": "provision", "instance_name": "test-stack"},
+        enforce_limit=False,
+    )
+
+    await orchestration_service._provision_group(1, _items(), task_id)
+
+    task = manager.get_task(task_id)
+    assert task is not None
+    assert task["status"] == "completed"
+    assert task["progress"]["message"] == "账号与集成已自动配置完成"
+    assert task["progress"]["percentage"] == 100
+
+    stages = [entry["stage"] for entry in manager.get_task_history(task_id)]
+    assert "waiting_services" in stages
+    assert "provisioning" in stages
+    assert "wiring" in stages
+    assert stages[-1] == "completed"
+    assert provision.await_count == 2
+    wire.assert_awaited_once_with(1)
+
+
+@pytest.mark.asyncio
+async def test_provision_group_reports_partial_failure(monkeypatch):
+    """有应用配置失败时任务仍完成，但提示未配置成功的数量。"""
+    manager = DeployTaskManager()
+    monkeypatch.setattr(provisioning_module, "deploy_task_manager", manager)
+    _patch_group(
+        monkeypatch,
+        {
+            "moviepilot": {"url": "http://host:3000"},
+            "qbittorrent": {"url": "http://host:8080"},
+        },
+    )
+    monkeypatch.setattr(
+        orchestration_service,
+        "_wait_task_terminal",
+        AsyncMock(return_value="completed"),
+    )
+    monkeypatch.setattr(
+        orchestration_service,
+        "_provision_app",
+        AsyncMock(return_value=ProvisionResult(ok=False, message="登录失败")),
+    )
+    monkeypatch.setattr(
+        orchestration_service, "_wire_group", AsyncMock(return_value=None)
+    )
+
+    task_id = manager.create_task(
+        "orchestration_provision",
+        meta={"operation": "provision", "instance_name": "test-stack"},
+        enforce_limit=False,
+    )
+
+    await orchestration_service._provision_group(1, _items(), task_id)
+
+    task = manager.get_task(task_id)
+    assert task is not None
+    assert task["status"] == "completed"
+    assert "2 个应用未配置成功" in task["progress"]["message"]
+
+
+@pytest.mark.asyncio
+async def test_provision_tracking_task_does_not_consume_deploy_slots(monkeypatch):
+    """跟踪任务不占用并发部署槽位，部署多个应用后仍能创建。"""
+    manager = DeployTaskManager(max_concurrent=1)
+    monkeypatch.setattr(provisioning_module, "deploy_task_manager", manager)
+    monkeypatch.setattr(
+        provisioning_module,
+        "create_background_task",
+        lambda coro: coro.close(),
+    )
+
+    # 已有一个真实部署任务占满并发槽位
+    deploy_task_id = manager.create_task("app_deploy")
+
+    tracking_id = orchestration_service._schedule_provisioning(
+        1,
+        "test-stack",
+        ["moviepilot"],
+        ["task-moviepilot"],
+        {"moviepilot": {"username": "admin", "password": "pass"}},
+    )
+
+    assert tracking_id is not None
+    tracking = manager.get_task(tracking_id)
+    assert tracking is not None
+    assert tracking["meta"]["operation"] == "provision"
+    assert tracking["status"] == "deploying"
+
+    # 跟踪任务进行中时，真实部署任务仍可创建
+    manager.complete_task(deploy_task_id)
+    another = manager.create_task("app_deploy")
+    assert another

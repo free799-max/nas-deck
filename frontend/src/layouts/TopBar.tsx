@@ -69,7 +69,7 @@ export function TopBar({ sidebarCollapsed, onToggleSidebar }: TopBarProps) {
         {activeTaskIds.length > 0 && (
           <button
             onClick={openPanel}
-            title="查看部署进度"
+            title="查看任务进度"
             className={`h-8 pl-2 pr-2 rounded-md flex items-center gap-1.5 text-xs font-medium transition-colors relative ${
               isPanelOpen
                 ? "bg-primary/10 text-primary"
@@ -77,7 +77,7 @@ export function TopBar({ sidebarCollapsed, onToggleSidebar }: TopBarProps) {
             }`}
           >
             <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            <span>部署中</span>
+            <span>任务中</span>
             <span className="h-4 min-w-4 px-1 rounded-full bg-primary text-primary-foreground text-[10px] flex items-center justify-center">
               {activeTaskIds.length}
             </span>

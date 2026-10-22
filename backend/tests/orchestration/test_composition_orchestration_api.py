@@ -36,3 +36,43 @@ async def test_orchestration_api_returns_composition_fields(client):
         assert "shared_config_schema" in item
         assert "yaml_template" not in item
         assert "config_schema" not in item
+
+
+@pytest.mark.asyncio
+async def test_list_deploy_tasks_requires_auth(client):
+    """未认证时无法查询进行中的部署任务。"""
+    resp = await client.get("/api/deploy-tasks")
+    assert resp.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_list_deploy_tasks_returns_active_task_ids(client):
+    """认证后返回进行中的任务 ID，已完成任务不再返回。"""
+    from app.services.orchestration.deploy_task_service import deploy_task_manager
+
+    await client.post("/api/auth/register", json={
+        "username": "deploylist",
+        "password": "deploylist123",
+    })
+    login_resp = await client.post("/api/auth/login", json={
+        "username": "deploylist",
+        "password": "deploylist123",
+    })
+    token = login_resp.json()["data"]["access_token"]
+
+    task_id = deploy_task_manager.create_task(
+        "app_deploy", meta={"project_name": "deploylist"}
+    )
+    try:
+        resp = await client.get("/api/deploy-tasks", headers={
+            "Authorization": f"Bearer {token}",
+        })
+        assert resp.status_code == 200
+        assert task_id in resp.json()["data"]
+    finally:
+        deploy_task_manager.complete_task(task_id)
+
+    resp = await client.get("/api/deploy-tasks", headers={
+        "Authorization": f"Bearer {token}",
+    })
+    assert task_id not in resp.json()["data"]

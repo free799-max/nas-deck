@@ -30,6 +30,12 @@ const stageMap: Record<string, string> = {
   preparing_packages: "准备依赖",
   starting_services: "启动服务",
   syncing_status: "同步状态",
+  stopping_services: "停止容器",
+  backing_up_data: "备份数据",
+  cleaning_records: "清理记录",
+  waiting_services: "等待部署",
+  provisioning: "配置账号",
+  wiring: "自动装配",
   completed: "部署完成",
   failed: "部署失败",
 };
@@ -45,11 +51,16 @@ const statusVariantMap: Record<
 
 function TaskTitle({ state }: { state: DeployTaskState }) {
   const meta = state.meta || {};
-  const title =
-    (meta.app_name as string) ||
-    (meta.project_name as string) ||
-    (meta.instance_name as string) ||
-    "部署任务";
+  const isDelete = meta.operation === "delete";
+  const isProvision = meta.operation === "provision";
+  const title = isDelete
+    ? `删除 ${(meta.instance_name as string) || "实例组"}`
+    : isProvision
+      ? "自动配置与装配"
+      : (meta.app_name as string) ||
+        (meta.project_name as string) ||
+        (meta.instance_name as string) ||
+        "部署任务";
   const subtitleCandidates = [
     meta.instance_name as string | undefined,
     meta.description as string | undefined,
@@ -111,6 +122,22 @@ function DeployTaskCard({ state, logs }: { state: DeployTaskState; logs: string[
   const meta = state.meta || {};
   const appName = meta.app_name as string | undefined;
   const appIcon = meta.icon as string | undefined;
+  const isDelete = meta.operation === "delete";
+  const isProvision = meta.operation === "provision";
+  const stageLabel =
+    state.stage === "completed"
+      ? isDelete
+        ? "删除完成"
+        : isProvision
+          ? "自动配置完成"
+          : "部署完成"
+      : state.stage === "failed"
+        ? isDelete
+          ? "删除失败"
+          : isProvision
+            ? "自动配置失败"
+            : "部署失败"
+        : stageMap[state.stage] || state.stage;
 
   return (
     <div
@@ -135,7 +162,7 @@ function DeployTaskCard({ state, logs }: { state: DeployTaskState; logs: string[
         <div className="ml-auto flex items-center gap-2 shrink-0">
           <Badge variant={statusConfig.variant} className="text-[10px] h-5 px-1.5 gap-1">
             {statusConfig.icon}
-            {stageMap[state.stage] || state.stage}
+            {stageLabel}
           </Badge>
           <span className="text-xs text-muted-foreground w-9 text-right tabular-nums">
             {state.progress.percentage}%
@@ -163,9 +190,17 @@ function DeployTaskCard({ state, logs }: { state: DeployTaskState; logs: string[
         <div className="mt-3 flex items-center gap-2.5 rounded-lg border border-green-500/25 bg-green-500/10 px-3 py-2.5">
           <CheckCircle2 className="h-4 w-4 shrink-0 text-green-600" aria-hidden="true" />
           <div className="min-w-0">
-            <p className="text-xs font-medium text-green-700">部署完成，服务已启动</p>
+            <p className="text-xs font-medium text-green-700">
+              {isDelete || isProvision
+                ? state.progress.message
+                : "部署完成，服务已启动"}
+            </p>
             <p className="text-[11px] text-green-600/80 truncate">
-              可在实例列表中查看访问地址与运行状态
+              {isDelete
+                ? "可在「恢复」中找回应用数据"
+                : isProvision
+                  ? "配置与装配结果已写入实例详情"
+                  : "可在实例列表中查看访问地址与运行状态"}
             </p>
           </div>
         </div>
@@ -175,7 +210,9 @@ function DeployTaskCard({ state, logs }: { state: DeployTaskState; logs: string[
 
       {state.error && (
         <div className="mt-3 rounded-md bg-destructive/10 border border-destructive/20 p-3">
-          <p className="text-xs font-semibold text-destructive mb-1">部署失败</p>
+          <p className="text-xs font-semibold text-destructive mb-1">
+            {isDelete ? "删除失败" : isProvision ? "自动配置失败" : "部署失败"}
+          </p>
           <p className="text-xs text-destructive/90 whitespace-pre-wrap break-all">
             {state.error}
           </p>

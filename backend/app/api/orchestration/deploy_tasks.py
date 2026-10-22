@@ -19,6 +19,14 @@ logger = logging.getLogger(__name__)
 router = APIRouter(route_class=CustomAPIRoute)
 
 
+@router.get("/deploy-tasks", response_model=list[str])
+async def list_deploy_tasks(
+    current_user: User = Depends(get_current_user),
+):
+    """列出进行中的部署任务 ID，供前端刷新或重新登录后恢复进度。"""
+    return deploy_task_manager.list_active_task_ids()
+
+
 @router.get("/deploy-tasks/{task_id}/events")
 async def deploy_task_events(
     task_id: str,

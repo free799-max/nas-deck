@@ -208,7 +208,13 @@ async def test_deploy_composition_success(db, media_apps, media_orchestration, m
 
     assert group is not None
     assert group.instance_name == "test-stack"
-    assert len(returned_task_ids) == 3
+    # 三个应用部署任务 + 一个自动配置/装配进度跟踪任务
+    assert returned_task_ids[:3] == [
+        "task-moviepilot",
+        "task-qbittorrent",
+        "task-jellyfin",
+    ]
+    assert len(returned_task_ids) == 4
 
     # 验证组合部署记录已创建
     result = await db.execute(

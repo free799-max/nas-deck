@@ -354,6 +354,19 @@ def test_deploy_task_history_meta_is_sanitized():
     assert task["meta"]["rendered_yaml"] == "PASSWORD=plain"
 
 
+def test_deploy_task_list_active_ids_only_running():
+    """任务列表仅返回进行中的任务 ID，完成后即移除。"""
+    manager = DeployTaskManager()
+    running = manager.create_task("app_deploy", meta={"project_name": "a"})
+    finished = manager.create_task("app_deploy", meta={"project_name": "b"})
+    manager.complete_task(finished)
+
+    assert manager.list_active_task_ids() == [running]
+
+    manager.fail_task(running, "失败")
+    assert manager.list_active_task_ids() == []
+
+
 # ---------- /auth/verify SSRF 防护 ----------
 
 

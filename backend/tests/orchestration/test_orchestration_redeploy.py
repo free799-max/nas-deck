@@ -169,7 +169,9 @@ async def test_redeploy_cleans_old_instance_and_project(
 
     assert deleted == ["test-stack-moviepilot"]
     assert created == ["moviepilot"]
-    assert task_ids == ["task-moviepilot"]
+    # 应用部署任务 + 自动配置/装配进度跟踪任务
+    assert task_ids[0] == "task-moviepilot"
+    assert len(task_ids) == 2
     assert group.id == failed_group.id
     assert group.status == "running"
 
@@ -237,7 +239,8 @@ async def test_redeploy_fallback_project_lookup_when_project_id_missing(
 
     assert set(deleted) == {"test-stack-moviepilot", "test-stack-jellyfin"}
     assert set(created) == {"moviepilot", "jellyfin"}
-    assert task_ids == ["task-moviepilot", "task-jellyfin"]
+    assert task_ids[:2] == ["task-moviepilot", "task-jellyfin"]
+    assert len(task_ids) == 3
     assert group.status == "running"
 
     # 残留实例行与项目都被清理
@@ -286,7 +289,8 @@ async def test_redeploy_removes_instance_row_without_any_project(
     )
 
     assert deleted == ["test-stack-moviepilot"]
-    assert task_ids == ["task-moviepilot", "task-jellyfin"]
+    assert task_ids[:2] == ["task-moviepilot", "task-jellyfin"]
+    assert len(task_ids) == 3
     assert group.status == "running"
 
     result = await db.execute(

@@ -72,6 +72,21 @@ class DeployTaskManager(BaseTaskManager):
             f"请等待现有任务完成后再试"
         )
 
+    def _check_concurrency_limit(self):
+        """并发上限只统计真实部署/删除任务。
+
+        进度跟踪类任务（如部署后的自动配置与装配）由部署流程派生，
+        不应占用并发槽位，否则部署多个应用后无法再创建跟踪任务。
+        """
+        running = sum(
+            1
+            for task in self._tasks.values()
+            if task.get("status") == self._active_status
+            and task.get("enforce_limit", True)
+        )
+        if running >= self._max_concurrent:
+            raise RuntimeError(self._concurrency_limit_error())
+
     def _new_progress(self, stage: str, percentage: int, message: str, detail: str | None = None) -> dict:
         """构造新的进度字典。"""
         return {
@@ -96,13 +111,19 @@ class DeployTaskManager(BaseTaskManager):
         project_id: int | None = None,
         action: str | None = None,
         meta: dict | None = None,
+        enforce_limit: bool = True,
     ) -> str:
-        """创建新部署任务并返回 task_id。"""
+        """创建新部署任务并返回 task_id。
+
+        Args:
+            enforce_limit: 是否占用并发槽位；进度跟踪类任务设为 False
+        """
         task_id = str(uuid.uuid4())
         now = self._now()
         # 并发上限检查与任务插入在同一个锁临界区内完成，消除 TOCTOU 竞态
         with self._lock:
-            self._check_concurrency_limit()
+            if enforce_limit:
+                self._check_concurrency_limit()
             self._cleanup_expired()
             self._tasks[task_id] = {
                 "task_id": task_id,
@@ -115,6 +136,7 @@ class DeployTaskManager(BaseTaskManager):
                 "project_id": project_id,
                 "action": action,
                 "meta": meta or {},
+                "enforce_limit": enforce_limit,
                 "created_at": now,
                 "updated_at": now,
                 "completed_at": None,
@@ -152,8 +174,8 @@ class DeployTaskManager(BaseTaskManager):
             self._append_history(task_id, notify)
             self._notify_listeners(task_id, notify)
 
-    def complete_task(self, task_id: str):
-        """标记任务为已完成。"""
+    def complete_task(self, task_id: str, message: str = "部署完成"):
+        """标记任务为已完成，可自定义完成提示。"""
         with self._lock:
             if task_id not in self._tasks:
                 return
@@ -162,7 +184,7 @@ class DeployTaskManager(BaseTaskManager):
             task["stage"] = "completed"
             task["completed_at"] = self._now()
             task["updated_at"] = self._now()
-            task["progress"] = self._new_progress("completed", 100, "部署完成")
+            task["progress"] = self._new_progress("completed", 100, message)
             notify = self._build_notify(task)
             self._append_history(task_id, notify)
             self._notify_listeners(task_id, notify)
@@ -194,6 +216,32 @@ class DeployTaskManager(BaseTaskManager):
         notify = self._build_notify(task, _error=task["error"])
         self._append_history(task["task_id"], notify)
         self._notify_listeners(task["task_id"], notify)
+
+    def has_active_group_task(self, group_id: int) -> bool:
+        """是否存在该编排实例组正在进行的后台任务（如删除）。"""
+        with self._lock:
+            for task in self._tasks.values():
+                if task.get("status") != self._active_status:
+                    continue
+                meta = task.get("meta") or {}
+                if meta.get("group_id") == group_id:
+                    return True
+            return False
+
+    def list_active_task_ids(self) -> list[str]:
+        """列出进行中的部署任务 ID，供前端刷新或重新登录后恢复进度。"""
+        with self._lock:
+            active: list[tuple[str, str]] = []
+            for task_id, task in self._tasks.items():
+                if task.get("status") != self._active_status:
+                    continue
+                # 顺带处理已超时任务，避免把实际已失效的任务返回给前端
+                self._check_task_timeout(task)
+                if task.get("status") != self._active_status:
+                    continue
+                active.append((task.get("created_at", ""), task_id))
+            active.sort()
+            return [task_id for _, task_id in active]
 
     def get_task_history(self, task_id: str) -> list[dict]:
         """获取任务进度历史快照，用于 SSE 连接时回放。"""

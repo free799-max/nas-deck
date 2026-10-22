@@ -28,6 +28,7 @@ export function DeployProgressDialog() {
   const invalidateInstances = useCallback(() => {
     queryClient.invalidateQueries({ queryKey: ["orchestration-instances"] });
     queryClient.invalidateQueries({ queryKey: ["apps", "instances"] });
+    queryClient.invalidateQueries({ queryKey: ["orchestration-backups"] });
   }, [queryClient]);
 
   const handleComplete = useCallback(
@@ -45,7 +46,7 @@ export function DeployProgressDialog() {
     (taskId: string, state: { error?: string | null }) => {
       if (finishedRef.current.has(taskId)) return;
       finishedRef.current.add(taskId);
-      toast.error(state.error || "部署失败");
+      toast.error(state.error || "操作失败");
       invalidateInstances();
     },
     [toast, invalidateInstances]
@@ -70,7 +71,7 @@ export function DeployProgressDialog() {
     <Dialog open={isPanelOpen} onOpenChange={handleOpenChange}>
       <DialogContent className="sm:max-w-3xl max-h-[85vh] flex flex-col p-0 overflow-hidden">
         <DialogHeader className="px-5 pt-5 pb-3 border-b shrink-0">
-          <DialogTitle>部署进度</DialogTitle>
+          <DialogTitle>任务进度</DialogTitle>
         </DialogHeader>
         <div className="px-5 py-4 overflow-y-auto">
           <DeployProgressPanel
