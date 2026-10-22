@@ -68,7 +68,7 @@ docker-compose up --build   # 构建并启动前后端容器（后端 :5001，�
 | 数据库 | `database.py` | SQLAlchemy 2.0 异步引擎(asyncpg/aiosqlite)、会话工厂、`get_db()` 依赖（自动 commit/rollback） |
 | API | `api/` | 路由模块（auth/app_store/settings），编排路由在 `api/orchestration/` 子包（orchestrations/deploy_tasks），Docker 路由按领域拆分为 `api/docker/` 子包 |
 | 核心 | `core/` | 基础设施：security(JWT+bcrypt)、custom_route(响应包装)、exceptions、background(后台任务)、task_manager(任务管理器基类 BaseTaskManager) |
-| 业务服务 | `services/` | 按功能域拆分：`docker/`（容器/镜像/宿主机/拉取任务）、`compose/`（Compose 编排/自动发现/YAML 工具）、`orchestration/`（编排与部署任务，service 按职责拆为 deploy/importer/provisioning/instances mixin）、`apps/`（应用客户端）、`app_store/`、`host/`、`system/`（系统配置/存储路径解析/数据目录/端口分配） |
+| 业务服务 | `services/` | 按功能域拆分：`docker/`（容器/镜像/宿主机/拉取任务）、`compose/`（Compose 编排/自动发现/YAML 工具）、`orchestration/`（编排与部署任务，service 按职责拆为 deploy/restore/importer/provisioning/instances mixin）、`apps/`（应用客户端）、`app_store/`、`host/`、`system/`（系统配置/存储路径解析/数据目录/端口分配） |
 | 模型 | `models/` | SQLAlchemy ORM 模型；Docker 相关模型按领域拆分为 `models/docker/` 子包 |
 | Schema | `schemas/` | Pydantic 请求/响应模型；Docker 与编排相关 Schema 分别拆分为 `schemas/docker/`、`schemas/orchestration/` 子包 |
 | 测试 | `tests/` | pytest，按领域分目录：core/、app_store/、docker/、orchestration/、system/ |
@@ -193,6 +193,15 @@ DockerComposeProject 1--1 DockerComposeStack
 - 前端：`hooks/useDeployTasks.ts` 管理任务状态与 SSE 连接，`components/DeployProgressDialog.tsx` 通过 `DeployTaskContext` 全局监听并展示进度；发起部署的组件调用 `startTask(taskId)` 接入。
 - 镜像拉取有独立的任务机制（`pull_task_service` + `useAllPullProgress`），不复用部署任务通道。
 
+## 删除实例组与数据备份/恢复
+
+- `DELETE /api/orchestrations/instances/{id}` 改为后台任务：立即返回 `{task_id}`，进度通过部署任务 SSE 推送（阶段 `preparing → stopping_services → backing_up_data → cleaning_records → completed`），前端复用全局任务进度弹窗。删除逻辑本身先用 `stop`/移除容器，再把各应用自身的数据目录移入 `<应用数据目录>/_backups/<时间戳>-<实例组名>/<Compose 项目名>/`，最后删除数据库记录；实现见 `services/orchestration/backup.py`。
+- 删除前会检查组内是否有进行中的部署任务；有则返回 409，避免删除正在部署的实例。
+- 只备份应用自身的数据目录（应用数据目录下、以 Compose 项目名命名的直接子目录）；共享存储（媒体/下载等）与应用数据目录之外的路径不动。若未配置应用数据目录则跳过备份。
+- 备份目录内写入 `backup.json`（实例组、编排、删除时间、各应用 `config`、`app_configs` 凭据、`shared_config`、目录映射），用于恢复。
+- 恢复：`GET /api/orchestrations/backups?orchestration=<name>` 列出备份，`POST /api/orchestrations/backups/restore`（`{backup, instance_name?}`）把数据目录移回并按备份配置重新部署，凭据沿用备份（系统统一密码变化时用 `previous_password` 登录旧密码再改密）；实现见 `services/orchestration/restore.py`，前端入口为自动化页右上角「恢复」按钮（`pages/automation/AutomationRestoreDialog.tsx`）。恢复成功后备份目录被消费。恢复后的账号自动配置与集成装配由 `orchestration_provision` 进度任务持续展示，完成后自动刷新实例详情。
+- 重新部署（修复）不走备份：它有意保留数据卷，并继承上次部署的密钥类 env。
+
 ## 应用商店数据维护
 
 - 应用定义存放在数据库 `apps` 表；批量收录的源文件在 `backend/scripts/apps_data/<name>.json`（格式见 `scripts/import_app.py` 的 `AppImportInput`），`_` 开头的文件（如参考样例）会被忽略。
@@ -231,13 +240,25 @@ DockerComposeProject 1--1 DockerComposeStack
 - `verify_auth(config: dict)` 接收编排实例中保存的认证配置（`url`、`auth_type`、`username`、`password`、`api_key` 等），返回 `AuthVerifyResult(valid, message)`。
 - 统一检测入口为 `POST /api/orchestrations/auth/verify`，由 `orchestration_service.verify_app_auth()` 根据 `app_name` 调度对应客户端。
 - 新增应用时，只需新增客户端子包并注册，无需修改 API 路由或 Service 调度逻辑。
+- 当前已注册客户端：`moviepilot`、`qbittorrent`、`jellyfin`（`emby` 复用）、`comic-auto`、`komga`、`kavita`。
 
 ### 应用检测/优化与自动装配
 
 - `AppClient.inspect(ctx)` / `apply_fix(ctx, item_ids)` 提供每应用检测项与一键修复（qBittorrent 优化项、Jellyfin 库/Webhook、MoviePilot 装配完整性）；调度入口为 `GET/POST /api/orchestrations/instances/{id}/apps/{app}/inspect[/fix]`。
 - 部署/修复后 `WiringMixin._wire_group` 按编排模板 `app_composition` 条目里的 `integrations` 声明自动装配跨应用集成（当前：把 qBittorrent、Jellyfin/Emby 写入 MoviePilot 的 `Downloaders`/`MediaServers` 系统设置），结果落库 `group.app_configs[app]['integrations']`；手动重跑：`POST /api/orchestrations/instances/{id}/wire`。
+- 手动重跑装配会先执行 `ProvisionMixin._reprovision_pending`：对 `app_configs` 里尚未 `provisioned` 的应用补做账号自动配置（复用统一密码和部署配置里的 `API_TOKEN`），覆盖后端重启导致后台配置协程中断的场景，然后再装配。
+- 部署/修复/恢复后的自动配置与装配通过独立的进度跟踪任务（`orchestration_provision`）推送：`_schedule_provisioning` 创建任务并把 ID 追加到部署响应的 `task_ids`，前端进度弹窗依次展示「等待部署 → 配置账号 → 自动装配 → 完成」。跟踪任务不占用并发部署槽位（`create_task(..., enforce_limit=False)`），完成时刷新实例详情，因此恢复后无需再手动点「重新装配」。
 - MoviePilot 插件管理：`GET/POST /api/orchestrations/instances/{id}/apps/moviepilot/plugins[/install]`。
 - 前端：`AppConfigPanel` 分 Tab（概览/检测优化/集成），检测面板 `AppInspectPanel`、MoviePilot 集成面板 `MoviePilotIntegrationPanel` 均在 `pages/automation/`。
+
+### 漫画自动化（Comic Auto + Komga/Kavita）
+
+- 编排模板为 `comics-stack`（`category=comics`），组合为 `comic-auto`（必选）+ `komga` / `kavita`（可选，`group=reader`）。
+- 应用数据：`scripts/apps_data/comic-auto.json`、`scripts/apps_data/kavita.json`，Komga 复用已有 `komga.json`；图标在 `frontend/public/icons/apps/<name>.svg`。
+- 初始化模板（幂等）：`PYTHONPATH=. .venv/bin/python -m scripts.init_comics_orchestration`；应用缺失时先执行 `PYTHONPATH=. .venv/bin/python -m scripts.import_apps_batch`。
+- 共享存储：`comics` 宿主机目录统一挂载到各容器 `/mnt/media`；Comic Auto 下载目录 `/mnt/media/down` 与 Komga / Kavita 媒体库目录一致，缓存目录 `/mnt/media/cache`，新章节下载后可直接被媒体库扫描入库。
+- 账号自动配置：Comic Auto 通过 `/api/v1/app/init/setup/` 创建管理员；Komga 通过 `/api/v1/claim` claim 服务器并创建 API Key；Kavita 通过 `/api/Account/register` 注册首个管理员，登录接口返回 API Key。
+- 自动装配：`comic-auto` 条目的 `integrations` 声明 Komga/Kavita 为 `mediaserver`，部署后由 `ComicAutoClient.setup_mediaserver` 写入媒体服务器、下载目录与缓存目录；结果落在 `group.app_configs['comic-auto']['integrations']`。Comic Auto 使用账号密码换取 JWT 完成装配，因此客户端标记 `requires_api_key = False`。
 
 ### 前端
 
