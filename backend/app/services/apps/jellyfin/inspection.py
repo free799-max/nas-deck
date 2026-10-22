@@ -798,9 +798,18 @@ class JellyfinInspectionMixin:
 
     @staticmethod
     def _expected_media_dir(shared_config: dict | None) -> str | None:
-        """从编排共享配置的 volumes 中找媒体目录（container_path 含 media）。"""
-        for volume in (shared_config or {}).get("volumes") or []:
+        """从编排共享配置推导媒体目录。
+
+        优先取 container_path 含 media 的挂载；单共享根目录时
+        （如影视自动化的 /data）媒体库位于其下的 media 子目录。
+        """
+        volumes = (shared_config or {}).get("volumes") or []
+        for volume in volumes:
             container_path = str(volume.get("container_path") or "")
             if "media" in container_path:
                 return container_path
+        for volume in volumes:
+            root = str(volume.get("container_path") or "").strip().rstrip("/")
+            if root and root != "/":
+                return f"{root}/media"
         return None

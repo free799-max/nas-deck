@@ -935,7 +935,12 @@ class MoviePilotInspectionMixin:
 
     @staticmethod
     def _shared_container_path(ctx: dict, kind: str) -> str:
-        """从编排共享存储映射中推导下载/媒体库容器路径。"""
+        """从编排共享存储映射中推导下载/媒体库容器路径。
+
+        优先按 container_path 关键字匹配（兼容 media/downloads 双挂载）；
+        单共享根目录（如影视自动化的 /data）时，下载/媒体库分别位于其
+        downloads / media 子目录。
+        """
         volumes = (ctx.get("shared_config") or {}).get("volumes") or []
         for volume in volumes:
             if not isinstance(volume, dict):
@@ -948,6 +953,13 @@ class MoviePilotInspectionMixin:
                 return path
             if kind == "library" and "media" in lowered:
                 return path
+        for volume in volumes:
+            if not isinstance(volume, dict):
+                continue
+            root = str(volume.get("container_path") or "").strip().rstrip("/")
+            if root and root != "/":
+                sub = "downloads" if kind == "download" else "media"
+                return f"{root}/{sub}"
         return _DEFAULT_DOWNLOAD_PATH if kind == "download" else _DEFAULT_LIBRARY_PATH
 
     @staticmethod

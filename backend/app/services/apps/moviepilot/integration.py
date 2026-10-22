@@ -126,6 +126,7 @@ class MoviePilotIntegrationMixin:
         api_key_ms: str,
         play_host: str | None = None,
         webhook_host: str | None = None,
+        **_: Any,
     ) -> tuple[bool, str | None]:
         """按 name 向 MediaServers 设置项 upsert 一个媒体服务器并回读验证。
 

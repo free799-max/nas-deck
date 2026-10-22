@@ -188,6 +188,19 @@ async def test_qb_apply_fix_writes_preferences(monkeypatch):
     assert captured[0]["dht"] is True and captured[0]["pex"] is True
 
 
+def test_single_shared_root_derives_subdirectories():
+    """单共享根目录时，下载/媒体库路径落在其 downloads / media 子目录。"""
+    shared_config = {
+        "volumes": [{"host_path": "movie-auto", "container_path": "/data"}]
+    }
+    ctx = {"shared_config": shared_config}
+
+    assert MoviePilotClient._shared_container_path(ctx, "download") == "/data/downloads"
+    assert MoviePilotClient._shared_container_path(ctx, "library") == "/data/media"
+    assert QBittorrentClient._expected_download_dir(shared_config) == "/data/downloads"
+    assert JellyfinClient._expected_media_dir(shared_config) == "/data/media"
+
+
 # ---------------- Jellyfin ----------------
 
 _WEBHOOK_URL = "http://media-moviepilot:3000/api/v1/webhook?token=mp-token"

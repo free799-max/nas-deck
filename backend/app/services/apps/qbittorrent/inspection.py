@@ -279,9 +279,18 @@ class QBittorrentInspectionMixin:
 
     @staticmethod
     def _expected_download_dir(shared_config: dict | None) -> str | None:
-        """从编排共享配置的 volumes 中找下载目录（container_path 含 downloads）。"""
-        for volume in (shared_config or {}).get("volumes") or []:
+        """从编排共享配置推导下载目录。
+
+        优先取 container_path 含 downloads 的挂载；单共享根目录时
+        （如影视自动化的 /data）下载目录位于其下的 downloads 子目录。
+        """
+        volumes = (shared_config or {}).get("volumes") or []
+        for volume in volumes:
             container_path = str(volume.get("container_path") or "")
             if "downloads" in container_path:
                 return container_path
+        for volume in volumes:
+            root = str(volume.get("container_path") or "").strip().rstrip("/")
+            if root and root != "/":
+                return f"{root}/downloads"
         return None
