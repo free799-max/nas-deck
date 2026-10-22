@@ -413,16 +413,32 @@ async def test_instance_crud_endpoints(client_with_seed, monkeypatch):
     assert updated["instance_name"] == "crud-group-renamed"
     assert updated["app_configs"]["moviepilot"]["url"] == "http://localhost:3001"
 
-    # DELETE
+    # DELETE 改为后台任务：立即返回 task_id，实际删除由后台执行
+    import app.core.background as background_module
+    from app.services.orchestration.deploy_task_service import deploy_task_manager
+
+    scheduled = []
+
+    def fake_create_background_task(coro):
+        scheduled.append(coro)
+        coro.close()
+
+    monkeypatch.setattr(
+        background_module, "create_background_task", fake_create_background_task
+    )
+
     resp = await client_with_seed.delete(
         f"/api/orchestrations/instances/{group_id}",
         headers={"Authorization": f"Bearer {token}"},
     )
-    assert resp.status_code == 204
+    assert resp.status_code == 200
+    task_id = resp.json()["data"]["task_id"]
+    assert task_id
+    assert scheduled
 
-    # 删除后 GET 应 404
-    resp = await client_with_seed.get(
-        f"/api/orchestrations/instances/{group_id}",
-        headers={"Authorization": f"Bearer {token}"},
-    )
-    assert resp.status_code == 404
+    task = deploy_task_manager.get_task(task_id)
+    try:
+        assert task is not None
+        assert task["meta"]["operation"] == "delete"
+    finally:
+        deploy_task_manager.fail_task(task_id, "测试清理")

@@ -56,3 +56,33 @@ class PluginInstallRequest(BaseModel):
 
     plugin_id: str = Field(..., min_length=1, max_length=100)
     repo_url: str | None = None
+
+
+class OrchestrationBackupAppOut(BaseModel):
+    """备份中的应用数据目录。"""
+
+    app_name: str
+    instance_name: str | None = None
+
+
+class OrchestrationBackupOut(BaseModel):
+    """可恢复的实例组备份。"""
+
+    name: str
+    instance_name: str
+    orchestration_name: str | None = None
+    deleted_at: str | None = None
+    apps: list[OrchestrationBackupAppOut] = []
+
+
+class OrchestrationRestoreRequest(BaseModel):
+    """从备份恢复实例组请求。"""
+
+    backup: str = Field(..., min_length=1, max_length=200)
+    instance_name: str | None = Field(None, min_length=1, max_length=100)
+
+
+class OrchestrationDeleteResponse(BaseModel):
+    """删除实例组任务响应。"""
+
+    task_id: str

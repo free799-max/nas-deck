@@ -6,7 +6,7 @@
 from dataclasses import asdict
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, Response
+from fastapi import APIRouter, Depends
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -22,6 +22,8 @@ from app.schemas.app_auth import (
 )
 from app.schemas.orchestration import (
     InspectFixRequest,
+    OrchestrationBackupOut,
+    OrchestrationDeleteResponse,
     OrchestrationDeployRequest,
     OrchestrationDeployResponse,
     OrchestrationDetailOut,
@@ -32,6 +34,7 @@ from app.schemas.orchestration import (
     OrchestrationInstanceGroupOut,
     OrchestrationInstanceUpdateRequest,
     OrchestrationOut,
+    OrchestrationRestoreRequest,
     PluginInstallRequest,
 )
 from app.services.orchestration import orchestration_service
@@ -140,15 +143,20 @@ async def update_orchestration_instance(
     return _build_instance_detail_out(group)
 
 
-@router.delete("/instances/{instance_id}", status_code=204)
+@router.delete(
+    "/instances/{instance_id}", response_model=OrchestrationDeleteResponse
+)
 async def delete_orchestration_instance(
     instance_id: int,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_admin),
 ):
-    """删除编排实例组及其关联实例。"""
-    await orchestration_service.delete_instance(db, instance_id)
-    return Response(status_code=204)
+    """删除编排实例组：创建后台任务，进度通过部署任务 SSE 推送。
+
+    容器与 Compose 项目会被移除，各应用数据目录移入备份目录。
+    """
+    task_id = await orchestration_service.start_delete_instance(db, instance_id)
+    return OrchestrationDeleteResponse(task_id=task_id)
 
 
 @router.post("/instances/{instance_id}/redeploy", response_model=OrchestrationDeployResponse)
@@ -191,6 +199,37 @@ async def wire_orchestration_instance(
     await orchestration_service.get_group(db, instance_id)
     orchestration_service.schedule_wiring(instance_id)
     return {"ok": True, "message": "装配已开始"}
+
+
+@router.get("/backups", response_model=list[OrchestrationBackupOut])
+async def list_orchestration_backups(
+    orchestration: str | None = None,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    """列出可恢复的实例组备份（删除时自动生成）。"""
+    return await orchestration_service.list_backups(db, orchestration)
+
+
+@router.post("/backups/restore", response_model=OrchestrationDeployResponse)
+async def restore_orchestration_backup(
+    data: OrchestrationRestoreRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    """从备份恢复实例组：移回应用数据目录并按原配置重新部署。"""
+    group, task_ids = await orchestration_service.restore_backup(
+        db,
+        backup_name=data.backup,
+        instance_name=data.instance_name,
+        user_id=current_user.id,
+    )
+    return OrchestrationDeployResponse(
+        group_id=group.id,
+        instance_name=group.instance_name,
+        status=group.status,
+        task_ids=task_ids,
+    )
 
 
 @router.get("/instances/{instance_id}/apps/{app_name}/inspect")
@@ -302,7 +341,9 @@ async def get_orchestration_icon(
 
     icon_path = Path(orchestration.icon)
     if not icon_path.is_absolute():
-        icon_path = Path(__file__).parent.parent.parent / icon_path
+        # icon 字段约定为相对 backend/ 的路径（如 data/icons/media-stack.svg）
+        backend_dir = Path(__file__).resolve().parent.parent.parent.parent
+        icon_path = backend_dir / icon_path
     icon_path = icon_path.resolve()
 
     # 只允许提供图标目录内的文件，防止通过 icon 字段读取任意宿主机文件

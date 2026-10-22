@@ -35,8 +35,16 @@ class DeployMixin:
         app_configs: dict[str, dict],
         shared_config: dict,
         user_id: int | None = None,
+        credential_overrides: dict[str, dict] | None = None,
+        initial_app_configs: dict[str, dict] | None = None,
     ) -> tuple[AppOrchestrationInstance, list[str]]:
         """组合部署：按 AppOrchestration.app_composition 的定义，批量部署多个独立 App。
+
+        Args:
+            credential_overrides: 指定应用的自动配置凭据（恢复备份时沿用原凭据，
+                不再按统一密码重新生成）
+            initial_app_configs: 新实例组的初始 ``app_configs``（恢复时继承
+                原访问地址之外的认证信息）
 
         返回组合部署记录和每个 App 对应的部署任务 ID 列表。
         """
@@ -64,6 +72,12 @@ class DeployMixin:
             shared_config=shared_config or {},
             status="deploying",
         )
+        if initial_app_configs:
+            group.app_configs = {
+                name: dict(entry)
+                for name, entry in initial_app_configs.items()
+                if isinstance(entry, dict)
+            }
         db.add(group)
         await db.flush()
         await db.refresh(group)
@@ -84,8 +98,12 @@ class DeployMixin:
                     app_schema=app_map[app_name].config_schema,
                     app_name=app_name,
                 )
-                # 注入统一账号密码（env 类应用写入 env 数组）
-                creds = await prepare_app_credentials(db, app_name, merged_config)
+                # 注入统一账号密码（env 类应用写入 env 数组）；
+                # 恢复备份时沿用备份中记录的凭据，避免与已恢复的数据不匹配
+                if credential_overrides and app_name in credential_overrides:
+                    creds = dict(credential_overrides[app_name])
+                else:
+                    creds = await prepare_app_credentials(db, app_name, merged_config)
                 if creds:
                     pending_credentials[app_name] = creds
                 sub_instance_name = f"{instance_name}-{app_name}"
@@ -115,10 +133,13 @@ class DeployMixin:
             await db.commit()
             raise
 
-        # 部署任务完成后把统一账号配置进真实服务（后台执行，不阻塞响应）
-        self._schedule_provisioning(
+        # 部署任务完成后把统一账号配置进真实服务（后台执行，不阻塞响应）；
+        # 跟踪任务的 ID 一并返回，前端据此继续展示配置与装配进度
+        provision_task_id = self._schedule_provisioning(
             group.id, instance_name, selected_apps, task_ids, pending_credentials
         )
+        if provision_task_id:
+            task_ids.append(provision_task_id)
 
         return group, task_ids
 
@@ -274,10 +295,13 @@ class DeployMixin:
             await db.commit()
             raise
 
-        # 部署任务完成后把统一账号配置进真实服务（后台执行，不阻塞响应）
-        self._schedule_provisioning(
+        # 部署任务完成后把统一账号配置进真实服务（后台执行，不阻塞响应）；
+        # 跟踪任务的 ID 一并返回，前端据此继续展示配置与装配进度
+        provision_task_id = self._schedule_provisioning(
             group.id, instance_name, selected_apps, task_ids, pending_credentials
         )
+        if provision_task_id:
+            task_ids.append(provision_task_id)
 
         return group, task_ids
 
