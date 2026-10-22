@@ -35,7 +35,14 @@ _ENV_CREDENTIAL_SPECS: dict[str, dict[str, str]] = {
 }
 
 # 运行时装配类应用：凭据在部署后由应用客户端 provision 写入
-_PROVISION_ONLY_APPS = {"qbittorrent", "jellyfin", "emby"}
+_PROVISION_ONLY_APPS = {
+    "qbittorrent",
+    "jellyfin",
+    "emby",
+    "comic-auto",
+    "komga",
+    "kavita",
+}
 
 
 def generate_password(length: int = 16) -> str:

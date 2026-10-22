@@ -17,6 +17,7 @@ export const RELATION_LABELS: Record<AppCompositionItem["relation"], string> = {
 /** 分组的中文标签 */
 export const GROUP_LABELS: Record<string, string> = {
   player: "播放器",
+  reader: "阅读器",
 };
 
 /** 应用在组合中的角色文案，如「必选」「播放器」 */

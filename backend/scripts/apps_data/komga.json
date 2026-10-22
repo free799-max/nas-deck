@@ -147,11 +147,6 @@
                         "mode": "rw",
                         "host_path": "komga/config",
                         "container_path": "/config"
-                    },
-                    {
-                        "mode": "rw",
-                        "host_path": "komga/data",
-                        "container_path": "/data"
                     }
                 ]
             },
@@ -195,7 +190,7 @@
         }
     },
     "yaml_template": "services:\n  komga:\n    image: {{ image }}\n    container_name: {{ project_name }}\n    ports:\n{%- for port in ports %}\n      - \"{{ port.local_port }}:{{ port.container_port }}/{{ port.protocol }}\"\n{%- endfor %}\n    volumes:\n{%- for vol in volumes %}\n      - {{ to_host_path(vol.host_path if (vol.host_path.startswith('/') or vol.shared) else project_name ~ '/' ~ vol.host_path) }}:{{ vol.container_path }}:{{ vol.mode }}\n{%- endfor %}\n    privileged: {{ privileged | lower }}\n    restart: unless-stopped\n    environment:\n{%- for item in komga_env %}\n      - {{ item.key }}={{ item.value }}\n{%- endfor %}\n",
-    "readme": "# Komga\n\nKomga 是专为漫画（Comics / Manga / BD）设计的媒体服务器：自动扫描库目录、刮削元数据，内置流畅的 Web 阅读器，并支持 OPDS 接入第三方阅读客户端。\n\n## 部署前准备\n\n1. 在「存储空间设置」中确认 `/config`（配置与数据库）与 `/data`（漫画文件）的本地路径；有多个漫画目录时可继续添加挂载。\n2. `JAVA_TOOL_OPTIONS` 用于限制 JVM 内存，默认 `-Xmx1g`，资源紧张可调低。\n3. 部署完成后访问 `http://<NAS-IP>:25600`，创建管理员账号后添加媒体库并扫描。",
+    "readme": "# Komga\n\nKomga 是专为漫画（Comics / Manga / BD）设计的媒体服务器：自动扫描库目录、刮削元数据，内置流畅的 Web 阅读器，并支持 OPDS 接入第三方阅读客户端。\n\n## 部署前准备\n\n1. 在「存储空间设置」中确认 `/config`（配置与数据库）的本地路径；漫画目录由「漫画自动化」编排的共享存储挂载到 `/mnt/media`，建立媒体库时选择 `/mnt/media/down`。单独部署时可自行添加漫画目录挂载。\n2. `JAVA_TOOL_OPTIONS` 用于限制 JVM 内存，默认 `-Xmx1g`，资源紧张可调低。\n3. 部署完成后访问 `http://<NAS-IP>:25600`，创建管理员账号后添加媒体库并扫描。",
     "version": "1.0.0",
     "type": "compose",
     "changelog": "初始导入",

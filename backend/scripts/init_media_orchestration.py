@@ -34,10 +34,9 @@ MEDIA_SHARED_CONFIG_SCHEMA = {
         "volumes": {
             "type": "array",
             "title": "存储空间设置",
-            "description": "影视自动化各应用共享的存储映射",
+            "description": "影视自动化各应用共享的存储根目录，下载与媒体库位于其 downloads / media 子目录",
             "default": [
-                {"mode": "rw", "host_path": "media", "container_path": "/media"},
-                {"mode": "rw", "host_path": "downloads", "container_path": "/downloads"},
+                {"mode": "rw", "host_path": "media"},
             ],
             "items": {
                 "type": "object",
@@ -103,7 +102,7 @@ async def main():
             print("media-stack not found")
             return
 
-        orch.display_name = "影视自动化"
+        orch.display_name = "movie-auto"
         orch.icon = "data/icons/media-stack.svg"
         orch.app_composition = MEDIA_COMPOSITION
         orch.shared_config_schema = MEDIA_SHARED_CONFIG_SCHEMA

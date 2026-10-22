@@ -20,6 +20,9 @@ class ProvisionResult:
     ok: bool
     message: str | None = None
     api_key: str | None = None
+    #: 实际生效的用户名。部分应用会改写用户名（如 Komga 使用邮箱登录），
+    #: 由客户端回传后写入 app_configs，保证后续检测/装配使用正确凭据。
+    username: str | None = None
 
 
 @dataclass
