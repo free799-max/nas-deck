@@ -34,6 +34,9 @@ class Settings(BaseSettings):
     CORS_ORIGINS: str = "http://localhost:5173"
     """允许的跨域来源，逗号分隔。"""
 
+    ACCESS_HOST: str = ""
+    """生成应用跳转链接时使用的访问地址（内网 IP 或域名），留空时自动探测。"""
+
     DATA_ROOT: str = "./data"
     """数据根目录，Compose 工作区与应用图标默认存放于其下。"""
 
@@ -41,7 +44,28 @@ class Settings(BaseSettings):
     """Compose 项目工作目录，默认为 DATA_ROOT/compose，可单独覆盖。"""
 
     APP_ICON_DIR: str = ""
-    """用户上传的应用商店图标存储目录，默认为 DATA_ROOT/app-icons，可单独覆盖。"""
+    """图标文件存储目录，默认为 DATA_ROOT/app-icons，可单独覆盖。"""
+
+    MANAGE_BASE_URL: str = ""
+    """配套管理端（nas-deck-manage）基础地址，留空表示禁用应用与编排方案同步，保持纯本地行为。"""
+
+    MANAGE_SYNC_INTERVAL_MINUTES: int = 30
+    """从管理端定时同步应用与编排方案的间隔（分钟）。"""
+
+    MANAGE_SYNC_ON_STARTUP: bool = True
+    """启动时是否立即从管理端同步一次应用与编排方案。"""
+
+    LICENSE_PUBLIC_KEY: str = ""
+    """授权证书 Ed25519 公钥（PEM）；配置后不再从管理端获取。"""
+
+    LICENSE_ISSUER: str = "nas-deck-manage"
+    """授权证书签发方，需与管理端 LICENSE_ISSUER 一致。"""
+
+    LICENSE_REFRESH_INTERVAL_HOURS: float = 24
+    """后台刷新授权证书的间隔（小时）。"""
+
+    LICENSE_HTTP_TIMEOUT_SECONDS: float = 15
+    """授权管理端请求超时（秒）。"""
 
     @model_validator(mode="after")
     def _fill_data_subdirs(self) -> "Settings":
