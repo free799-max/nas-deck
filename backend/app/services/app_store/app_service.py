@@ -3,26 +3,22 @@
 import asyncio
 import logging
 import re
-from pathlib import Path
 
 import yaml
 from jinja2 import Environment, BaseLoader
-from jsonschema import validate, ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.config import settings
 from app.core.background import create_background_task
 from app.core.exceptions import APIException
 from app.database import async_session
 from app.models.app_store import App
 from app.models.docker import DockerComposeProject
 from app.models.orchestration import AppInstance
-from app.schemas.app_store import AppCreate, AppUpdate
 from app.services.app_store.app_validator import (
     extract_default_values,
-    validate_app_definition,
+    validate_app_config,
 )
 from app.services.compose import compose_manager
 from app.services.orchestration.deploy_task_service import deploy_task_manager
@@ -39,13 +35,6 @@ from app.services.system import (
 )
 
 logger = logging.getLogger(__name__)
-
-# 允许上传的图标扩展名与大小限制
-ALLOWED_ICON_EXTS = {".svg", ".png", ".jpg", ".jpeg", ".webp"}
-MAX_ICON_SIZE = 1024 * 1024  # 1MB
-
-# 应用 name 合法字符（小写字母数字、中划线、下划线），用于防止路径穿越
-APP_NAME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 
 
 def _render_yaml_template(
@@ -89,6 +78,82 @@ def _render_yaml_template(
     return rendered
 
 
+# linuxserver/qbittorrent 与官方 qbittorrent-nox 镜像使用不同的环境变量名。
+# 应用模板按官方镜像定义 QBT_WEBUI_PORT/QBT_TORRENTING_PORT，编排覆盖为
+# linuxserver 镜像后若不转换，WebUI 会回落到 8080，与端口映射的容器端口
+# 不一致，宿主机端口无法访问，自动配置也会一直等待。
+_QBITTORRENT_LSIO_REPOS = {
+    "linuxserver/qbittorrent",
+    "lscr.io/linuxserver/qbittorrent",
+}
+_QBITTORRENT_LSIO_ENV_ALIASES = {
+    "QBT_WEBUI_PORT": "WEBUI_PORT",
+    "QBT_TORRENTING_PORT": "TORRENTING_PORT",
+}
+_QBITTORRENT_LSIO_IGNORED_ENV = {"QBT_LEGAL_NOTICE"}
+
+_IMAGE_PLACEHOLDER = re.compile(r"\{\{\s*image\s*\}\}")
+
+
+def _image_repository(image: str) -> str:
+    """去掉镜像标签/摘要，返回仓库名。"""
+    repo = (image or "").split("@", 1)[0]
+    last_segment = repo.rsplit("/", 1)[-1]
+    if ":" in last_segment:
+        repo = repo.rsplit(":", 1)[0]
+    return repo.lower()
+
+
+def _normalize_qbittorrent_env(config: dict, image: str) -> None:
+    """按 linuxserver 镜像的环境变量名改写 qBittorrent 配置（原地修改）。"""
+    if _image_repository(image) not in _QBITTORRENT_LSIO_REPOS:
+        return
+    env_list = config.get("qbittorrent_env")
+    if not isinstance(env_list, list):
+        return
+
+    normalized: list[dict] = []
+    present_keys = {
+        str(item.get("key"))
+        for item in env_list
+        if isinstance(item, dict) and item.get("key")
+    }
+    for item in env_list:
+        if not isinstance(item, dict):
+            normalized.append(item)
+            continue
+        key = str(item.get("key") or "")
+        if key in _QBITTORRENT_LSIO_IGNORED_ENV:
+            continue
+        alias = _QBITTORRENT_LSIO_ENV_ALIASES.get(key)
+        if alias:
+            # 用户已显式提供目标变量时以用户配置为准
+            if alias in present_keys:
+                continue
+            item = {**item, "key": alias}
+            present_keys.add(alias)
+        normalized.append(item)
+    config["qbittorrent_env"] = normalized
+
+
+def _apply_template_image(template: str, default_image: str, image: str) -> str:
+    """让编排级镜像覆盖对未使用 ``{{ image }}`` 的旧模板也生效。
+
+    部分应用模板把镜像写死（如 ``image: jellyfin/jellyfin``），而编排方案
+    在组件级别声明了目标镜像/标签。这里仅在模板完全没有镜像占位符时替换
+    与应用默认镜像完全一致的 image 行，避免误改多服务模板中依赖服务的镜像
+    （如 MoviePilot 自带 postgresql/redis）。
+    """
+    if not image or not default_image or image == default_image:
+        return template
+    if _IMAGE_PLACEHOLDER.search(template):
+        return template
+    pattern = re.compile(
+        rf"(?m)^(\s*image:\s*){re.escape(default_image)}(\s*)$"
+    )
+    return pattern.sub(rf"\g<1>{image}\g<2>", template)
+
+
 def _slugify(name: str) -> str:
     """将实例名称转换为合法 Compose 项目名。"""
     name = name.lower().strip()
@@ -106,6 +171,32 @@ def _extract_app_ports(config_schema: dict) -> list[str]:
         if "port" in key.lower() and prop.get("type") == "integer":
             ports.append(key)
     return ports
+
+
+def _collect_config_ports(config_schema: dict, config: dict) -> list[int]:
+    """收集应用配置中会绑定到宿主机的端口（去重并保持顺序）。
+
+    与 `_validate_and_prepare` 的分配口径一致：单端口字段 + ports 数组的
+    local_port。固定端口应用靠这份列表做占用检测与预留。
+    """
+    ports: list[int] = []
+
+    def _add(value) -> None:
+        if isinstance(value, bool):
+            return
+        if isinstance(value, int):
+            ports.append(value)
+        elif isinstance(value, str) and value.isdigit():
+            ports.append(int(value))
+
+    for key in _extract_app_ports(config_schema):
+        _add(config.get(key))
+    entries = config.get("ports")
+    if isinstance(entries, list):
+        for entry in entries:
+            if isinstance(entry, dict):
+                _add(entry.get("local_port"))
+    return list(dict.fromkeys(ports))
 
 
 class AppService:
@@ -155,155 +246,6 @@ class AppService:
         if not resolver.configured:
             resolver = resolver.with_defaults()
         return resolver
-
-    async def create_app(self, db: AsyncSession, data: AppCreate) -> App:
-        """创建应用商店应用。
-
-        校验 name 唯一性与格式、config_schema 与 yaml_template 合法性后落库。
-        """
-        if not APP_NAME_PATTERN.match(data.name):
-            raise APIException(
-                "应用标识 name 只能包含小写字母、数字、中划线和下划线，且以字母或数字开头",
-                400,
-            )
-
-        existing = await db.execute(select(App).where(App.name == data.name))
-        if existing.scalar_one_or_none():
-            raise APIException(f"应用 '{data.name}' 已存在", 409)
-
-        validate_app_definition(data.yaml_template, data.config_schema, data.image or "")
-
-        app = App(**data.model_dump())
-        db.add(app)
-        await db.commit()
-        await db.refresh(app)
-        return app
-
-    async def update_app(self, db: AsyncSession, name: str, data: AppUpdate) -> App:
-        """更新应用商店应用（name 不可修改，内置应用允许编辑）。
-
-        若更新了 yaml_template / config_schema / image，使用合并后的值重新校验。
-        """
-        app = await self.get_app(db, name)
-
-        update_data = data.model_dump(exclude_unset=True)
-        if not update_data:
-            return app
-
-        # 用合并后的值校验模板与 Schema 组合
-        merged_template = update_data.get("yaml_template", app.yaml_template)
-        merged_schema = update_data.get("config_schema", app.config_schema or {})
-        merged_image = update_data.get("image", app.image) or ""
-        if merged_template:
-            validate_app_definition(merged_template, merged_schema, merged_image)
-
-        for key, value in update_data.items():
-            setattr(app, key, value)
-        await db.commit()
-        await db.refresh(app)
-        return app
-
-    async def delete_app(self, db: AsyncSession, name: str) -> None:
-        """删除应用商店应用。
-
-        内置应用禁止删除；存在部署实例的应用禁止删除。
-        """
-        app = await self.get_app(db, name)
-
-        if app.is_builtin:
-            raise APIException("内置应用禁止删除", 400)
-
-        result = await db.execute(
-            select(AppInstance).where(AppInstance.app_id == app.id)
-        )
-        if result.scalars().first() is not None:
-            raise APIException("应用存在部署实例，请先删除相关实例", 409)
-
-        await db.delete(app)
-        await db.commit()
-
-        # 清理已上传的图标文件（忽略失败）
-        icon_dir = Path(settings.APP_ICON_DIR)
-        for ext in ALLOWED_ICON_EXTS:
-            icon_file = icon_dir / f"{name}{ext}"
-            try:
-                if icon_file.exists():
-                    icon_file.unlink()
-            except OSError:
-                logger.warning("删除应用图标文件失败: %s", icon_file)
-
-    async def preview_template(
-        self,
-        db: AsyncSession,
-        yaml_template: str,
-        config_schema: dict,
-        image: str | None = None,
-        app_name: str = "preview-app",
-    ) -> dict:
-        """预览未落库的应用模板渲染结果（创建/编辑页实时预览用）。
-
-        校验失败时返回包含错误信息的字典，而不是抛异常。
-        """
-        resolver = await self._get_resolver(db)
-
-        try:
-            validate_app_definition(yaml_template, config_schema, image or "")
-            rendered = _render_yaml_template(
-                yaml_template,
-                config_schema,
-                {"image": image or "example/image"},
-                "preview-project",
-                app_name,
-                resolver,
-            )
-        except (APIException, ValueError) as e:
-            return {"yaml": None, "error": str(e)}
-
-        return {"yaml": rendered, "error": None}
-
-    async def save_app_icon(
-        self, db: AsyncSession, name: str, filename: str, content: bytes
-    ) -> App:
-        """保存用户上传的应用图标，并更新 app.icon 为后端图标接口路径。"""
-        app = await self.get_app(db, name)
-
-        ext = Path(filename or "").suffix.lower()
-        if ext not in ALLOWED_ICON_EXTS:
-            raise APIException(
-                f"不支持的图标格式 {ext or '(无扩展名)'}，仅支持: {', '.join(sorted(ALLOWED_ICON_EXTS))}",
-                400,
-            )
-        if not content:
-            raise APIException("图标文件为空", 400)
-        if len(content) > MAX_ICON_SIZE:
-            raise APIException("图标文件大小不能超过 1MB", 400)
-
-        icon_dir = Path(settings.APP_ICON_DIR)
-        icon_dir.mkdir(parents=True, exist_ok=True)
-
-        # 删除旧的同名不同扩展名图标
-        for old_ext in ALLOWED_ICON_EXTS:
-            old_file = icon_dir / f"{name}{old_ext}"
-            if old_ext != ext and old_file.exists():
-                old_file.unlink()
-
-        (icon_dir / f"{name}{ext}").write_bytes(content)
-
-        app.icon = f"/api/apps/{name}/icon"
-        await db.commit()
-        await db.refresh(app)
-        return app
-
-    def get_app_icon_path(self, name: str) -> Path:
-        """获取已上传应用图标的文件路径，不存在时抛出 404。"""
-        if not APP_NAME_PATTERN.match(name):
-            raise APIException("应用图标不存在", 404)
-        icon_dir = Path(settings.APP_ICON_DIR)
-        for ext in ALLOWED_ICON_EXTS:
-            icon_file = icon_dir / f"{name}{ext}"
-            if icon_file.exists():
-                return icon_file
-        raise APIException("应用图标不存在", 404)
 
     async def preview(
         self,
@@ -371,14 +313,10 @@ class AppService:
             部署结束后 release_ports 释放，防止并发部署重复分配。
         """
         allocated: list[int] = []
+        schema = db_app.config_schema or {}
 
         # 1. JSON Schema 校验
-        schema = db_app.config_schema or {}
-        if schema:
-            try:
-                validate(instance=config, schema=schema)
-            except ValidationError as e:
-                raise APIException(f"配置校验失败: {e.message}", 400) from e
+        validate_app_config(db_app, config)
 
         # 1.5 数据目录受管路径校验（仅在配置了数据目录时执行）：
         #     此处校验的是应用自身的 volumes，共享配置合并在更上层发生；
@@ -399,9 +337,30 @@ class AppService:
                             400,
                         )
 
-        # 2. 端口顺序分配（仅在部署时执行）：
-        #    从起始端口开始按顺序分配，自动跳过已占用端口
-        if check_ports:
+        # 2. 端口处理（仅在部署时执行）：
+        #    - 普通应用从起始端口开始顺序分配，自动跳过已占用端口；
+        #    - x-fixed-ports 应用（如 DNS 必须用 53）保留配置中的端口，
+        #      不参与顺序分配，但仍需检测占用并预留，否则同批部署的其他
+        #      应用会把相同端口分配走，直到 Docker 启动容器才报端口冲突。
+        if check_ports and schema.get("x-fixed-ports"):
+            fixed_ports = _collect_config_ports(schema, config)
+            if fixed_ports:
+                used_ports = await asyncio.to_thread(get_used_ports)
+                conflicts = sorted(set(fixed_ports) & used_ports)
+                if conflicts:
+                    app_label = (
+                        getattr(db_app, "display_name", None)
+                        or getattr(db_app, "name", "")
+                    )
+                    prefix = f"{app_label} 的" if app_label else "固定端口"
+                    raise APIException(
+                        f"{prefix}端口已被占用，请调整应用端口或先释放占用后重试: "
+                        + ", ".join(str(port) for port in conflicts),
+                        409,
+                    )
+                # 交给调用方 reserve_ports 预留，部署结束后统一释放
+                allocated = sorted(fixed_ports)
+        elif check_ports:
             # 收集端口写入位置：(单端口字段名, None) 或 ("ports", 数组索引)
             targets: list[tuple[str, int | None]] = []
 
@@ -452,11 +411,7 @@ class AppService:
 
         # 0. 读取并校验存储配置（应用数据目录 + 启用的数据目录）
         system_config = await system_config_service.get_or_create(db)
-        resolver = StoragePathResolver(
-            app_data=await storage_directory_service.get_app_data_pair(db),
-            data_directories=await storage_directory_service.list_enabled_pairs(db),
-        )
-        resolver.validate()
+        resolver = await self._build_storage_resolver(db)
 
         project_name, allocated_ports = await self._validate_and_prepare(
             db_app=db_app,
@@ -600,12 +555,34 @@ class AppService:
         if not db_app.yaml_template:
             raise APIException("应用模板为空，无法渲染", 500)
 
-        # 把应用镜像名注入模板上下文，供 yaml_template 使用 {{ image }}
-        merged_config = {**(config or {}), "image": db_app.image}
+        # 把应用镜像名注入模板上下文，供 yaml_template 使用 {{ image }}；
+        # config 里显式给了非空 image 时（编排组合级覆盖）优先使用，
+        # 空字符串/None 视为未给，回落到应用默认镜像
+        config = config or {}
+        image = config.get("image") or db_app.image
+        merged_config = {**config, "image": image}
+
+        # 部分模板把镜像与标签分开渲染（{{ image }}:{{ image_tag }}）。
+        # 编排覆盖可能传入已带标签的完整镜像（repo:tag），若 image_tag
+        # 仍是旧值会拼成 repo:tag:latest 这类非法引用，这里按模板拆开。
+        if image and re.search(
+            r"\{\{\s*image\s*\}\}\s*:\s*\{\{\s*image_tag\s*\}\}",
+            db_app.yaml_template or "",
+        ):
+            last_segment = image.rsplit("/", 1)[-1]
+            if ":" in last_segment:
+                repo, tag = image.rsplit(":", 1)
+                merged_config["image"] = repo
+                merged_config["image_tag"] = tag
+
+        _normalize_qbittorrent_env(merged_config, image)
+        template = _apply_template_image(
+            db_app.yaml_template, db_app.image, image
+        )
 
         try:
             return _render_yaml_template(
-                db_app.yaml_template,
+                template,
                 db_app.config_schema,
                 merged_config,
                 project_name,
@@ -614,6 +591,15 @@ class AppService:
             )
         except ValueError as e:
             raise APIException(str(e), 500) from e
+
+    async def _build_storage_resolver(self, db: AsyncSession) -> StoragePathResolver:
+        """读取并校验当前存储目录配置。"""
+        resolver = StoragePathResolver(
+            app_data=await storage_directory_service.get_app_data_pair(db),
+            data_directories=await storage_directory_service.list_enabled_pairs(db),
+        )
+        resolver.validate()
+        return resolver
 
     async def get_instance(self, db: AsyncSession, instance_id: int) -> AppInstance:
         """获取单个应用实例（携带应用、项目及 Stack 关系）。"""

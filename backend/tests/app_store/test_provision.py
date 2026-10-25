@@ -197,6 +197,60 @@ async def test_prepare_unsupported_app_returns_none():
         await engine.dispose()
 
 
+@pytest.mark.asyncio
+async def test_prepare_email_app_uses_configured_domain():
+    """需要邮箱登录的应用按统一后缀组装用户名。"""
+    engine, session = await _make_session()
+    try:
+        session.add(
+            SystemConfig(
+                id=1,
+                default_admin_username="nasadmin",
+                default_admin_password="Unified#Pass1",
+                default_email_domain="example.com",
+            )
+        )
+        await session.commit()
+
+        email_creds = await prepare_app_credentials(session, "komga", {})
+        assert email_creds == {
+            "username": "nasadmin@example.com",
+            "password": "Unified#Pass1",
+        }
+
+        plain_creds = await prepare_app_credentials(session, "qbittorrent", {})
+        assert plain_creds == {
+            "username": "nasadmin",
+            "password": "Unified#Pass1",
+        }
+    finally:
+        await session.close()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_prepare_email_app_keeps_explicit_email():
+    """统一用户名本身已是邮箱时不重复追加后缀。"""
+    engine, session = await _make_session()
+    try:
+        session.add(
+            SystemConfig(
+                id=1,
+                default_admin_username="me@nas.local",
+                default_admin_password="Unified#Pass1",
+                default_email_domain="example.com",
+            )
+        )
+        await session.commit()
+
+        creds = await prepare_app_credentials(session, "ermao-library", {})
+        assert creds is not None
+        assert creds["username"] == "me@nas.local"
+    finally:
+        await session.close()
+        await engine.dispose()
+
+
 # ---------- qbittorrent provision ----------
 
 
@@ -355,13 +409,17 @@ async def test_jellyfin_provision_wizard_flow():
 
 @pytest.mark.asyncio
 async def test_jellyfin_provision_wizard_completed_fallback():
-    """向导已完成（4xx）时降级为直接验证目标凭据。"""
+    """向导标记已完成时跳过 Startup 接口，直接验证目标凭据。"""
     patcher, instance = _mock_http()
     try:
-        instance.get = AsyncMock(return_value=_resp(200, json_data={"Version": "10.9"}))
+        instance.get = AsyncMock(
+            return_value=_resp(
+                200,
+                json_data={"Version": "10.9", "StartupWizardCompleted": True},
+            )
+        )
         instance.post = AsyncMock(
             side_effect=[
-                _resp(403, text="", method="POST"),  # /Startup/User 向导已完成
                 _resp(200, json_data={"AccessToken": "jf-token"}, method="POST"),
             ]
         )
@@ -374,9 +432,44 @@ async def test_jellyfin_provision_wizard_completed_fallback():
 
         assert result.ok is True
         assert result.api_key == "jf-token"
-        # 不再调用 /Startup/Complete
+        # 不再调用 /Startup/User 或 /Startup/Complete
         urls = [c.args[0] for c in instance.post.call_args_list]
-        assert not any(u.endswith("/Startup/Complete") for u in urls)
+        assert not any(
+            u.endswith("/Startup/User") or u.endswith("/Startup/Complete")
+            for u in urls
+        )
+    finally:
+        patcher.stop()
+
+
+@pytest.mark.asyncio
+async def test_jellyfin_provision_completes_wizard_when_admin_exists():
+    """管理员已存在但向导标记未写入时，登录成功后补完成向导。"""
+    patcher, instance = _mock_http()
+    try:
+        instance.get = AsyncMock(
+            return_value=_resp(
+                200,
+                json_data={"Version": "12.2", "StartupWizardCompleted": False},
+            )
+        )
+        instance.post = AsyncMock(
+            side_effect=[
+                _resp(403, text="", method="POST"),  # /Startup/User 已有管理员
+                _resp(200, json_data={"AccessToken": "jf-token"}, method="POST"),
+                _resp(204, text="", method="POST"),  # /Startup/Complete
+            ]
+        )
+
+        result = await JellyfinClient().provision(
+            url="http://192.168.1.10:9006",
+            username="nasadmin",
+            password="Unified#Pass1",
+        )
+
+        assert result.ok is True
+        urls = [c.args[0] for c in instance.post.call_args_list]
+        assert urls[-1].endswith("/Startup/Complete")
     finally:
         patcher.stop()
 
@@ -580,6 +673,39 @@ async def test_prepare_fallback_becomes_previous_when_unified_differs():
 
 
 @pytest.mark.asyncio
+async def test_prepare_env_fallback_when_env_matches_target():
+    """上一轮失败可能把 env 密码写成目标密码，此时应以落库旧密码登录改密。"""
+    engine, session = await _make_session()
+    try:
+        session.add(
+            SystemConfig(
+                id=1,
+                default_admin_username="admin",
+                default_admin_password="Unified#Pass2",
+            )
+        )
+        await session.commit()
+
+        creds = await prepare_app_credentials(
+            session,
+            "moviepilot",
+            {
+                "moviepilot_env": [
+                    {"key": "SUPERUSER_PASSWORD", "value": "Unified#Pass2"}
+                ]
+            },
+            fallback_password="Unified#Pass1",
+        )
+
+        assert creds is not None
+        assert creds["password"] == "Unified#Pass2"
+        assert creds["previous_password"] == "Unified#Pass1"
+    finally:
+        await session.close()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_qbittorrent_provision_via_previous_password():
     """配置卷复用时无临时密码输出，用 previous_password 登录后改为目标密码。"""
     patcher, instance = _mock_http()
@@ -621,10 +747,15 @@ async def test_jellyfin_provision_change_password_with_previous():
     """向导已完成且目标密码不符时，用旧密码登录改密后复验通过。"""
     patcher, instance = _mock_http()
     try:
-        instance.get = AsyncMock(return_value=_resp(200, json_data={"Version": "10.9"}))
+        instance.get = AsyncMock(
+            return_value=_resp(
+                200,
+                json_data={"Version": "10.9", "StartupWizardCompleted": False},
+            )
+        )
         instance.post = AsyncMock(
             side_effect=[
-                _resp(403, text="", method="POST"),  # /Startup/User 向导已完成
+                _resp(403, text="", method="POST"),  # /Startup/User 已有管理员
                 _resp(401, text="", method="POST"),  # 目标密码登录失败
                 _resp(  # 旧密码登录成功
                     200,
@@ -635,6 +766,7 @@ async def test_jellyfin_provision_change_password_with_previous():
                 _resp(  # 新密码复验成功
                     200, json_data={"AccessToken": "new-token"}, method="POST"
                 ),
+                _resp(204, text="", method="POST"),  # /Startup/Complete
             ]
         )
 
@@ -654,5 +786,76 @@ async def test_jellyfin_provision_change_password_with_previous():
             "CurrentPw": "Stored#Pass1",
             "NewPw": "Unified#Pass1",
         }
+    finally:
+        patcher.stop()
+
+
+@pytest.mark.asyncio
+async def test_jellyfin_provision_retries_wizard_when_service_not_ready():
+    """首次启动时 /Startup/User 暂时 404 不能当成向导已完成，应继续重试。"""
+    patcher, instance = _mock_http()
+    try:
+        instance.get = AsyncMock(
+            return_value=_resp(200, json_data={"Version": "12.2.0"})
+        )
+        instance.post = AsyncMock(
+            side_effect=[
+                _resp(404, text="", method="POST"),  # 服务尚未初始化完成
+                _resp(204, text="", method="POST"),  # 重试成功创建管理员
+                _resp(204, text="", method="POST"),  # /Startup/Complete
+                _resp(200, json_data={"AccessToken": "jf-token"}, method="POST"),
+            ]
+        )
+
+        with patch(
+            "app.services.apps.jellyfin.client.asyncio.sleep",
+            new=AsyncMock(),
+        ):
+            result = await JellyfinClient().provision(
+                url="http://192.168.1.10:9006",
+                username="nasadmin",
+                password="Unified#Pass1",
+            )
+
+        assert result.ok is True
+        assert result.api_key == "jf-token"
+        urls = [c.args[0] for c in instance.post.call_args_list]
+        assert urls[0].endswith("/Startup/User")
+        assert urls[1].endswith("/Startup/User")
+        assert any(url.endswith("/Startup/Complete") for url in urls)
+    finally:
+        patcher.stop()
+
+
+@pytest.mark.asyncio
+async def test_jellyfin_provision_retries_503_login():
+    """Jellyfin 初始化期间登录接口 503 时应继续等待而不是抛异常。"""
+    patcher, instance = _mock_http()
+    try:
+        instance.get = AsyncMock(
+            return_value=_resp(
+                200, json_data={"Version": "12.2.0", "StartupWizardCompleted": True}
+            )
+        )
+        instance.post = AsyncMock(
+            side_effect=[
+                _resp(503, text="Service Unavailable", method="POST"),
+                _resp(200, json_data={"AccessToken": "jf-token"}, method="POST"),
+            ]
+        )
+
+        with patch(
+            "app.services.apps.jellyfin.client.asyncio.sleep",
+            new=AsyncMock(),
+        ):
+            result = await JellyfinClient().provision(
+                url="http://192.168.1.10:9006",
+                username="nasadmin",
+                password="Unified#Pass1",
+            )
+
+        assert result.ok is True
+        assert result.api_key == "jf-token"
+        assert instance.post.await_count == 2
     finally:
         patcher.stop()

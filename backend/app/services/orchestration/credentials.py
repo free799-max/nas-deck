@@ -18,19 +18,25 @@ import string
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.services.system import system_config_service
+from app.services.system.config_service import resolve_username_for_app
 
 # 密钥类环境变量名（密码/密钥/令牌），修复时从已存储配置继承
 SENSITIVE_KEY_PATTERN = re.compile(
     r"password|secret|token|api_key|apikey|access_key", re.IGNORECASE
 )
 
-# env 注入类应用：env 数组键 -> 用户名/密码/API Token 的环境变量名
-_ENV_CREDENTIAL_SPECS: dict[str, dict[str, str]] = {
+# env 注入类应用：env 数组键 -> 用户名/密码/API Token 的环境变量名。
+# extra_env 用于写入与账号配套的开关（如 Reader 的登录认证开关）。
+_ENV_CREDENTIAL_SPECS: dict[str, dict[str, object]] = {
     "moviepilot": {
         "env_key": "moviepilot_env",
         "username_key": "SUPERUSER",
         "password_key": "SUPERUSER_PASSWORD",
         "api_token_key": "API_TOKEN",
+    },
+    "reader": {
+        "env_key": "reader_env",
+        "extra_env": {"READER_APP_SECURE": "true"},
     },
 }
 
@@ -42,6 +48,10 @@ _PROVISION_ONLY_APPS = {
     "comic-auto",
     "komga",
     "kavita",
+    "music-dl",
+    "music-tag-web",
+    "navidrome",
+    "ermao-library",
 }
 
 
@@ -116,25 +126,65 @@ async def prepare_app_credentials(
 
     sys_config = await system_config_service.get_or_create(db)
     username = (sys_config.default_admin_username or "").strip() or "admin"
+    username = resolve_username_for_app(
+        app_name, username, sys_config.default_email_domain
+    )
     unified_password = (sys_config.default_admin_password or "").strip() or None
 
     if spec is not None:
-        previous_password = _get_env(config, spec["env_key"], spec["password_key"])
+        env_key = str(spec["env_key"])
+        username_key = spec.get("username_key")
+        password_key = spec.get("password_key")
+        api_token_key = spec.get("api_token_key")
+
+        extra_env = spec.get("extra_env")
+        if isinstance(extra_env, dict):
+            for key, value in extra_env.items():
+                _set_env(config, env_key, str(key), str(value))
+
+        previous_password = (
+            _get_env(config, env_key, str(password_key))
+            if password_key
+            else None
+        )
         password = unified_password
         if password is None:
             # 未设置统一密码时保留用户已填/前端随机生成的密码
             password = previous_password
         if not password:
+            # 未写入 env 的应用（如 Reader）从上次配置继承密码
+            password = fallback_password
+        if not password:
             password = generate_password()
-        _set_env(config, spec["env_key"], spec["username_key"], username)
-        _set_env(config, spec["env_key"], spec["password_key"], password)
+        if not previous_password and fallback_password and fallback_password != password:
+            # 统一密码变化时，用上次落库的密码登录后再改密
+            previous_password = fallback_password
+        elif (
+            unified_password
+            and previous_password == password
+            and fallback_password
+            and fallback_password != password
+        ):
+            # 上一轮失败可能已把 env 里的密码改写成目标密码，应用实际仍在用
+            # 落库的旧密码；此时以旧密码登录，否则重试会一直认证失败
+            previous_password = fallback_password
 
-        api_token = _get_env(config, spec["env_key"], spec["api_token_key"])
-        if not api_token:
-            # MoviePilot 要求 API_TOKEN 为不少于 16 位的复杂字符串
-            api_token = generate_password(24)
-            _set_env(config, spec["env_key"], spec["api_token_key"], api_token)
-        creds = {"username": username, "password": password, "api_key": api_token}
+        if username_key:
+            _set_env(config, env_key, str(username_key), username)
+        if password_key:
+            _set_env(config, env_key, str(password_key), password)
+
+        api_token = None
+        if api_token_key:
+            api_token = _get_env(config, env_key, str(api_token_key))
+            if not api_token:
+                # MoviePilot 要求 API_TOKEN 为不少于 16 位的复杂字符串
+                api_token = generate_password(24)
+                _set_env(config, env_key, str(api_token_key), api_token)
+
+        creds = {"username": username, "password": password}
+        if api_token:
+            creds["api_key"] = api_token
         if previous_password and previous_password != password:
             # env 密码仅首次初始化生效，修复场景需用旧密码登录后改密
             creds["previous_password"] = previous_password

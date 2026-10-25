@@ -106,6 +106,8 @@ export function countSchemaPorts(
   schema: Record<string, unknown>,
   config: Record<string, unknown>
 ): number {
+  // 固定端口应用（如 DNS 必须用 53）不参与顺序分配，也不消耗建议端口
+  if (schema?.["x-fixed-ports"]) return 0;
   let count = 0;
   const properties = schema?.properties as
     | Record<string, { type?: string }>
@@ -149,6 +151,9 @@ export function applyPortSuggestions(
   offset: number
 ): { config: Record<string, unknown>; nextOffset: number } {
   const next = structuredClone(config);
+  if (schema?.["x-fixed-ports"]) {
+    return { config: next, nextOffset: offset };
+  }
   let cursor = offset;
 
   const properties = schema?.properties as

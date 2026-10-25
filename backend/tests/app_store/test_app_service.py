@@ -16,7 +16,7 @@ class TestExtractAppPorts:
     """测试单端口字段提取。"""
 
     def test_extract_integer_port_fields(self):
-        """提取类型为 integer 且命名包含 port 的字段。"""
+        """提取类型为 integer 且命名包含 port 的字段名。"""
         schema = {
             "properties": {
                 "moviepilot_port": {"type": "integer"},
@@ -81,7 +81,9 @@ class TestGetUsedPorts:
             with patch(
                 "app.services.system.port_allocator._parse_proc_net_tcp"
             ) as mock_parse:
-                mock_parse.side_effect = lambda path: {3002} if "tcp6" in path else {3003}
+                mock_parse.side_effect = (
+                    lambda path: {3002} if "tcp6" in path else {3003}
+                )
                 used = get_used_ports()
 
         assert used == {3000, 3001, 3002, 3003}
@@ -97,7 +99,9 @@ class TestGetUsedPorts:
             with patch(
                 "app.services.system.port_allocator._parse_proc_net_tcp"
             ) as mock_parse:
-                mock_parse.side_effect = lambda path: {8080} if "tcp6" in path else {80}
+                mock_parse.side_effect = (
+                    lambda path: {8080} if "tcp6" in path else {80}
+                )
                 used = get_used_ports()
 
         assert used == {80, 8080}
@@ -177,9 +181,8 @@ class TestValidateAndPreparePorts:
             ]
         }
         with patch(
-            "app.services.app_store.app_service.get_used_ports",
-            return_value={3000},
-        ) as mock_get_used_ports:
+            "app.services.app_store.app_service.get_used_ports"
+        ) as mock_used:
             project_name, allocated = await app_service._validate_and_prepare(
                 db_app=array_port_schema_app,
                 instance_name="test",
@@ -187,14 +190,84 @@ class TestValidateAndPreparePorts:
                 check_ports=False,
             )
 
-        assert project_name == "test"
+        mock_used.assert_not_called()
         assert allocated == []
         assert config["ports"][0]["local_port"] == 3000
-        mock_get_used_ports.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_fixed_ports_are_not_reallocated(self, app_service):
+        """x-fixed-ports 应用保留配置中的端口，并返回预留列表。"""
+        db_app = type(
+            "App",
+            (),
+            {
+                "config_schema": {
+                    "type": "object",
+                    "x-fixed-ports": True,
+                    "properties": {
+                        "dns_port": {"type": "integer"},
+                    },
+                },
+                "yaml_template": "services:\n  app:\n    image: test",
+            },
+        )()
+        config = {"dns_port": 53}
+
+        with patch(
+            "app.services.app_store.app_service.get_used_ports",
+            return_value=set(),
+        ):
+            project_name, allocated = await app_service._validate_and_prepare(
+                db_app=db_app,
+                instance_name="test",
+                config=config,
+            )
+
+        assert project_name == "test"
+        assert allocated == [53]
+        assert config["dns_port"] == 53
+
+    @pytest.mark.asyncio
+    async def test_fixed_ports_reject_occupied_port(self, app_service):
+        """x-fixed-ports 应用在固定端口被占用时给出明确错误。"""
+        db_app = type(
+            "App",
+            (),
+            {
+                "config_schema": {
+                    "type": "object",
+                    "x-fixed-ports": True,
+                    "properties": {
+                        "ports": {"type": "array"},
+                    },
+                },
+                "yaml_template": "services:\n  app:\n    image: test",
+            },
+        )()
+        config = {
+            "ports": [
+                {"local_port": 9016, "container_port": 3000, "protocol": "tcp"},
+                {"local_port": 9017, "container_port": 80, "protocol": "tcp"},
+            ]
+        }
+
+        with patch(
+            "app.services.app_store.app_service.get_used_ports",
+            return_value={9017},
+        ):
+            with pytest.raises(APIException) as exc_info:
+                await app_service._validate_and_prepare(
+                    db_app=db_app,
+                    instance_name="test",
+                    config=config,
+                )
+
+        assert "9017" in str(exc_info.value)
+        assert config["ports"][0]["local_port"] == 9016
 
     @pytest.mark.asyncio
     async def test_allocates_integer_port_field(self, app_service):
-        """单端口字段被自动分配的空闲端口替换，不再报 409。"""
+        """单端口整数字段按顺序分配。"""
         db_app = type(
             "App",
             (),
@@ -208,11 +281,11 @@ class TestValidateAndPreparePorts:
                 "yaml_template": "services:\n  app:\n    image: test",
             },
         )()
-        config = {"moviepilot_port": 8096}
+        config = {"moviepilot_port": 3000}
 
         with patch(
             "app.services.app_store.app_service.get_used_ports",
-            return_value={8096, 10000},
+            return_value={10000},
         ):
             project_name, allocated = await app_service._validate_and_prepare(
                 db_app=db_app,
@@ -255,3 +328,242 @@ class TestValidateAndPreparePorts:
                 )
 
         assert exc_info.value.status_code == 400
+
+
+class TestRenderAppImage:
+    """测试编排组合覆盖镜像与模板 image_tag 的拼接。"""
+
+    @pytest.fixture
+    def app_service(self):
+        from app.services.app_store.app_service import AppService
+
+        return AppService()
+
+    @staticmethod
+    def _app(template: str):
+        return type(
+            "App",
+            (),
+            {
+                "name": "qbittorrent",
+                "image": "qbittorrentofficial/qbittorrent-nox",
+                "config_schema": {},
+                "yaml_template": template,
+            },
+        )()
+
+    def test_full_image_override_is_not_double_tagged(self, app_service):
+        """覆盖镜像已带标签时，不再追加 image_tag。"""
+        app = self._app(
+            "services:\n  app:\n    image: {{ image }}:{{ image_tag }}"
+        )
+        rendered = app_service._render_app(
+            app,
+            {
+                "image": "linuxserver/qbittorrent:5.3.0_v2.1.2-ls484",
+                "image_tag": "latest",
+            },
+            "demo",
+            None,
+        )
+
+        assert (
+            "image: linuxserver/qbittorrent:5.3.0_v2.1.2-ls484" in rendered
+        )
+        assert ":latest" not in rendered
+
+    def test_repo_override_still_uses_image_tag(self, app_service):
+        """覆盖镜像不带标签时，继续使用配置的 image_tag。"""
+        app = self._app(
+            "services:\n  app:\n    image: {{ image }}:{{ image_tag }}"
+        )
+        rendered = app_service._render_app(
+            app,
+            {
+                "image": "linuxserver/qbittorrent",
+                "image_tag": "5.3.0_v2.1.2-ls484",
+            },
+            "demo",
+            None,
+        )
+
+        assert (
+            "image: linuxserver/qbittorrent:5.3.0_v2.1.2-ls484" in rendered
+        )
+
+    def test_template_without_split_keeps_full_image(self, app_service):
+        """模板只渲染 image 时保留完整镜像引用。"""
+        app = self._app("services:\n  app:\n    image: {{ image }}")
+        rendered = app_service._render_app(
+            app,
+            {
+                "image": "adguard/adguardhome:v0.107.79",
+                "image_tag": "latest",
+            },
+            "demo",
+            None,
+        )
+
+        assert "image: adguard/adguardhome:v0.107.79" in rendered
+
+
+class TestQbittorrentLsioEnv:
+    """测试 linuxserver/qbittorrent 环境变量名转换。"""
+
+    @pytest.fixture
+    def app_service(self):
+        from app.services.app_store.app_service import AppService
+
+        return AppService()
+
+    @staticmethod
+    def _app():
+        return type(
+            "App",
+            (),
+            {
+                "name": "qbittorrent",
+                "image": "qbittorrentofficial/qbittorrent-nox",
+                "config_schema": {},
+                "yaml_template": (
+                    "services:\n"
+                    "  app:\n"
+                    "    image: {{ image }}:{{ image_tag }}\n"
+                    "    environment:\n"
+                    "{%- for item in qbittorrent_env %}\n"
+                    "      - {{ item.key }}={{ item.value }}\n"
+                    "{%- endfor %}"
+                ),
+            },
+        )()
+
+    @staticmethod
+    def _config(image: str) -> dict:
+        return {
+            "image": image,
+            "image_tag": "latest",
+            "qbittorrent_env": [
+                {"key": "QBT_LEGAL_NOTICE", "value": "confirm"},
+                {"key": "QBT_WEBUI_PORT", "value": "8016"},
+                {"key": "QBT_TORRENTING_PORT", "value": "52001"},
+                {"key": "TZ", "value": "Asia/Shanghai"},
+            ],
+        }
+
+    def test_translates_env_for_linuxserver_image(self, app_service):
+        """linuxserver 镜像使用 WEBUI_PORT/TORRENTING_PORT。"""
+        rendered = app_service._render_app(
+            self._app(),
+            self._config("linuxserver/qbittorrent:5.3.0"),
+            "demo",
+            None,
+        )
+
+        assert "WEBUI_PORT=8016" in rendered
+        assert "TORRENTING_PORT=52001" in rendered
+        assert "QBT_WEBUI_PORT" not in rendered
+        assert "QBT_TORRENTING_PORT" not in rendered
+        assert "QBT_LEGAL_NOTICE" not in rendered
+        assert "TZ=Asia/Shanghai" in rendered
+
+    def test_keeps_env_for_official_image(self, app_service):
+        """官方镜像保留 QBT_* 变量名。"""
+        rendered = app_service._render_app(
+            self._app(),
+            self._config("qbittorrentofficial/qbittorrent-nox:5.1.0"),
+            "demo",
+            None,
+        )
+
+        assert "QBT_WEBUI_PORT=8016" in rendered
+        assert "QBT_TORRENTING_PORT=52001" in rendered
+        assert "- WEBUI_PORT=8016" not in rendered
+
+    def test_explicit_alias_wins_over_legacy_key(self, app_service):
+        """用户已显式配置新变量时不再追加旧变量。"""
+        config = self._config("lscr.io/linuxserver/qbittorrent:latest")
+        config["qbittorrent_env"].append(
+            {"key": "WEBUI_PORT", "value": "9999"}
+        )
+        rendered = app_service._render_app(
+            self._app(),
+            config,
+            "demo",
+            None,
+        )
+
+        assert "WEBUI_PORT=9999" in rendered
+        assert "WEBUI_PORT=8016" not in rendered
+
+
+class TestTemplateImageOverride:
+    """测试编排镜像覆盖对写死 image 的模板生效。"""
+
+    @pytest.fixture
+    def app_service(self):
+        from app.services.app_store.app_service import AppService
+
+        return AppService()
+
+    @staticmethod
+    def _app(template: str, image: str):
+        return type(
+            "App",
+            (),
+            {
+                "name": "jellyfin",
+                "image": image,
+                "config_schema": {},
+                "yaml_template": template,
+            },
+        )()
+
+    def test_overrides_hardcoded_image(self, app_service):
+        """模板未使用 {{ image }} 时替换与应用默认镜像一致的行。"""
+        app = self._app(
+            "services:\n  jellyfin:\n    image: jellyfin/jellyfin",
+            "jellyfin/jellyfin",
+        )
+        rendered = app_service._render_app(
+            app,
+            {"image": "jellyfin/jellyfin:12.3"},
+            "demo",
+            None,
+        )
+
+        assert "image: jellyfin/jellyfin:12.3" in rendered
+
+    def test_does_not_touch_dependency_images(self, app_service):
+        """只替换主服务默认镜像，不影响模板中的依赖镜像。"""
+        app = self._app(
+            "services:\n"
+            "  main:\n"
+            "    image: jxxghp/moviepilot-v2:latest\n"
+            "  cache:\n"
+            "    image: redis\n",
+            "jxxghp/moviepilot-v2:latest",
+        )
+        rendered = app_service._render_app(
+            app,
+            {"image": "jxxghp/moviepilot-v3:v3.1.9"},
+            "demo",
+            None,
+        )
+
+        assert "image: jxxghp/moviepilot-v3:v3.1.9" in rendered
+        assert "image: redis" in rendered
+
+    def test_placeholder_template_is_left_untouched(self, app_service):
+        """已使用 {{ image }} 的模板由渲染上下文处理。"""
+        app = self._app(
+            "services:\n  app:\n    image: {{ image }}",
+            "adguard/adguardhome",
+        )
+        rendered = app_service._render_app(
+            app,
+            {"image": "adguard/adguardhome:v0.107.79"},
+            "demo",
+            None,
+        )
+
+        assert "image: adguard/adguardhome:v0.107.79" in rendered
