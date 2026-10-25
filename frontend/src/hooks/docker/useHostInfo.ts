@@ -19,5 +19,8 @@ export function useDockerHostInfo() {
   return useQuery<HostInfo>({
     queryKey: ["docker", "host", "info"],
     queryFn: dockerApi.getDockerHostInfo,
+    // CPU / 内存 / 磁盘等实时指标需要周期刷新
+    refetchInterval: 10_000,
+    staleTime: 5_000,
   });
 }

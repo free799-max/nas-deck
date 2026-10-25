@@ -95,8 +95,8 @@ export function StackLogsDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-[85vw] sm:max-w-[85vw] max-h-[85vh] overflow-hidden flex flex-col p-0">
-        <DialogHeader className="px-6 pt-5 pb-2 border-b shrink-0">
+      <DialogContent className="max-w-[85vw] sm:max-w-[85vw] max-h-[85vh] overflow-hidden flex flex-col gap-0 p-0 [&_[data-slot='dialog-close']]:top-3">
+        <DialogHeader className="flex-row flex-wrap items-center gap-x-4 gap-y-2 px-6 py-3 pr-14 border-b shrink-0">
           <DialogTitle className="text-lg font-semibold flex items-center gap-2 flex-wrap">
             <FileText className="h-5 w-5 text-muted-foreground" />
             编排日志
@@ -111,46 +111,44 @@ export function StackLogsDialog({
               </Badge>
             )}
           </DialogTitle>
-        </DialogHeader>
 
-        <div className="flex items-center gap-2 px-6 py-2 border-b shrink-0">
-          <Button
-            size="sm"
-            variant={follow ? "default" : "outline"}
-            className="h-7 text-xs"
-            onClick={() => setFollow((v) => !v)}
-          >
-            {follow ? (
-              <Scroll className="h-3.5 w-3.5 mr-1" />
-            ) : (
-              <ScrollText className="h-3.5 w-3.5 mr-1" />
-            )}
-            {follow ? "跟随滚动" : "已暂停"}
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            className="h-7 text-xs"
-            onClick={clearLogs}
-          >
-            <Trash2 className="h-3.5 w-3.5 mr-1" />
-            清空
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            className="h-7 text-xs"
-            onClick={handleCopy}
-          >
-            {copied ? (
-              <Check className="h-3.5 w-3.5 mr-1 text-green-500" />
-            ) : (
-              <Copy className="h-3.5 w-3.5 mr-1" />
-            )}
-            复制
-          </Button>
-          <div className="flex items-center gap-2 ml-auto">
-            <span className="text-xs text-muted-foreground">Tail:</span>
+          <div className="ml-auto flex flex-wrap items-center gap-1.5">
+            <Button
+              size="sm"
+              variant={follow ? "default" : "outline"}
+              className="h-7 text-xs"
+              onClick={() => setFollow((v) => !v)}
+            >
+              {follow ? (
+                <Scroll className="h-3.5 w-3.5 mr-1" />
+              ) : (
+                <ScrollText className="h-3.5 w-3.5 mr-1" />
+              )}
+              {follow ? "跟随滚动" : "已暂停"}
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 text-xs"
+              onClick={clearLogs}
+            >
+              <Trash2 className="h-3.5 w-3.5 mr-1" />
+              清空
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 text-xs"
+              onClick={handleCopy}
+            >
+              {copied ? (
+                <Check className="h-3.5 w-3.5 mr-1 text-green-500" />
+              ) : (
+                <Copy className="h-3.5 w-3.5 mr-1" />
+              )}
+              复制
+            </Button>
+            <span className="ml-1 text-xs text-muted-foreground">Tail:</span>
             <Input
               type="number"
               min={1}
@@ -160,12 +158,12 @@ export function StackLogsDialog({
               className="h-7 w-20 text-xs"
             />
             <span
-              className={`text-xs ${connected ? "text-green-500" : "text-muted-foreground"}`}
+              className={`ml-1 text-xs ${connected ? "text-green-500" : "text-muted-foreground"}`}
             >
               {connected ? "连接中" : "已断开"}
             </span>
           </div>
-        </div>
+        </DialogHeader>
 
         <div className="flex-1 overflow-auto px-2 py-3 bg-black/95 font-mono text-xs">
           {logs.length === 0 ? (

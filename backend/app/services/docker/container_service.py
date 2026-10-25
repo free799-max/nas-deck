@@ -1,5 +1,6 @@
 """Docker 容器业务服务。"""
 
+import codecs
 import shlex
 
 from app.services.docker import docker_common as common
@@ -171,11 +172,19 @@ class ContainerService(common.BaseDockerService):
         follow: bool = True,
         timestamps: bool = True,
     ):
-        """流式获取容器日志。"""
+        """流式获取容器日志（按完整行产出）。
+
+        Docker SDK 返回的是任意边界的字节块而非整行：多字节 UTF-8 字符
+        可能跨块被切断，直接逐块 decode 会产生 � 乱码；同时逐块产出会让
+        前端把字节碎片当作日志行，行数与实际日志完全对不上。这里用增量
+        解码器拼接跨块字符，再按换行切分，保证每次产出都是完整的一行。
+        """
         if not self._client:
             raise RuntimeError("Docker not available")
         container = self._client.containers.get(container_id)
-        for line in container.logs(
+        decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+        buffer = ""
+        for chunk in container.logs(
             stdout=True,
             stderr=True,
             stream=True,
@@ -183,7 +192,13 @@ class ContainerService(common.BaseDockerService):
             tail=tail,
             timestamps=timestamps,
         ):
-            yield line.decode("utf-8", errors="replace")
+            buffer += decoder.decode(chunk)
+            lines = buffer.split("\n")
+            buffer = lines.pop()
+            yield from lines
+        buffer += decoder.decode(b"", final=True)
+        if buffer:
+            yield buffer
 
     def get_container_detail(self, container_id: str) -> dict | None:
         """获取容器完整详情。"""

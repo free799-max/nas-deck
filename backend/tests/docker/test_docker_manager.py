@@ -23,7 +23,16 @@ def test_list_containers(mock_docker_module):
     mock_container.id = "abc123def456"
     mock_container.name = "jellyfin"
     mock_container.status = "running"
-    mock_container.attrs = {"State": {"Health": {"Status": "healthy"}}}
+    mock_container.attrs = {
+        "State": {"Health": {"Status": "healthy"}},
+        "NetworkSettings": {
+            "Ports": {
+                "8096/tcp": [{"HostIp": "0.0.0.0", "HostPort": "18096"}],
+                "8920/tcp": [{"HostIp": "127.0.0.1", "HostPort": "18920"}],
+                "1900/udp": None,
+            }
+        },
+    }
     mock_container.image.tags = ["jellyfin:latest"]
 
     mock_client = MagicMock()
@@ -35,6 +44,43 @@ def test_list_containers(mock_docker_module):
     assert len(containers) == 1
     assert containers[0]["name"] == "jellyfin"
     assert containers[0]["status"] == "running"
+    assert containers[0]["ports"] == (
+        "18096:8096/tcp, 127.0.0.1:18920:8920/tcp"
+    )
+    assert containers[0]["port_bindings"] == [
+        {
+            "container_port": "8096/tcp",
+            "host_ip": "0.0.0.0",
+            "host_port": "18096",
+        },
+        {
+            "container_port": "8920/tcp",
+            "host_ip": "127.0.0.1",
+            "host_port": "18920",
+        },
+    ]
+
+
+@patch("app.services.docker.docker_common.docker")
+def test_list_containers_without_port_bindings(mock_docker_module):
+    mock_container = MagicMock()
+    mock_container.id = "abc123def456"
+    mock_container.name = "worker"
+    mock_container.status = "exited"
+    mock_container.attrs = {
+        "State": {"Status": "exited"},
+        "NetworkSettings": {"Ports": None},
+    }
+    mock_container.image.tags = []
+
+    mock_client = MagicMock()
+    mock_client.containers.list.return_value = [mock_container]
+    mock_docker_module.from_env.return_value = mock_client
+
+    containers = DockerManager().list_containers()
+
+    assert containers[0]["ports"] == ""
+    assert containers[0]["port_bindings"] == []
 
 
 @patch("app.services.docker.docker_common.docker")

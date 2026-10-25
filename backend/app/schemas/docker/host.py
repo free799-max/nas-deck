@@ -55,7 +55,9 @@ class ResourceInfo(BaseModel):
     """宿主机资源信息（CPU、内存、磁盘）。"""
 
     cpu_cores: int
+    cpu_usage_percent: float = 0.0
     memory_total: int  # 字节
+    memory_used: int = 0  # 字节
     disk_total: int  # 字节
     disk_used: int  # 字节
     disk_free: int  # 字节
@@ -88,6 +90,8 @@ class HostInfo(BaseModel):
     os: str
     arch: str
     kernel_version: str
+    uptime_seconds: int = 0
+    load_average: list[float] = []
     docker_version: DockerVersionInfo
     resources: ResourceInfo
     stats: DockerStatsInfo

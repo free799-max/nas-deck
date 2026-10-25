@@ -34,6 +34,14 @@ class LabelItem(BaseModel):
     value: str
 
 
+class ContainerPortBinding(BaseModel):
+    """容器端口绑定详情。"""
+
+    container_port: str
+    host_ip: str
+    host_port: str
+
+
 class ContainerInfo(BaseModel):
     """
     容器信息响应数据模型。
@@ -48,6 +56,7 @@ class ContainerInfo(BaseModel):
     health: str  # 健康检查状态
     image: str  # 使用的镜像
     ports: str  # 端口映射摘要
+    port_bindings: list[ContainerPortBinding]  # 结构化端口映射
     labels: dict[str, str]  # 容器标签
     created: str  # 创建时间
 
@@ -83,14 +92,6 @@ class ContainerCreateRequest(BaseModel):
     labels: list[LabelItem] | None = None
     restart_policy: Literal["no", "unless-stopped", "always", "on-failure"] = "no"
     auto_start: bool = True
-
-
-class ContainerPortBinding(BaseModel):
-    """容器端口绑定详情。"""
-
-    container_port: str
-    host_ip: str
-    host_port: str
 
 
 class ContainerMount(BaseModel):

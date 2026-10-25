@@ -26,6 +26,8 @@ export interface ContainerInfo {
   image: string;
   /** 端口映射摘要 */
   ports: string;
+  /** 结构化端口映射 */
+  port_bindings: ContainerPortBinding[];
   /** 容器标签 */
   labels: Record<string, string>;
   /** 创建时间 */
@@ -192,7 +194,9 @@ export interface DockerVersionInfo {
 /** 宿主机资源信息 */
 export interface ResourceInfo {
   cpu_cores: number;
+  cpu_usage_percent: number;
   memory_total: number;
+  memory_used: number;
   disk_total: number;
   disk_used: number;
   disk_free: number;
@@ -222,6 +226,8 @@ export interface HostInfo {
   os: string;
   arch: string;
   kernel_version: string;
+  uptime_seconds: number;
+  load_average: number[];
   docker_version: DockerVersionInfo;
   resources: ResourceInfo;
   stats: DockerStatsInfo;
