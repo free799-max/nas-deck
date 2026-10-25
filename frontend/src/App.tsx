@@ -13,7 +13,6 @@ import { AppLayout } from "./layouts/AppLayout";
 import { LoginPage } from "./pages/auth/LoginPage";
 import { DashboardPage } from "./pages/dashboard/DashboardPage";
 import { AppsPage } from "./pages/apps/AppsPage";
-import { AppEditPage } from "./pages/apps/edit/AppEditPage";
 import { AutomationCategoriesPage } from "./pages/automation/AutomationCategoriesPage";
 import { AutomationCategoryPage } from "./pages/automation/AutomationCategoryPage";
 import { DockerPage } from "./pages/docker/containers/DockerPage";
@@ -21,6 +20,7 @@ import { DockerHostPage } from "./pages/docker/host/DockerHostPage";
 import { DockerImagesPage } from "./pages/docker/images/DockerImagesPage";
 import { DockerStacksPage } from "./pages/docker/stacks/DockerStacksPage";
 import { SettingsPage } from "./pages/settings/SettingsPage";
+import { LicenseGuard } from "./components/LicenseGuard";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -75,14 +75,23 @@ export default function App() {
                   {/* 核心入口 */}
                   <Route path="/" element={<DashboardPage />} />
                   <Route path="/appstore" element={<AppsPage />} />
-                  <Route path="/appstore/create" element={<AppEditPage />} />
-                  <Route path="/appstore/:name/edit" element={<AppEditPage />} />
 
                   {/* 自动化管理 */}
-                  <Route path="/automation" element={<AutomationCategoriesPage />} />
+                  <Route
+                    path="/automation"
+                    element={
+                      <LicenseGuard>
+                        <AutomationCategoriesPage />
+                      </LicenseGuard>
+                    }
+                  />
                   <Route
                     path="/automation/:category"
-                    element={<AutomationCategoryPage />}
+                    element={
+                      <LicenseGuard>
+                        <AutomationCategoryPage />
+                      </LicenseGuard>
+                    }
                   />
 
                   {/* Docker 管理 */}

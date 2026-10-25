@@ -26,8 +26,10 @@ import {
   Monitor,
   Settings,
   ChevronDown,
+  LockKeyhole,
 } from "lucide-react";
 import { LogoIcon } from "@/components/LogoIcon";
+import { useLicenseStatus } from "@/hooks/useLicense";
 
 /** 导航项配置 */
 interface NavItemConfig {
@@ -71,16 +73,22 @@ function NavItem({
   item,
   active,
   collapsed,
+  locked = false,
 }: {
   item: NavItemConfig;
   active: boolean;
   collapsed: boolean;
+  locked?: boolean;
 }) {
   const Icon = item.icon;
+  const lockedLabel = `${item.label}（未授权）`;
   return (
     <Link
       to={item.path}
-      title={collapsed ? item.label : undefined}
+      title={
+        locked ? lockedLabel : collapsed ? item.label : undefined
+      }
+      aria-label={locked ? lockedLabel : undefined}
       className={`flex items-center rounded-xl text-sm transition-colors ${
         collapsed ? "justify-center px-2 py-2.5" : "gap-3 px-3 py-2"
       } ${
@@ -89,8 +97,22 @@ function NavItem({
           : "text-muted-foreground hover:bg-muted/60 hover:text-foreground"
       }`}
     >
-      <Icon className="h-4 w-4 shrink-0" />
+      <span className="relative shrink-0">
+        <Icon className="h-4 w-4" aria-hidden="true" />
+        {collapsed && locked && (
+          <LockKeyhole
+            className="absolute -right-2 -top-2 h-2.5 w-2.5 rounded-full bg-white text-amber-600"
+            aria-hidden="true"
+          />
+        )}
+      </span>
       {!collapsed && <span className="flex-1">{item.label}</span>}
+      {!collapsed && locked && (
+        <LockKeyhole
+          className="h-3.5 w-3.5 shrink-0 text-amber-600"
+          aria-hidden="true"
+        />
+      )}
     </Link>
   );
 }
@@ -105,6 +127,7 @@ function NavGroup({
   sidebarCollapsed,
   collapsible = true,
   uppercaseTitle = true,
+  locked = false,
 }: {
   title: string;
   items: NavItemConfig[];
@@ -114,6 +137,7 @@ function NavGroup({
   sidebarCollapsed: boolean;
   collapsible?: boolean;
   uppercaseTitle?: boolean;
+  locked?: boolean;
 }) {
   const isGroupActive = items.some(
     (item) => pathname === item.path || pathname.startsWith(item.path + "/")
@@ -135,6 +159,7 @@ function NavGroup({
               item={item}
               active={pathname === item.path}
               collapsed={true}
+              locked={locked}
             />
           ))}
         </div>
@@ -179,6 +204,7 @@ function NavGroup({
               item={item}
               active={pathname === item.path}
               collapsed={false}
+              locked={locked}
             />
           ))}
         </div>
@@ -194,6 +220,8 @@ interface SidebarProps {
 export function Sidebar({ collapsed }: SidebarProps) {
   const location = useLocation();
   const pathname = location.pathname;
+  const { data: license } = useLicenseStatus();
+  const automationLocked = !!license && !license.valid;
 
   // 折叠状态管理
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(
@@ -273,6 +301,7 @@ export function Sidebar({ collapsed }: SidebarProps) {
           collapsed={collapsedGroups.has("AUTOMATION")}
           onToggle={() => toggleGroup("AUTOMATION")}
           sidebarCollapsed={effectiveCollapsed}
+          locked={automationLocked}
         />
 
         {/* Docker 分组 */}
