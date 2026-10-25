@@ -60,39 +60,6 @@ export interface AppPreviewResponse {
   error: string | null;
 }
 
-/** 创建应用请求（与后端 AppCreate 对齐） */
-export interface AppCreatePayload {
-  name: string;
-  display_name: string;
-  description?: string | null;
-  category?: string;
-  tags?: string[];
-  icon?: string | null;
-  website?: string | null;
-  source_url?: string | null;
-  architectures?: string[];
-  image?: string | null;
-  default_ports?: { port: number; protocol?: string; description?: string }[];
-  config_schema?: Record<string, unknown>;
-  yaml_template: string;
-  readme?: string | null;
-  version?: string;
-  type?: string;
-  changelog?: string | null;
-  backup_paths?: string[];
-}
-
-/** 更新应用请求（所有字段可选，name 不可修改） */
-export type AppUpdatePayload = Partial<Omit<AppCreatePayload, "name">>;
-
-/** 未落库模板预览请求 */
-export interface AppTemplatePreviewRequest {
-  yaml_template: string;
-  config_schema?: Record<string, unknown>;
-  image?: string | null;
-  app_name?: string;
-}
-
 /** 查询应用列表 */
 export function listApps(params?: { category?: string; tag?: string }) {
   return api.get<App[]>("/apps", { params }).then((r) => r.data);
@@ -118,41 +85,5 @@ export function previewApp(
 ) {
   return api
     .post<AppPreviewResponse>(`/apps/${name}/preview`, data, { signal })
-    .then((r) => r.data);
-}
-
-/** 创建应用（仅管理员） */
-export function createApp(data: AppCreatePayload) {
-  return api.post<AppDetail>("/apps", data).then((r) => r.data);
-}
-
-/** 更新应用（仅管理员） */
-export function updateApp(name: string, data: AppUpdatePayload) {
-  return api.put<AppDetail>(`/apps/${name}`, data).then((r) => r.data);
-}
-
-/** 删除应用（仅管理员） */
-export function deleteApp(name: string) {
-  return api.delete(`/apps/${name}`).then((r) => r.data);
-}
-
-/** 上传应用图标（仅管理员），保存后 app.icon 指向后端图标接口 */
-export function uploadAppIcon(name: string, file: File) {
-  const formData = new FormData();
-  formData.append("file", file);
-  return api
-    .post<AppDetail>(`/apps/${name}/icon`, formData, {
-      headers: { "Content-Type": "multipart/form-data" },
-    })
-    .then((r) => r.data);
-}
-
-/** 预览未落库的应用模板渲染结果（仅管理员，创建/编辑页用） */
-export function previewAppTemplate(
-  data: AppTemplatePreviewRequest,
-  signal?: AbortSignal
-) {
-  return api
-    .post<AppPreviewResponse>("/apps/preview-template", data, { signal })
     .then((r) => r.data);
 }

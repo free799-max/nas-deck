@@ -5,16 +5,13 @@
  */
 
 import { useState, useMemo } from "react";
-import { useNavigate } from "react-router-dom";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Button } from "@/components/ui/button";
 import { AppCard } from "./AppCard";
 import { AppDeployDialog } from "./AppDeployDialog";
 import { AppDetailDialog } from "./AppDetailDialog";
 import { useToast } from "@/components/ui/toast";
 import { useDeployTasks } from "@/hooks/useDeployTasks";
-import { useAuth } from "@/hooks/useAuth";
 import {
   useApps,
   useApp,
@@ -22,35 +19,16 @@ import {
   type App,
   type AppDetail,
 } from "@/hooks/useApps";
-import { Search, ChevronLeft, ChevronRight, Plus } from "lucide-react";
+import { Search, ChevronLeft, ChevronRight } from "lucide-react";
+import { categoryLabel } from "@/lib/categories";
 
 const PAGE_SIZE_OPTIONS = [20, 40, 60, 100];
-
-const CATEGORY_LABELS: Record<string, string> = {
-  movie: "影视",
-  comic: "漫画",
-  book: "书籍",
-  music: "音乐",
-  game: "游戏",
-  gallery: "图库",
-  news: "资讯",
-  download: "下载",
-  docker: "Docker",
-  tool: "工具",
-  media: "媒体",
-  network: "网络",
-  web: "网站",
-  other: "其他",
-};
 
 export function AppsTab() {
   const { data: apps = [], isLoading } = useApps();
   const deployMutation = useDeployApp();
   const toast = useToast();
   const { startTask } = useDeployTasks();
-  const { user } = useAuth();
-  const navigate = useNavigate();
-  const isAdmin = user?.role === "admin";
 
   const [search, setSearch] = useState("");
   const [selectedCategory, setSelectedCategory] = useState<string>("all");
@@ -175,22 +153,12 @@ export function AppsTab() {
                       : "bg-muted/70 text-muted-foreground hover:bg-muted"
                   }`}
                 >
-                  {CATEGORY_LABELS[cat] ?? cat}
+                  {categoryLabel(cat)}
                 </button>
               ))}
             </div>
 
             <div className="flex items-center gap-2 order-1 sm:order-2">
-              {isAdmin && (
-                <Button
-                  size="sm"
-                  onClick={() => navigate("/appstore/create")}
-                  className="rounded-lg shrink-0"
-                >
-                  <Plus className="h-4 w-4 mr-1" />
-                  添加应用
-                </Button>
-              )}
               <div className="relative w-52">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                 <Input
@@ -220,11 +188,6 @@ export function AppsTab() {
                   app={app}
                   onDeploy={setDeployApp}
                   onDetail={setDetailApp}
-                  onEdit={
-                    isAdmin
-                      ? (target) => navigate(`/appstore/${target.name}/edit`)
-                      : undefined
-                  }
                 />
               ))}
             </div>

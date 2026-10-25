@@ -10,18 +10,10 @@ import {
   getApp,
   deployApp,
   previewApp,
-  createApp,
-  updateApp,
-  deleteApp,
-  uploadAppIcon,
-  previewAppTemplate,
   type App,
   type AppDetail,
   type DeployAppRequest,
   type AppPreviewRequest,
-  type AppCreatePayload,
-  type AppUpdatePayload,
-  type AppTemplatePreviewRequest,
 } from "@/api/apps";
 
 // 保持既有导出，页面侧 import 路径无需变更
@@ -32,9 +24,6 @@ export type {
   DeployAppResponse,
   AppPreviewRequest,
   AppPreviewResponse,
-  AppCreatePayload,
-  AppUpdatePayload,
-  AppTemplatePreviewRequest,
 } from "@/api/apps";
 
 /**
@@ -92,85 +81,3 @@ export function useAppPreview(name: string) {
   });
 }
 
-/**
- * 创建应用（仅管理员）
- */
-export function useCreateApp() {
-  const qc = useQueryClient();
-  const toast = useToast();
-  return useMutation({
-    mutationFn: (data: AppCreatePayload) => createApp(data),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["apps"] });
-      toast.success("应用创建成功");
-    },
-    onError: (error: ApiError) => {
-      toast.error(error.displayMessage || "创建失败");
-    },
-  });
-}
-
-/**
- * 更新应用（仅管理员）
- */
-export function useUpdateApp() {
-  const qc = useQueryClient();
-  const toast = useToast();
-  return useMutation({
-    mutationFn: ({ name, data }: { name: string; data: AppUpdatePayload }) =>
-      updateApp(name, data),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["apps"] });
-      toast.success("应用保存成功");
-    },
-    onError: (error: ApiError) => {
-      toast.error(error.displayMessage || "保存失败");
-    },
-  });
-}
-
-/**
- * 删除应用（仅管理员）
- */
-export function useDeleteApp() {
-  const qc = useQueryClient();
-  const toast = useToast();
-  return useMutation({
-    mutationFn: (name: string) => deleteApp(name),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["apps"] });
-      toast.success("应用已删除");
-    },
-    onError: (error: ApiError) => {
-      toast.error(error.displayMessage || "删除失败");
-    },
-  });
-}
-
-/**
- * 上传应用图标（仅管理员）
- */
-export function useUploadAppIcon() {
-  const qc = useQueryClient();
-  const toast = useToast();
-  return useMutation({
-    mutationFn: ({ name, file }: { name: string; file: File }) =>
-      uploadAppIcon(name, file),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["apps"] });
-      toast.success("图标上传成功");
-    },
-    onError: (error: ApiError) => {
-      toast.error(error.displayMessage || "图标上传失败");
-    },
-  });
-}
-
-/**
- * 预览未落库的应用模板渲染结果（创建/编辑页用）
- */
-export function useAppTemplatePreview() {
-  return useMutation({
-    mutationFn: (data: AppTemplatePreviewRequest) => previewAppTemplate(data),
-  });
-}
