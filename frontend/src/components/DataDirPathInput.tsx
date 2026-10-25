@@ -155,10 +155,13 @@ export function DataDirPathInput({
 
   const handleSourceChange = (nextSource: string) => {
     if (!nextSource) return;
-    // 切换来源时保留已有子路径；自定义值无法表达为新来源的子路径时使用默认子路径
+    // 切换来源时保留已有子路径：相对值（如共享目录的 host_path）可直接作为新来源的子路径；
+    // 自定义绝对路径无法映射到新来源，才回退到默认子路径
     const currentSub =
       source.kind === "custom"
-        ? defaultSubPath ?? ""
+        ? value.startsWith("/")
+          ? defaultSubPath ?? ""
+          : value.replace(/^\/+/, "") || defaultSubPath || ""
         : source.subPath || defaultSubPath || "";
     onChange(buildValue(nextSource, currentSub));
   };

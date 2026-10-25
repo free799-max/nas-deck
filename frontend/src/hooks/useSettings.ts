@@ -12,14 +12,24 @@ import {
   updateSystemConfig,
   getPortSuggestions,
   listStorageDirectories,
+  testProxy,
+  listRemoteDockerMirrors,
+  testDockerMirrors,
   createStorageDirectory,
   updateStorageDirectory,
   deleteStorageDirectory,
+  getHostsOptimizerConfig,
+  updateHostsOptimizerConfig,
+  getHostsOptimizerStatus,
+  testHostsOptimizer,
+  runHostsOptimizer,
   type SystemConfig,
   type SystemConfigUpdate,
   type StorageDirectory,
   type StorageDirectoryCreate,
   type StorageDirectoryUpdate,
+  type HostsOptimizerConfig,
+  type HostsOptimizerStatus,
 } from "@/api/settings";
 import {
   settingsDirectoriesApi,
@@ -35,6 +45,13 @@ export type {
   StorageDirectory,
   StorageDirectoryCreate,
   StorageDirectoryUpdate,
+  HostsOptimizerConfig,
+  HostsOptimizerStatus,
+  ProxyTestResult,
+  RemoteDockerMirror,
+  RemoteDockerMirrors,
+  DockerMirrorTestItem,
+  DockerMirrorTestResult,
 } from "@/api/settings";
 export type {
   DirectoryList,
@@ -227,6 +244,125 @@ export function useSettingsDeleteDirectory() {
     },
     onError: (error: ApiError) => {
       toast.error(error.displayMessage || "删除失败");
+    },
+  });
+}
+
+/**
+ * 检测代理对常用境外站点的连通性
+ */
+export function useTestProxy() {
+  const toast = useToast();
+
+  return useMutation({
+    mutationFn: (data: {
+      http_proxy?: string | null;
+      https_proxy?: string | null;
+    }) => testProxy(data),
+    onError: (error: ApiError) => {
+      toast.error(error.displayMessage || "检测失败");
+    },
+  });
+}
+
+/**
+ * 从管理端获取启用中的镜像加速地址
+ */
+export function useRemoteDockerMirrors() {
+  return useMutation({
+    mutationFn: listRemoteDockerMirrors,
+  });
+}
+
+/**
+ * 检测镜像加速地址的连通性
+ */
+export function useTestDockerMirrors() {
+  return useMutation({
+    mutationFn: testDockerMirrors,
+  });
+}
+
+/**
+ * 查询 Hosts 优选配置
+ */
+export function useHostsOptimizerConfig() {
+  return useQuery<HostsOptimizerConfig>({
+    queryKey: ["settings", "hosts-optimizer", "config"],
+    queryFn: getHostsOptimizerConfig,
+  });
+}
+
+/**
+ * 保存 Hosts 优选配置
+ */
+export function useUpdateHostsOptimizerConfig() {
+  const qc = useQueryClient();
+  const toast = useToast();
+
+  return useMutation({
+    mutationFn: (data: HostsOptimizerConfig) => updateHostsOptimizerConfig(data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["settings", "hosts-optimizer"] });
+      toast.success("保存成功");
+    },
+    onError: (error: ApiError) => {
+      toast.error(error.displayMessage || "保存失败");
+    },
+  });
+}
+
+/**
+ * 查询 Hosts 优选运行状态（自动刷新）
+ */
+export function useHostsOptimizerStatus() {
+  return useQuery<HostsOptimizerStatus>({
+    queryKey: ["settings", "hosts-optimizer", "status"],
+    queryFn: getHostsOptimizerStatus,
+    refetchInterval: 15000,
+  });
+}
+
+/**
+ * 测试 AdGuard 连接
+ */
+export function useTestHostsOptimizer() {
+  const toast = useToast();
+
+  return useMutation({
+    mutationFn: (data: {
+      adguard_url?: string | null;
+      adguard_username?: string;
+      adguard_password?: string;
+    }) => testHostsOptimizer(data),
+    onSuccess: (result) => {
+      if (result.ok) {
+        toast.success(`AdGuard 连接成功${result.version ? `（${result.version}）` : ""}`);
+      } else {
+        toast.error(result.message || "AdGuard 连接失败");
+      }
+    },
+    onError: (error: ApiError) => {
+      toast.error(error.displayMessage || "测试失败");
+    },
+  });
+}
+
+/**
+ * 立即执行一次 Hosts 优选
+ */
+export function useRunHostsOptimizer() {
+  const qc = useQueryClient();
+  const toast = useToast();
+
+  return useMutation({
+    mutationFn: runHostsOptimizer,
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["settings", "hosts-optimizer", "status"] });
+      toast.success("优选完成");
+    },
+    onError: (error: ApiError) => {
+      toast.error(error.displayMessage || "优选失败");
     },
   });
 }

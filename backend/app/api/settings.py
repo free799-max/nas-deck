@@ -13,7 +13,23 @@ from app.core.exceptions import APIException
 from app.core.security import get_current_user, require_admin
 from app.database import get_db
 from app.models.user import User
-from app.schemas.system_config import SystemConfigOut, SystemConfigUpdate
+from app.schemas.hosts_optimizer import (
+    HostsOptimizerConfig,
+    HostsOptimizerConfigUpdate,
+    HostsOptimizerRunOut,
+    HostsOptimizerStatusOut,
+    HostsOptimizerTestRequest,
+    HostsOptimizerTestResult,
+)
+from app.schemas.system_config import (
+    DockerMirrorTestRequest,
+    DockerMirrorTestResult,
+    ProxyTestRequest,
+    ProxyTestResult,
+    RemoteDockerMirrorsOut,
+    SystemConfigOut,
+    SystemConfigUpdate,
+)
 from app.schemas.storage_directory import (
     StorageDirectoryCreate,
     StorageDirectoryOut,
@@ -30,6 +46,9 @@ from app.services.host.filesystem_service import filesystem_service
 from app.services.system.port_allocator import allocate_free_ports, get_used_ports
 from app.services.system import (
     get_browse_roots,
+    hosts_optimizer_service,
+    proxy_test_service,
+    registry_mirror_service,
     storage_directory_service,
     system_config_service,
 )
@@ -59,6 +78,118 @@ async def update_system_config(
     """更新系统全局配置。"""
     config = await system_config_service.update(db, data)
     return system_config_service.to_dict(config)
+
+
+@router.post("/proxy/test", response_model=ProxyTestResult)
+async def test_proxy(
+    data: ProxyTestRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """检测常用境外站点在当前代理下的连通性。
+
+    请求体中为 None 的字段回退到已保存配置（未启用代理时忽略已保存地址），
+    空字符串表示不走代理。
+    """
+    config = await system_config_service.get_or_create(db)
+    http_proxy = data.http_proxy
+    https_proxy = data.https_proxy
+    if http_proxy is None and https_proxy is None and not config.proxy_enabled:
+        http_proxy = https_proxy = ""
+    if http_proxy is None:
+        http_proxy = config.http_proxy
+    if https_proxy is None:
+        https_proxy = config.https_proxy
+    return await proxy_test_service.test(
+        http_proxy=http_proxy,
+        https_proxy=https_proxy,
+    )
+
+
+# ---------- 镜像加速 ----------
+
+
+@router.get("/docker-mirrors/remote", response_model=RemoteDockerMirrorsOut)
+async def list_remote_docker_mirrors(
+    current_user: User = Depends(get_current_user),
+):
+    """从配套管理端获取启用中的 Docker 镜像加速地址。"""
+    return await registry_mirror_service.fetch_remote()
+
+
+@router.post("/docker-mirrors/test", response_model=DockerMirrorTestResult)
+async def test_docker_mirrors(
+    data: DockerMirrorTestRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """并发检测镜像加速地址的连通性与响应耗时。"""
+    return await registry_mirror_service.test(data.urls)
+
+
+# ---------- Hosts 优选 ----------
+
+
+@router.get("/hosts-optimizer/config", response_model=HostsOptimizerConfig)
+async def get_hosts_optimizer_config(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """获取 Hosts 优选配置。"""
+    config = await system_config_service.get_or_create(db)
+    return hosts_optimizer_service.config_from_model(config)
+
+
+@router.put("/hosts-optimizer/config", response_model=HostsOptimizerConfig)
+async def update_hosts_optimizer_config(
+    data: HostsOptimizerConfigUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    """保存 Hosts 优选配置（整份提交）。"""
+    config = await hosts_optimizer_service.update_config(db, data)
+    hosts_optimizer_service.wake()
+    return hosts_optimizer_service.config_from_model(config)
+
+
+@router.get("/hosts-optimizer/status", response_model=HostsOptimizerStatusOut)
+async def get_hosts_optimizer_status(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """获取当前运行状态与最近一次结果。"""
+    config = await system_config_service.get_or_create(db)
+    return {
+        "running": hosts_optimizer_service.running,
+        "next_run_at": hosts_optimizer_service.next_run_at(config),
+        "last_run": config.hosts_optimizer_status or None,
+    }
+
+
+@router.post("/hosts-optimizer/test", response_model=HostsOptimizerTestResult)
+async def test_hosts_optimizer(
+    data: HostsOptimizerTestRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    """测试 AdGuard 管理接口连通性。"""
+    config = await system_config_service.get_or_create(db)
+    return await hosts_optimizer_service.test_connection(config, overrides=data)
+
+
+@router.post("/hosts-optimizer/run", response_model=HostsOptimizerRunOut)
+async def run_hosts_optimizer(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    """立即执行一次 Hosts 优选（同步等待结果）。"""
+    config = await system_config_service.get_or_create(db)
+    try:
+        return await asyncio.wait_for(
+            hosts_optimizer_service.run_and_save(db, config, mode="manual"),
+            timeout=180,
+        )
+    except asyncio.TimeoutError as exc:
+        raise APIException("优选超时（180 秒），请检查 AdGuard 连接与网络", 504) from exc
 
 
 @router.get("/port-suggestions")

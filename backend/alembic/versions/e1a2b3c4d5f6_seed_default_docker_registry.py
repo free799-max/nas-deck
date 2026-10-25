@@ -32,7 +32,10 @@ def upgrade() -> None:
         sa.column("enable_mirror", sa.Boolean),
         sa.column("username", sa.String),
         sa.column("password", sa.String),
+        sa.column("trust_ssl_self_signed", sa.Boolean),
         sa.column("is_default", sa.Boolean),
+        sa.column("created_at", sa.DateTime),
+        sa.column("updated_at", sa.DateTime),
     )
     row = bind.execute(sa.select(sa.func.count()).select_from(configs)).scalar()
     if row:
@@ -45,7 +48,10 @@ def upgrade() -> None:
             enable_mirror=False,
             username=None,
             password=None,
+            trust_ssl_self_signed=False,
             is_default=True,
+            created_at=sa.func.now(),
+            updated_at=sa.func.now(),
         )
     )
 
