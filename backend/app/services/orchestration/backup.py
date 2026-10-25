@@ -18,6 +18,7 @@
 import asyncio
 import json
 import logging
+import os
 import re
 import shutil
 from dataclasses import dataclass
@@ -46,6 +47,15 @@ class AppDataEntry:
     app_name: str | None
     project_name: str
     config: dict | None = None
+
+
+@dataclass(frozen=True)
+class BackupFailure:
+    """一个未能移入备份目录的应用数据目录（原数据仍留在原路径）。"""
+
+    instance_name: str
+    project_name: str
+    reason: str
 
 
 def _safe_name(value: str) -> str:
@@ -81,26 +91,34 @@ async def backup_app_data_dirs(
     orchestration_name: str | None = None,
     shared_config: dict | None = None,
     app_configs: dict | None = None,
-) -> Path | None:
+) -> tuple[Path | None, list[BackupFailure]]:
     """把应用自身的数据目录移入备份目录。
 
     只移动应用数据目录下、以 Compose 项目名命名的直接子目录；共享存储
-    与应用数据目录之外的路径不动。没有任何目录被移动时返回 None。
+    与应用数据目录之外的路径不动。移动使用 ``os.rename``（同文件系统的
+    原子操作）：失败就是整体失败，不会像 ``shutil.move`` 那样在 rename
+    被拒后退化为半截的复制，把旧数据留在原地、备份里却只有空壳。
+
+    Returns:
+        ``(backup_dir, failures)``：没有任何目录被移动时 backup_dir 为
+        None；failures 记录移动失败的目录，其数据仍保留在原路径，
+        调用方必须提示用户，否则同名重建会静默复用旧数据。
     """
     root = await resolve_app_data_root(db)
     if root is None:
         logger.warning("未配置应用数据目录，跳过实例组 %s 的数据备份", group_name)
-        return None
+        return None, []
 
     try:
         root_resolved = root.resolve()
     except OSError:
         logger.warning("应用数据目录不可访问，跳过数据备份: %s", root)
-        return None
+        return None, []
 
     now = datetime.now()
     backup_dir: Path | None = None
     moved: list[dict] = []
+    failures: list[BackupFailure] = []
     seen: set[str] = set()
 
     for entry in entries:
@@ -124,10 +142,23 @@ async def backup_app_data_dirs(
         destination.parent.mkdir(parents=True, exist_ok=True)
 
         try:
-            await asyncio.to_thread(shutil.move, str(source), str(destination))
-        except Exception as exc:
+            await asyncio.to_thread(os.rename, str(source), str(destination))
+        except OSError as exc:
             logger.warning(
                 "备份应用数据目录失败 %s -> %s: %s", source, destination, exc
+            )
+            # rename 失败不会留下半成品；防御性清理可能残留的目标目录
+            try:
+                if destination.exists():
+                    await asyncio.to_thread(shutil.rmtree, str(destination))
+            except OSError:
+                pass
+            failures.append(
+                BackupFailure(
+                    instance_name=entry.instance_name,
+                    project_name=project_name,
+                    reason=str(exc),
+                )
             )
             continue
 
@@ -144,11 +175,13 @@ async def backup_app_data_dirs(
 
     if backup_dir is None or not moved:
         if backup_dir is not None:
-            try:
-                backup_dir.rmdir()
-            except OSError:
-                pass
-        return None
+            # 清掉本次创建的空备份目录；父目录 _backups 若已空也一并移除
+            for path in (backup_dir, backup_dir.parent):
+                try:
+                    path.rmdir()
+                except OSError:
+                    break
+        return None, failures
 
     manifest = {
         "instance_name": group_name,
@@ -167,7 +200,7 @@ async def backup_app_data_dirs(
     except OSError as exc:
         logger.warning("写入备份清单失败 %s: %s", backup_dir, exc)
 
-    return backup_dir
+    return backup_dir, failures
 
 
 def _read_manifest(backup_dir: Path) -> dict | None:
@@ -291,14 +324,14 @@ async def restore_app_data_dirs(
     done: list[tuple[Path, Path]] = []
     try:
         for source, target in moves:
-            await asyncio.to_thread(shutil.move, str(source), str(target))
+            await asyncio.to_thread(os.rename, str(source), str(target))
             done.append((source, target))
-    except Exception as exc:
+    except OSError as exc:
         # 尽力回滚已移动的目录，保持备份完整
         for source, target in reversed(done):
             try:
-                await asyncio.to_thread(shutil.move, str(target), str(source))
-            except Exception:
+                await asyncio.to_thread(os.rename, str(target), str(source))
+            except OSError:
                 logger.exception("回滚恢复的数据目录失败: %s -> %s", target, source)
         raise APIException(f"恢复应用数据失败: {exc}", 500) from exc
 

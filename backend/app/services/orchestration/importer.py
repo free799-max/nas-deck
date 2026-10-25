@@ -135,6 +135,8 @@ class ImportMixin:
             shared_config=shared_config or {},
             app_configs=app_configs or {},
             status="running",
+            # 导入时记录方案模板版本快照
+            orchestration_version=db_orchestration.version,
         )
         db.add(group)
         await db.flush()

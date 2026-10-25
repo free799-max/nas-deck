@@ -31,6 +31,7 @@ export interface DeployTaskProgress {
 interface DeployTaskEvent extends DeployTaskProgress {
   _task_status?: "deploying" | "completed" | "failed";
   _error?: string;
+  _warning?: string | null;
   _meta?: Record<string, unknown> | null;
 }
 
@@ -42,6 +43,8 @@ export interface DeployTaskState {
   stage: string;
   progress: DeployTaskProgress;
   error?: string | null;
+  /** 任务成功但有遗留问题的说明（如删除时数据目录未能备份） */
+  warning?: string | null;
   action?: string | null;
   projectId?: number | null;
   instanceId?: number | null;
@@ -69,6 +72,7 @@ function parseDeployEvent(taskId: string, eventData: string): DeployTaskState | 
         detail: data.detail,
       },
       error: data._error || null,
+      warning: data._warning || null,
       meta: data._meta,
     };
   } catch {
@@ -79,12 +83,19 @@ function parseDeployEvent(taskId: string, eventData: string): DeployTaskState | 
 const statusWordMap: Record<string, string> = {
   Creating: "创建中",
   Created: "已创建",
+  Recreate: "重建中",
+  Recreated: "已重建",
+  Recreating: "重建中",
   Starting: "启动中",
   Started: "已启动",
   Stopping: "停止中",
   Stopped: "已停止",
+  Killing: "停止中",
+  Killed: "已停止",
   Removing: "删除中",
   Removed: "已删除",
+  Rename: "重命名中",
+  Renamed: "已重命名",
   Waiting: "等待中",
   Pulling: "拉取中",
   Pulled: "已拉取",
@@ -161,6 +172,14 @@ function appendDeployLogs(
   const detail = next.progress.detail;
 
   if (message && message !== lastMessage) {
+    // 升级流程逐个应用推进，块之间留空行，避免所有应用日志粘成一片
+    if (
+      /^升级 .+（\d+\/\d+）$/.test(message) &&
+      logs.length > 0 &&
+      logs[logs.length - 1] !== ""
+    ) {
+      logs.push("");
+    }
     logs.push(message);
   }
   if (detail) {
@@ -193,7 +212,8 @@ function appendDeployLogs(
 export function useDeployTasksEvents(
   taskIds: string[],
   onComplete?: (taskId: string, state: DeployTaskState) => void,
-  onError?: (taskId: string, state: DeployTaskState) => void
+  onError?: (taskId: string, state: DeployTaskState) => void,
+  onExpired?: (taskId: string) => void
 ): Record<string, DeployTaskState> {
   const [states, setStates] = useState<Record<string, DeployTaskState>>({});
   const taskIdsKey = taskIds.join(",");
@@ -201,10 +221,12 @@ export function useDeployTasksEvents(
   // 回调用 ref 保持最新引用，避免其变化导致 SSE 反复重建
   const onCompleteRef = useRef(onComplete);
   const onErrorRef = useRef(onError);
+  const onExpiredRef = useRef(onExpired);
   useEffect(() => {
     onCompleteRef.current = onComplete;
     onErrorRef.current = onError;
-  }, [onComplete, onError]);
+    onExpiredRef.current = onExpired;
+  }, [onComplete, onError, onExpired]);
 
   useEffect(() => {
     const ids = taskIdsKey ? taskIdsKey.split(",") : [];
@@ -218,35 +240,32 @@ export function useDeployTasksEvents(
     const sources: Record<string, EventSource> = {};
     let disposed = false;
     // EventSource 读不到 HTTP 状态码，连接异常时用状态接口兜底判断：
-    // - 404：任务已结束/过期或后端重启，结束占位并提示
+    // - 404：任务已被后端清理（正常结束超过 TTL、页面恢复的旧任务或服务重启），
+    //   交给 onExpired 从列表移除，不能当成“部署失败”误导用户
     // - 401：token 过期，交给 axios 拦截器统一跳转登录
     // 每个任务 5 秒内最多探测一次，避免 EventSource 重连时刷接口
     const lastProbeAt: Record<string, number> = {};
+    const expiredTasks = new Set<string>();
 
     const probeTask = (taskId: string) => {
+      if (expiredTasks.has(taskId)) return;
       const now = Date.now();
       if (now - (lastProbeAt[taskId] ?? 0) < 5000) return;
       lastProbeAt[taskId] = now;
       api.get(`/deploy-tasks/${taskId}/status`).catch((error) => {
         const status = (error as { response?: { status?: number } })?.response
           ?.status;
-        if (disposed || status !== 404) return;
-        const failed: DeployTaskState = {
-          taskId,
-          type: "app_deploy",
-          status: "failed",
-          stage: "failed",
-          progress: {
-            stage: "failed",
-            percentage: 100,
-            message: "任务已不存在",
-          },
-          error:
-            "部署任务已不存在（可能已结束、已过期或后端已重启），无法获取进度",
-        };
+        if (disposed || status !== 404 || expiredTasks.has(taskId)) return;
+        expiredTasks.add(taskId);
         sources[taskId]?.close();
-        setStates((prev) => ({ ...prev, [taskId]: failed }));
-        onErrorRef.current?.(taskId, failed);
+        delete sources[taskId];
+        setStates((prev) => {
+          if (!(taskId in prev)) return prev;
+          const next = { ...prev };
+          delete next[taskId];
+          return next;
+        });
+        onExpiredRef.current?.(taskId);
       });
     };
 

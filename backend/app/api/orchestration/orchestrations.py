@@ -6,7 +6,7 @@
 from dataclasses import asdict
 from pathlib import Path
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -22,6 +22,7 @@ from app.schemas.app_auth import (
 )
 from app.schemas.orchestration import (
     InspectFixRequest,
+    MusicAutoOrganizeConfigIn,
     OrchestrationBackupOut,
     OrchestrationDeleteResponse,
     OrchestrationDeployRequest,
@@ -35,9 +36,18 @@ from app.schemas.orchestration import (
     OrchestrationInstanceUpdateRequest,
     OrchestrationOut,
     OrchestrationRestoreRequest,
+    OrchestrationUpdateEventOut,
     PluginInstallRequest,
+    ReaderAutoSyncConfigIn,
 )
+from app.services.licensing import require_license
 from app.services.orchestration import orchestration_service
+from app.services.orchestration.music_auto import music_auto_service
+from app.services.orchestration.reader_auto import reader_auto_service
+from app.services.orchestration.upgrade import (
+    read_current_image,
+    resolve_target_image,
+)
 
 from app.core.custom_route import CustomAPIRoute
 
@@ -47,12 +57,32 @@ router = APIRouter(prefix="/api/orchestrations", tags=["orchestrations"], route_
 @router.get("", response_model=list[OrchestrationOut])
 async def list_orchestrations(
     category: str | None = None,
-    tag: str | None = None,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """列出所有应用编排。"""
-    return await orchestration_service.list_orchestrations(db, category=category, tag=tag)
+    return await orchestration_service.list_orchestrations(db, category=category)
+
+
+def _instance_version_fields(group: AppOrchestrationInstance) -> dict:
+    """计算实例组的方案版本快照、模板当前版本与可升级标记。
+
+    历史数据未记录快照（None）时视为可升级，提示用户执行一次升级对齐。
+    """
+    template = group.orchestration
+    template_version = template.version if template else None
+    return {
+        "orchestration_version": group.orchestration_version,
+        "template_version": template_version,
+        "upgrade_available": bool(
+            template is not None
+            and (
+                group.orchestration_version is None
+                or group.orchestration_version != template_version
+            )
+        ),
+        "template_changelog": template.changelog if template else None,
+    }
 
 
 @router.get("/instances", response_model=list[OrchestrationInstanceGroupOut])
@@ -71,6 +101,7 @@ async def list_orchestration_instances(
             orchestration_display_name=g.orchestration.display_name,
             status=g.status,
             created_at=g.created_at,
+            **_instance_version_fields(g),
             apps=[
                 OrchestrationInstanceAppOut(
                     id=inst.id,
@@ -79,6 +110,7 @@ async def list_orchestration_instances(
                     icon=inst.app.icon if inst.app else None,
                     status=inst.status,
                     config=inst.config or {},
+                    project_id=inst.project_id,
                 )
                 for inst in g.instances
             ],
@@ -87,10 +119,47 @@ async def list_orchestration_instances(
     ]
 
 
-def _build_instance_detail_out(
+async def _build_instance_detail_out(
+    db: AsyncSession,
     group: AppOrchestrationInstance,
 ) -> dict:
-    """将 AppOrchestrationInstance 转换为详情响应字典。"""
+    """将 AppOrchestrationInstance 转换为详情响应字典。
+
+    同时给出每个应用当前的 Compose 镜像与按新模板升级后的目标镜像，
+    供前端升级弹窗展示「当前版本 → 目标版本」。
+    """
+    composition_by_name = {
+        item.get("app_name"): item
+        for item in (group.orchestration.app_composition or [])
+    }
+    apps: list[OrchestrationInstanceAppOut] = []
+    for inst in group.instances:
+        db_app = inst.app
+        current_image = None
+        target_image = None
+        if db_app is not None:
+            current_image = await read_current_image(db, inst, db_app)
+            target_image = resolve_target_image(
+                composition_by_name.get(db_app.name) or {},
+                db_app,
+                inst.config,
+            )
+        apps.append(
+            OrchestrationInstanceAppOut(
+                id=inst.id,
+                app_name=db_app.name if db_app else inst.instance_name,
+                display_name=(
+                    db_app.display_name if db_app else inst.instance_name
+                ),
+                icon=db_app.icon if db_app else None,
+                status=inst.status,
+                config=inst.config or {},
+                project_id=inst.project_id,
+                current_image=current_image,
+                target_image=target_image,
+            )
+        )
+
     return {
         "id": group.id,
         "instance_name": group.instance_name,
@@ -100,17 +169,8 @@ def _build_instance_detail_out(
         "created_at": group.created_at,
         "shared_config": group.shared_config or {},
         "app_configs": group.app_configs or {},
-        "apps": [
-            OrchestrationInstanceAppOut(
-                id=inst.id,
-                app_name=inst.app.name if inst.app else inst.instance_name,
-                display_name=inst.app.display_name if inst.app else inst.instance_name,
-                icon=inst.app.icon if inst.app else None,
-                status=inst.status,
-                config=inst.config or {},
-            )
-            for inst in group.instances
-        ],
+        **_instance_version_fields(group),
+        "apps": apps,
     }
 
 
@@ -122,10 +182,10 @@ async def get_orchestration_instance(
 ):
     """获取编排实例组详情。"""
     group = await orchestration_service.get_instance_detail(db, instance_id)
-    return _build_instance_detail_out(group)
+    return await _build_instance_detail_out(db, group)
 
 
-@router.patch("/instances/{instance_id}", response_model=OrchestrationInstanceDetailOut)
+@router.patch(dependencies=[Depends(require_license)], path="/instances/{instance_id}", response_model=OrchestrationInstanceDetailOut)
 async def update_orchestration_instance(
     instance_id: int,
     data: OrchestrationInstanceUpdateRequest,
@@ -140,11 +200,13 @@ async def update_orchestration_instance(
         shared_config=data.shared_config,
         app_configs=data.app_configs,
     )
-    return _build_instance_detail_out(group)
+    return await _build_instance_detail_out(db, group)
 
 
 @router.delete(
-    "/instances/{instance_id}", response_model=OrchestrationDeleteResponse
+    "/instances/{instance_id}",
+    response_model=OrchestrationDeleteResponse,
+    dependencies=[Depends(require_license)],
 )
 async def delete_orchestration_instance(
     instance_id: int,
@@ -159,7 +221,7 @@ async def delete_orchestration_instance(
     return OrchestrationDeleteResponse(task_id=task_id)
 
 
-@router.post("/instances/{instance_id}/redeploy", response_model=OrchestrationDeployResponse)
+@router.post(dependencies=[Depends(require_license)], path="/instances/{instance_id}/redeploy", response_model=OrchestrationDeployResponse)
 async def redeploy_orchestration_instance(
     instance_id: int,
     data: OrchestrationDeployRequest,
@@ -185,7 +247,39 @@ async def redeploy_orchestration_instance(
     )
 
 
-@router.post("/instances/{instance_id}/wire")
+@router.post(dependencies=[Depends(require_license)], path="/instances/{instance_id}/upgrade", response_model=OrchestrationDeployResponse)
+async def upgrade_orchestration_instance(
+    instance_id: int,
+    data: OrchestrationDeployRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    """一键升级编排实例组到模板当前版本。
+
+    已部署应用只原地更新镜像，挂载目录、端口、环境变量保持当前配置不变；
+    模板新增应用按默认配置部署，模板已移除应用保留运行。升级前会自动
+    保存一份配置快照（``orchestration_upgrade_backups``）。请求体沿用
+    redeploy 的部署请求模型，``instance_name`` 被忽略，``app_configs``
+    仅用于模板新增应用。
+    """
+    group, task_ids = await orchestration_service.upgrade_instance(
+        db,
+        group_id=instance_id,
+        selected_apps=data.selected_apps,
+        app_configs=data.app_configs,
+        shared_config=data.shared_config,
+        user_id=current_user.id,
+    )
+
+    return OrchestrationDeployResponse(
+        group_id=group.id,
+        instance_name=group.instance_name,
+        status=group.status,
+        task_ids=task_ids,
+    )
+
+
+@router.post(dependencies=[Depends(require_license)], path="/instances/{instance_id}/wire")
 async def wire_orchestration_instance(
     instance_id: int,
     db: AsyncSession = Depends(get_db),
@@ -196,9 +290,11 @@ async def wire_orchestration_instance(
     后台协程执行，立即返回；装配结果写入实例组 app_configs 的 integrations 字段。
     """
     # 校验实例组存在（不存在抛 404）
-    await orchestration_service.get_group(db, instance_id)
-    orchestration_service.schedule_wiring(instance_id)
-    return {"ok": True, "message": "装配已开始"}
+    group = await orchestration_service.get_group(db, instance_id)
+    task_id = orchestration_service.schedule_wiring(
+        instance_id, group.instance_name
+    )
+    return {"ok": True, "message": "装配已开始", "task_id": task_id}
 
 
 @router.get("/backups", response_model=list[OrchestrationBackupOut])
@@ -211,7 +307,7 @@ async def list_orchestration_backups(
     return await orchestration_service.list_backups(db, orchestration)
 
 
-@router.post("/backups/restore", response_model=OrchestrationDeployResponse)
+@router.post(dependencies=[Depends(require_license)], path="/backups/restore", response_model=OrchestrationDeployResponse)
 async def restore_orchestration_backup(
     data: OrchestrationRestoreRequest,
     db: AsyncSession = Depends(get_db),
@@ -250,7 +346,7 @@ async def inspect_orchestration_app(
     }
 
 
-@router.post("/instances/{instance_id}/apps/{app_name}/inspect/fix")
+@router.post(dependencies=[Depends(require_license)], path="/instances/{instance_id}/apps/{app_name}/inspect/fix")
 async def fix_orchestration_app(
     instance_id: int,
     app_name: str,
@@ -265,6 +361,100 @@ async def fix_orchestration_app(
     return {"results": [asdict(item) for item in results]}
 
 
+@router.get("/instances/{instance_id}/apps/{app_name}/auto-organize")
+async def get_app_auto_organize(
+    instance_id: int,
+    app_name: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    """读取应用自动整理配置与运行状态（当前支持 Music Tag Web）。"""
+    return await music_auto_service.get_panel(db, instance_id, app_name)
+
+
+@router.put(dependencies=[Depends(require_license)], path="/instances/{instance_id}/apps/{app_name}/auto-organize")
+async def save_app_auto_organize(
+    instance_id: int,
+    app_name: str,
+    data: MusicAutoOrganizeConfigIn,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    """保存应用自动整理配置（目录与运行参数）。"""
+    return await music_auto_service.save_config(
+        db, instance_id, data.model_dump(), app_name
+    )
+
+
+@router.post(dependencies=[Depends(require_license)], path="/instances/{instance_id}/apps/{app_name}/auto-organize/run")
+async def run_app_auto_organize(
+    instance_id: int,
+    app_name: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    """立即执行一轮自动整理（后台运行，进度通过配置接口轮询）。"""
+    status = await music_auto_service.start_run(
+        db,
+        instance_id,
+        trigger="manual",
+        force=True,
+        app_name=app_name,
+    )
+    return {
+        "ok": True,
+        "message": "自动整理已开始",
+        "status": status,
+    }
+
+
+@router.get("/instances/{instance_id}/apps/{app_name}/auto-sync")
+async def get_app_auto_sync(
+    instance_id: int,
+    app_name: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    """读取 Reader 自动同步配置与运行状态。"""
+    return await reader_auto_service.get_panel(db, instance_id, app_name)
+
+
+@router.put(dependencies=[Depends(require_license)], path="/instances/{instance_id}/apps/{app_name}/auto-sync")
+async def save_app_auto_sync(
+    instance_id: int,
+    app_name: str,
+    data: ReaderAutoSyncConfigIn,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    """保存 Reader 自动同步配置（地址、目录与二毛账号）。"""
+    return await reader_auto_service.save_config(
+        db, instance_id, data.model_dump(), app_name
+    )
+
+
+@router.post(dependencies=[Depends(require_license)], path="/instances/{instance_id}/apps/{app_name}/auto-sync/run")
+async def run_app_auto_sync(
+    instance_id: int,
+    app_name: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    """立即执行一轮 Reader 自动同步（后台运行，进度通过配置接口轮询）。"""
+    status = await reader_auto_service.start_run(
+        db,
+        instance_id,
+        trigger="manual",
+        force=True,
+        app_name=app_name,
+    )
+    return {
+        "ok": True,
+        "message": "自动同步已开始",
+        "status": status,
+    }
+
+
 @router.get("/instances/{instance_id}/apps/{app_name}/plugins")
 async def list_app_plugins(
     instance_id: int,
@@ -276,7 +466,7 @@ async def list_app_plugins(
     return await orchestration_service.list_app_plugins(db, instance_id, app_name)
 
 
-@router.post("/instances/{instance_id}/apps/{app_name}/plugins/install")
+@router.post(dependencies=[Depends(require_license)], path="/instances/{instance_id}/apps/{app_name}/plugins/install")
 async def install_app_plugin(
     instance_id: int,
     app_name: str,
@@ -291,6 +481,31 @@ async def install_app_plugin(
     return {"ok": True, "message": "插件安装成功"}
 
 
+@router.get("/instances/{instance_id}/apps/{app_name}/assets")
+async def get_app_assets(
+    instance_id: int,
+    app_name: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    """查询应用离线资源（插件依赖/浏览器内核）的拷贝状态。"""
+    return await orchestration_service.get_app_assets(db, instance_id, app_name)
+
+
+@router.post(dependencies=[Depends(require_license)], path="/instances/{instance_id}/apps/{app_name}/assets/copy")
+async def copy_app_assets(
+    instance_id: int,
+    app_name: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    """把离线资源拷贝到应用容器（后台任务，返回 task_id）。"""
+    task_id = await orchestration_service.copy_app_assets(
+        db, instance_id, app_name
+    )
+    return {"ok": True, "task_id": task_id}
+
+
 @router.post("/auth/verify", response_model=AppAuthVerifyResponse)
 async def verify_app_auth(
     data: AppAuthVerifyRequest,
@@ -302,6 +517,46 @@ async def verify_app_auth(
         config=data.model_dump(),
     )
     return AppAuthVerifyResponse(valid=result.valid, message=result.message)
+
+
+@router.post(dependencies=[Depends(require_license)], path="/sync")
+async def sync_orchestrations_endpoint(
+    current_user: User = Depends(require_admin),
+):
+    """手动触发从管理端同步编排方案（自动化模板）。"""
+    from app.services import catalog_sync
+
+    try:
+        return await catalog_sync.sync_orchestrations(mode="manual")
+    except Exception as exc:
+        raise APIException(f"同步编排方案失败：{exc}", 502)
+
+
+@router.get("/sync-status")
+async def get_sync_status_endpoint(
+    current_user: User = Depends(get_current_user),
+):
+    """查询最近一次编排方案同步的状态。"""
+    from app.services import catalog_sync
+
+    return catalog_sync.get_sync_status()
+
+
+@router.get("/update-events", response_model=list[OrchestrationUpdateEventOut])
+async def list_orchestration_update_events(
+    scope: str | None = Query(None, description="template / instance"),
+    orchestration_name: str | None = Query(None, description="按模板名过滤"),
+    limit: int = Query(20, ge=1, le=100, description="返回条数上限"),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """查询模板同步与实例组升级的更新记录（按创建时间倒序）。"""
+    return await orchestration_service.list_update_events(
+        db,
+        scope=scope,
+        orchestration_name=orchestration_name,
+        limit=limit,
+    )
 
 
 @router.get("/{name}", response_model=OrchestrationDetailOut)
@@ -318,11 +573,11 @@ async def get_orchestration(
         "display_name": orchestration.display_name,
         "description": orchestration.description,
         "category": orchestration.category,
-        "tags": orchestration.tags,
         "icon": orchestration.icon,
         "website": orchestration.website,
         "source_url": orchestration.source_url,
         "version": orchestration.version,
+        "changelog": orchestration.changelog,
         "is_builtin": orchestration.is_builtin,
         "app_composition": orchestration.app_composition or [],
         "shared_config_schema": orchestration.shared_config_schema or {},
@@ -360,7 +615,7 @@ async def get_orchestration_icon(
     return FileResponse(icon_path)
 
 
-@router.post("/{name}/deploy", response_model=OrchestrationDeployResponse)
+@router.post(dependencies=[Depends(require_license)], path="/{name}/deploy", response_model=OrchestrationDeployResponse)
 async def deploy_orchestration(
     name: str,
     data: OrchestrationDeployRequest,
@@ -397,7 +652,7 @@ async def get_import_candidates(
     return [candidate.model_dump() for candidate in candidates]
 
 
-@router.post("/{name}/import", response_model=OrchestrationImportResponse)
+@router.post(dependencies=[Depends(require_license)], path="/{name}/import", response_model=OrchestrationImportResponse)
 async def import_orchestration(
     name: str,
     data: OrchestrationImportRequest,

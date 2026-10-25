@@ -14,6 +14,12 @@ class OrchestrationInstanceAppOut(BaseModel):
     icon: str | None = None
     status: str
     config: dict = {}
+    # 关联的 Compose 项目；导入的独立容器为空
+    project_id: int | None = None
+    # 当前 Compose 主服务镜像；升级预览用
+    current_image: str | None = None
+    # 按当前模板升级后要使用的镜像
+    target_image: str | None = None
 
 
 class OrchestrationInstanceGroupOut(BaseModel):
@@ -25,6 +31,14 @@ class OrchestrationInstanceGroupOut(BaseModel):
     orchestration_display_name: str
     status: str
     created_at: datetime
+    # 部署/升级时的方案模板版本快照；为空表示旧数据未记录，视为可升级
+    orchestration_version: str | None = None
+    # 模板当前版本
+    template_version: str | None = None
+    # 模板版本与实例组快照不一致（或快照缺失）时提示可升级
+    upgrade_available: bool = False
+    # 模板当前版本的更新说明
+    template_changelog: str | None = None
     apps: list[OrchestrationInstanceAppOut] = []
 
     model_config = ConfigDict(from_attributes=True)

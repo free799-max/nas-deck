@@ -3,7 +3,6 @@
  */
 
 import { Card, CardContent } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import type { AppOrchestration } from "@/hooks/useOrchestrations";
 
@@ -54,18 +53,6 @@ export function AutomationOrchestrationCard({
               {orchestration.description || "暂无描述"}
             </p>
           </div>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-1.5 mt-3">
-          {orchestration.tags.slice(0, 3).map((tag) => (
-            <Badge
-              key={tag}
-              variant="secondary"
-              className="text-xs font-normal bg-muted text-muted-foreground hover:bg-muted truncate max-w-[80px]"
-            >
-              {tag}
-            </Badge>
-          ))}
         </div>
 
         <div className="mt-3 text-xs text-muted-foreground">

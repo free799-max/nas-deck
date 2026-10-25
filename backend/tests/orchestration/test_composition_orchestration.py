@@ -172,6 +172,194 @@ async def test_deploy_composition_conflicting_raises(db, media_apps, media_orche
 
 
 @pytest.mark.asyncio
+async def test_deploy_composition_insufficient_slots_leaves_no_group(
+    db, media_apps, media_orchestration, monkeypatch
+):
+    """并发槽位不足时应在创建实例组前报错，避免留下空实例组。"""
+    from sqlalchemy import func
+
+    from app.services.orchestration.deploy_task_service import deploy_task_manager
+
+    monkeypatch.setattr(deploy_task_manager, "available_slots", lambda: 2)
+
+    with pytest.raises(Exception) as exc_info:
+        await orchestration_service.deploy(
+            db,
+            orchestration_name="media-stack",
+            instance_name="test-stack",
+            selected_apps=["moviepilot", "qbittorrent", "jellyfin"],
+            app_configs={},
+            shared_config={},
+        )
+    assert "并发槽位" in str(exc_info.value)
+
+    result = await db.execute(
+        select(func.count()).select_from(AppOrchestrationInstance)
+    )
+    assert result.scalar_one() == 0
+
+
+@pytest.mark.asyncio
+async def test_deploy_composition_existing_project_leaves_no_group(
+    db, media_apps, media_orchestration
+):
+    """同名 Compose 项目已存在时应在创建实例组前报错。"""
+    from sqlalchemy import func
+
+    from app.models.docker import DockerComposeProject
+
+    db.add(
+        DockerComposeProject(
+            project_name="test-stack-moviepilot",
+            is_active=True,
+        )
+    )
+    await db.commit()
+
+    with pytest.raises(Exception) as exc_info:
+        await orchestration_service.deploy(
+            db,
+            orchestration_name="media-stack",
+            instance_name="test-stack",
+            selected_apps=["moviepilot", "qbittorrent"],
+            app_configs={},
+            shared_config={},
+        )
+    assert "已存在" in str(exc_info.value)
+
+    result = await db.execute(
+        select(func.count()).select_from(AppOrchestrationInstance)
+    )
+    assert result.scalar_one() == 0
+
+
+@pytest.mark.asyncio
+async def test_deploy_composition_preflight_rejects_invalid_app_before_group(
+    db, media_apps, media_orchestration, monkeypatch
+):
+    """应用配置不合法时应在创建实例组、部署任何应用之前报错。"""
+    from sqlalchemy import func
+
+    qbittorrent = next(app for app in media_apps if app.name == "qbittorrent")
+    qbittorrent.config_schema = {
+        "type": "object",
+        "properties": {
+            "volumes": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "host_path": {"type": "string"},
+                        "container_path": {"type": "string"},
+                        "mode": {"type": "string"},
+                    },
+                    "required": ["host_path", "container_path", "mode"],
+                },
+            }
+        },
+    }
+    await db.commit()
+
+    deployed: list[str] = []
+
+    async def fake_deploy(db, app_name, instance_name, config, user_id=None):
+        deployed.append(app_name)
+        raise AssertionError("配置校验失败时不应部署任何应用")
+
+    monkeypatch.setattr(app_service, "deploy", fake_deploy)
+
+    with pytest.raises(Exception) as exc_info:
+        await orchestration_service.deploy(
+            db,
+            orchestration_name="media-stack",
+            instance_name="test-stack",
+            selected_apps=["moviepilot", "qbittorrent"],
+            app_configs={
+                "qbittorrent": {
+                    "volumes": [{"mode": "rw", "host_path": "downloads"}]
+                }
+            },
+            shared_config={},
+        )
+
+    message = str(exc_info.value)
+    assert "qBittorrent" in message
+    assert "容器路径" in message
+    assert deployed == []
+
+    result = await db.execute(
+        select(func.count()).select_from(AppOrchestrationInstance)
+    )
+    assert result.scalar_one() == 0
+
+
+@pytest.mark.asyncio
+async def test_deploy_composition_missing_shared_container_path_rejected(
+    db, media_apps, media_orchestration, monkeypatch
+):
+    """共享存储缺少容器路径时应明确报错，不能自动猜测挂载点。"""
+    from sqlalchemy import func
+
+    qbittorrent = next(app for app in media_apps if app.name == "qbittorrent")
+    qbittorrent.config_schema = {
+        "type": "object",
+        "properties": {
+            "volumes": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "host_path": {"type": "string"},
+                        "container_path": {"type": "string"},
+                        "mode": {"type": "string"},
+                    },
+                    "required": ["host_path", "container_path", "mode"],
+                },
+            }
+        },
+        "containers": [
+            {
+                "name": "qbittorrent",
+                "settings": [{"type": "volumes", "fields": ["volumes"]}],
+            }
+        ],
+    }
+    await db.commit()
+
+    deployed: list[str] = []
+
+    async def fake_deploy(db, app_name, instance_name, config, user_id=None):
+        deployed.append(app_name)
+        raise AssertionError("共享配置不完整时不应部署任何应用")
+
+    monkeypatch.setattr(app_service, "deploy", fake_deploy)
+
+    with pytest.raises(Exception) as exc_info:
+        await orchestration_service.deploy(
+            db,
+            orchestration_name="media-stack",
+            instance_name="test-stack",
+            selected_apps=["moviepilot", "qbittorrent"],
+            app_configs={},
+            shared_config={
+                "volumes": [
+                    {"mode": "rw", "host_path": "/opt/data/nasdack/data1/movie"}
+                ]
+            },
+        )
+
+    message = str(exc_info.value)
+    assert "qBittorrent" in message
+    assert "容器路径" in message
+    assert deployed == []
+
+    result = await db.execute(
+        select(func.count()).select_from(AppOrchestrationInstance)
+    )
+    assert result.scalar_one() == 0
+
+
+@pytest.mark.asyncio
 async def test_deploy_composition_success(db, media_apps, media_orchestration, monkeypatch):
     """正常选择时应创建组合部署记录并返回任务 ID。"""
 
@@ -239,6 +427,41 @@ async def test_deploy_composition_success(db, media_apps, media_orchestration, m
         "test-stack-qbittorrent",
         "test-stack-jellyfin",
     }
+
+
+@pytest.mark.asyncio
+async def test_deploy_composition_records_orchestration_version(
+    db, media_apps, media_orchestration, monkeypatch
+):
+    """部署后实例组记录模板版本快照，供列表判断是否可升级。"""
+
+    async def fake_deploy(db, app_name, instance_name, config, user_id=None):
+        app = (
+            await db.execute(select(App).where(App.name == app_name))
+        ).scalar_one()
+        instance = AppInstance(
+            app_id=app.id,
+            instance_name=instance_name,
+            config=config,
+            status="running",
+        )
+        db.add(instance)
+        await db.commit()
+        await db.refresh(instance)
+        return instance, f"task-{app_name}"
+
+    monkeypatch.setattr(app_service, "deploy", fake_deploy)
+
+    group, _ = await orchestration_service.deploy(
+        db,
+        orchestration_name="media-stack",
+        instance_name="test-stack",
+        selected_apps=["moviepilot", "qbittorrent"],
+        app_configs={},
+        shared_config={},
+    )
+
+    assert group.orchestration_version == media_orchestration.version
 
 
 # ---------- 共享配置合并 ----------
@@ -443,3 +666,196 @@ async def test_deploy_composition_merges_shared_config(
     container_paths = [v["container_path"] for v in jellyfin_config["volumes"]]
     assert container_paths == ["/config", "/media", "/downloads"]
     assert jellyfin_config["jellyfin_env"] == [{"key": "TZ", "value": "Asia/Shanghai"}]
+
+
+# ---------- 组合条目级 image/tag 覆盖 ----------
+
+
+@pytest_asyncio.fixture
+async def komga_app(db):
+    """创建带默认镜像的 komga 应用，模板使用 {{ image }} 渲染。"""
+    app = App(
+        name="komga",
+        display_name="Komga",
+        image="gotson/komga:latest",
+        yaml_template="services:\n  app:\n    image: {{ image }}",
+    )
+    db.add(app)
+    await db.commit()
+    await db.refresh(app)
+    return app
+
+
+def _render_komga(komga_app, config):
+    """按部署路径渲染 komga 的 Compose YAML。"""
+    from app.services.app_store.app_service import AppService
+    from app.services.system import StoragePathResolver
+
+    return AppService()._render_app(
+        db_app=komga_app,
+        config=config,
+        project_name="test-reader-komga",
+        resolver=StoragePathResolver(app_data=("/opt/docker", "/docker")),
+    )
+
+
+async def _deploy_and_capture_config(db, monkeypatch, komga_app, composition):
+    """部署单个 komga 应用，返回传给 app_service.deploy 的 config。"""
+    orchestration = AppOrchestration(
+        name="reader-stack",
+        display_name="阅读栈",
+        category="reader",
+        app_composition=composition,
+    )
+    db.add(orchestration)
+    await db.commit()
+
+    captured: dict[str, dict] = {}
+
+    async def fake_deploy(db, app_name, instance_name, config, user_id=None):
+        captured[app_name] = config
+        instance = AppInstance(
+            app_id=komga_app.id,
+            instance_name=instance_name,
+            config=config,
+            status="running",
+        )
+        db.add(instance)
+        await db.commit()
+        await db.refresh(instance)
+        return instance, f"task-{app_name}"
+
+    monkeypatch.setattr(app_service, "deploy", fake_deploy)
+
+    await orchestration_service.deploy(
+        db,
+        orchestration_name="reader-stack",
+        instance_name="test-reader",
+        selected_apps=["komga"],
+        app_configs={},
+        shared_config={},
+    )
+    return captured["komga"]
+
+
+@pytest.mark.asyncio
+async def test_composition_image_and_tag_override_rendered(
+    db, komga_app, monkeypatch
+):
+    """条目带 image+tag 时拼成 image:tag，渲染出的 compose 使用覆盖值。"""
+    config = await _deploy_and_capture_config(
+        db,
+        monkeypatch,
+        komga_app,
+        [
+            {
+                "app_name": "komga",
+                "relation": "optional",
+                "group": "reader",
+                "image": "registry.example.com/gotson/komga",
+                "tag": "1.16.0",
+            }
+        ],
+    )
+
+    assert config["image"] == "registry.example.com/gotson/komga:1.16.0"
+    rendered = _render_komga(komga_app, config)
+    assert "image: registry.example.com/gotson/komga:1.16.0" in rendered
+
+
+@pytest.mark.asyncio
+async def test_composition_tag_without_image_falls_back_to_app_image(
+    db, komga_app, monkeypatch
+):
+    """条目只有 tag 而 image 为空时不注入，tag 无处拼接，渲染用 App.image 原样。"""
+    config = await _deploy_and_capture_config(
+        db,
+        monkeypatch,
+        komga_app,
+        [
+            {
+                "app_name": "komga",
+                "relation": "optional",
+                "group": "reader",
+                "tag": "1.16.0",
+            }
+        ],
+    )
+
+    assert "image" not in config
+    rendered = _render_komga(komga_app, config)
+    assert "image: gotson/komga:latest" in rendered
+
+
+@pytest.mark.asyncio
+async def test_composition_image_with_own_tag_ignores_tag_field(
+    db, komga_app, monkeypatch
+):
+    """条目 image 自带 :tag 时忽略 tag 字段，原样使用 image。"""
+    config = await _deploy_and_capture_config(
+        db,
+        monkeypatch,
+        komga_app,
+        [
+            {
+                "app_name": "komga",
+                "relation": "optional",
+                "group": "reader",
+                "image": "gotson/komga:2.0.0",
+                "tag": "1.16.0",
+            }
+        ],
+    )
+
+    assert config["image"] == "gotson/komga:2.0.0"
+    rendered = _render_komga(komga_app, config)
+    assert "image: gotson/komga:2.0.0" in rendered
+
+
+@pytest.mark.asyncio
+async def test_composition_without_image_tag_behaves_as_before(
+    db, komga_app, monkeypatch
+):
+    """条目无 image/tag 时不注入 image，行为与现状一致（渲染用 App.image）。"""
+    config = await _deploy_and_capture_config(
+        db,
+        monkeypatch,
+        komga_app,
+        [{"app_name": "komga", "relation": "optional", "group": "reader"}],
+    )
+
+    assert "image" not in config
+    rendered = _render_komga(komga_app, config)
+    assert "image: gotson/komga:latest" in rendered
+
+
+# ---------- 单应用部署渲染的 image 注入语义 ----------
+
+
+def _make_renderable_app(image="gotson/komga:latest"):
+    return App(
+        name="komga",
+        display_name="Komga",
+        image=image,
+        yaml_template="services:\n  app:\n    image: {{ image }}",
+    )
+
+
+def test_render_app_without_image_in_config_uses_app_image():
+    """单应用部署 config 不含 image 键时，渲染仍使用 App 默认镜像（行为不变）。"""
+    rendered = _render_komga(_make_renderable_app(), {"port": 8080})
+    assert "image: gotson/komga:latest" in rendered
+
+
+def test_render_app_empty_image_in_config_uses_app_image():
+    """config 里 image 为空字符串时视为未给，回落到 App 默认镜像。"""
+    rendered = _render_komga(_make_renderable_app(), {"image": ""})
+    assert "image: gotson/komga:latest" in rendered
+
+
+def test_render_app_explicit_image_in_config_wins():
+    """config 里显式给了非空 image 时优先于 App 默认镜像。"""
+    rendered = _render_komga(
+        _make_renderable_app(), {"image": "registry.example.com/gotson/komga:1.16.0"}
+    )
+    assert "image: registry.example.com/gotson/komga:1.16.0" in rendered

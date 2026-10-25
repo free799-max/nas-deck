@@ -54,7 +54,7 @@ class DeployTaskManager(BaseTaskManager):
         self,
         max_tasks: int = 50,
         ttl_seconds: int = 3600,
-        max_concurrent: int = 3,
+        max_concurrent: int = 5,
         task_timeout_seconds: int = 1800,
         max_history_size: int = 200,
     ):
@@ -86,6 +86,35 @@ class DeployTaskManager(BaseTaskManager):
         )
         if running >= self._max_concurrent:
             raise RuntimeError(self._concurrency_limit_error())
+
+    def available_slots(self) -> int:
+        """返回当前可用的并发部署槽位数量（不含进度跟踪任务）。"""
+        with self._lock:
+            running = sum(
+                1
+                for task in self._tasks.values()
+                if task.get("status") == self._active_status
+                and task.get("enforce_limit", True)
+            )
+            return max(self._max_concurrent - running, 0)
+
+    def has_active_group_task(self, group_id: int) -> bool:
+        """是否存在指定编排实例组的进行中任务（如组级升级、删除）。
+
+        升级任务用 ``orchestration_group_id``，删除任务用 ``group_id``，
+        两种都要识别，否则并发保护会漏判。
+        """
+        with self._lock:
+            for task in self._tasks.values():
+                if task.get("status") != self._active_status:
+                    continue
+                meta = task.get("meta") or {}
+                if group_id in (
+                    meta.get("orchestration_group_id"),
+                    meta.get("group_id"),
+                ):
+                    return True
+            return False
 
     def _new_progress(self, stage: str, percentage: int, message: str, detail: str | None = None) -> dict:
         """构造新的进度字典。"""
@@ -174,18 +203,25 @@ class DeployTaskManager(BaseTaskManager):
             self._append_history(task_id, notify)
             self._notify_listeners(task_id, notify)
 
-    def complete_task(self, task_id: str, message: str = "部署完成"):
-        """标记任务为已完成，可自定义完成提示。"""
+    def complete_task(
+        self, task_id: str, message: str = "部署完成", warning: str | None = None
+    ):
+        """标记任务为已完成，可自定义完成提示与附加警告。
+
+        warning 用于“任务成功但结果有遗留问题”的场景（如删除实例组时
+        部分数据目录未能备份），前端会以警告样式展示，而不是当作完全成功。
+        """
         with self._lock:
             if task_id not in self._tasks:
                 return
             task = self._tasks[task_id]
             task["status"] = "completed"
             task["stage"] = "completed"
+            task["warning"] = warning
             task["completed_at"] = self._now()
             task["updated_at"] = self._now()
             task["progress"] = self._new_progress("completed", 100, message)
-            notify = self._build_notify(task)
+            notify = self._build_notify(task, _warning=warning)
             self._append_history(task_id, notify)
             self._notify_listeners(task_id, notify)
 
@@ -216,17 +252,6 @@ class DeployTaskManager(BaseTaskManager):
         notify = self._build_notify(task, _error=task["error"])
         self._append_history(task["task_id"], notify)
         self._notify_listeners(task["task_id"], notify)
-
-    def has_active_group_task(self, group_id: int) -> bool:
-        """是否存在该编排实例组正在进行的后台任务（如删除）。"""
-        with self._lock:
-            for task in self._tasks.values():
-                if task.get("status") != self._active_status:
-                    continue
-                meta = task.get("meta") or {}
-                if meta.get("group_id") == group_id:
-                    return True
-            return False
 
     def list_active_task_ids(self) -> list[str]:
         """列出进行中的部署任务 ID，供前端刷新或重新登录后恢复进度。"""

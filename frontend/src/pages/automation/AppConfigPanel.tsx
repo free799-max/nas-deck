@@ -26,19 +26,22 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import {
-  Loader2,
-  ExternalLink,
-  Shield,
-  ShieldCheck,
   AlertTriangle,
+  BookOpen,
   Check,
   Copy,
+  ExternalLink,
   Globe,
   Layers,
   LayoutGrid,
+  Loader2,
   Plug,
   RefreshCw,
+  ScrollText,
+  Shield,
+  ShieldCheck,
   Stethoscope,
+  Wand2,
   type LucideIcon,
 } from "lucide-react";
 import { AppIcon } from "../apps/AppIcon";
@@ -57,7 +60,10 @@ import {
 } from "@/hooks/useOrchestrations";
 import { isAuthConfigReady } from "./auth-config-utils";
 import { AppInspectPanel } from "./AppInspectPanel";
+import { StackLogsDialog } from "@/pages/docker/stacks/StackLogsDialog";
 import { MoviePilotIntegrationPanel } from "./MoviePilotIntegrationPanel";
+import { MusicAutoOrganizePanel } from "./MusicAutoOrganizePanel";
+import { ReaderAutoSyncPanel } from "./ReaderAutoSyncPanel";
 import { APP_STATUS_META, APP_STATUS_PILL } from "./app-status";
 import { getAppRoleLabel } from "./composition-meta";
 
@@ -70,28 +76,35 @@ interface AppConfigPanelProps {
   isPending?: boolean;
 }
 
-const AUTH_TYPE_LABELS: Record<"none" | "basic" | "apikey", string> = {
+// 后端认证类型枚举统一使用 api_key；历史配置里可能存成 apikey，读取时兼容
+type AuthType = "none" | "basic" | "api_key";
+
+const AUTH_TYPE_LABELS: Record<AuthType, string> = {
   none: "无认证",
   basic: "账号密码",
-  apikey: "API Key",
+  api_key: "API Key",
 };
 
 interface AppAuthConfig {
   url?: string;
-  auth_type?: "none" | "basic" | "apikey";
+  auth_type?: AuthType;
   username?: string;
   password?: string;
   api_key?: string;
 }
 
+function normalizeAuthType(raw: unknown): AuthType {
+  const value = String(raw ?? "");
+  if (value === "basic") return "basic";
+  if (value === "api_key" || value === "apikey") return "api_key";
+  return "none";
+}
+
 function getInitialAuthConfig(raw: unknown): AppAuthConfig {
   const config = (raw ?? {}) as Record<string, unknown>;
-  const authType = ["none", "basic", "apikey"].includes(String(config.auth_type))
-    ? (String(config.auth_type) as "none" | "basic" | "apikey")
-    : "none";
   return {
     url: typeof config.url === "string" ? config.url : "",
-    auth_type: authType,
+    auth_type: normalizeAuthType(config.auth_type),
     username: typeof config.username === "string" ? config.username : "",
     password: typeof config.password === "string" ? config.password : "",
     api_key: typeof config.api_key === "string" ? config.api_key : "",
@@ -99,17 +112,15 @@ function getInitialAuthConfig(raw: unknown): AppAuthConfig {
 }
 
 function buildAuthConfig(values: AppAuthConfig): Record<string, unknown> {
-  const config: Record<string, unknown> = {
+  // auth_type 只决定当前生效的一套凭据，另一套要原样保留：
+  // 用户切换认证方式后仍能拿回之前填写的账号密码或 API Key
+  return {
     url: values.url?.trim() || "",
     auth_type: values.auth_type,
+    username: values.username?.trim() || "",
+    password: values.password || "",
+    api_key: values.api_key?.trim() || "",
   };
-  if (values.auth_type === "basic") {
-    config.username = values.username?.trim() || "";
-    config.password = values.password || "";
-  } else if (values.auth_type === "apikey") {
-    config.api_key = values.api_key?.trim() || "";
-  }
-  return config;
 }
 
 /** 信息分组卡片 */
@@ -162,6 +173,7 @@ export function AppConfigPanel({
     getInitialAuthConfig(detail?.app_configs?.[app?.app_name ?? ""])
   );
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [logsOpen, setLogsOpen] = useState(false);
   const [draft, setDraft] = useState<AppAuthConfig>(authConfig);
   const [isVerifying, setIsVerifying] = useState(false);
   const [copiedUrl, setCopiedUrl] = useState(false);
@@ -191,10 +203,7 @@ export function AppConfigPanel({
       {
         app_name: app.app_name,
         url: draft.url ?? "",
-        auth_type:
-          draft.auth_type === "apikey"
-            ? "api_key"
-            : draft.auth_type ?? "none",
+        auth_type: draft.auth_type ?? "none",
         username: draft.username ?? undefined,
         password: draft.password ?? undefined,
         api_key: draft.api_key ?? undefined,
@@ -210,7 +219,11 @@ export function AppConfigPanel({
       shared_config: {},
       app_configs: {
         ...detail.app_configs,
-        [app.app_name]: buildAuthConfig(draft),
+        // 与已有条目合并，避免保存认证信息时丢掉自动配置结果与集成记录
+        [app.app_name]: {
+          ...(detail.app_configs?.[app.app_name] ?? {}),
+          ...buildAuthConfig(draft),
+        },
       },
     });
     setDialogOpen(false);
@@ -219,6 +232,16 @@ export function AppConfigPanel({
   const url = authConfig.url?.trim() || "";
   const isValidUrl =
     url.startsWith("http://") || url.startsWith("https://");
+
+  // 另一种认证方式的凭据仍保存在配置里，提示用户并未丢失
+  const inactiveCredentials =
+    authConfig.auth_type === "basic"
+      ? authConfig.api_key
+        ? "已保存 API Key，切换认证方式即可使用"
+        : ""
+      : authConfig.username && authConfig.password
+        ? `已保存账号密码（${authConfig.username}），切换认证方式即可使用`
+        : "";
 
   // 部署后账号自动配置的结果（后端 provision 流程写入）
   const rawEntry = (detail?.app_configs?.[app?.app_name ?? ""] ?? {}) as Record<
@@ -232,6 +255,8 @@ export function AppConfigPanel({
       : "";
   const autoUsername =
     typeof rawEntry.username === "string" ? rawEntry.username : "";
+  const autoDownloadDir =
+    typeof rawEntry.download_dir === "string" ? rawEntry.download_dir : "";
 
   // MoviePilot 的下载器/媒体服务器自动装配结果
   const integrations = rawEntry.integrations as AppIntegrations | undefined;
@@ -318,6 +343,27 @@ export function AppConfigPanel({
                 <Button
                   size="icon"
                   variant="outline"
+                  onClick={() => setLogsOpen(true)}
+                  disabled={!app.project_id}
+                  aria-label="编排日志"
+                >
+                  <ScrollText className="h-4 w-4" />
+                </Button>
+              }
+            />
+            <TooltipContent side="bottom" align="end">
+              {app.project_id
+                ? "编排日志"
+                : "该应用未通过 Compose 编排部署，无编排日志"}
+            </TooltipContent>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger
+              delay={150}
+              render={
+                <Button
+                  size="icon"
+                  variant="outline"
                   onClick={handleOpen}
                   disabled={isPending}
                   aria-label="认证设置"
@@ -363,6 +409,18 @@ export function AppConfigPanel({
             <Stethoscope className="h-3.5 w-3.5" />
             检测优化
           </TabsTrigger>
+          {app.app_name === "music-tag-web" && (
+            <TabsTrigger value="organize" className="gap-1.5">
+              <Wand2 className="h-3.5 w-3.5" />
+              自动整理
+            </TabsTrigger>
+          )}
+          {app.app_name === "reader" && (
+            <TabsTrigger value="auto-sync" className="gap-1.5">
+              <BookOpen className="h-3.5 w-3.5" />
+              自动同步
+            </TabsTrigger>
+          )}
           {app.app_name === "moviepilot" && (
             <TabsTrigger value="integration" className="gap-1.5">
               <Plug className="h-3.5 w-3.5" />
@@ -426,17 +484,28 @@ export function AppConfigPanel({
               </InfoRow>
 
               <InfoRow label="认证方式">
-                <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
-                  <span>{AUTH_TYPE_LABELS[authConfig.auth_type ?? "none"]}</span>
-                  {authConfig.auth_type === "basic" && authConfig.username && (
-                    <span className="text-xs text-muted-foreground">
-                      · {authConfig.username}
+                <div className="space-y-0.5">
+                  <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                    <span>
+                      {AUTH_TYPE_LABELS[authConfig.auth_type ?? "none"]}
                     </span>
-                  )}
-                  {authConfig.auth_type === "apikey" && (
-                    <span className="text-xs text-muted-foreground">
-                      · API Key 已配置
-                    </span>
+                    {authConfig.auth_type === "basic" &&
+                      authConfig.username && (
+                        <span className="text-xs text-muted-foreground">
+                          · {authConfig.username}
+                        </span>
+                      )}
+                    {authConfig.auth_type === "api_key" &&
+                      authConfig.api_key && (
+                        <span className="text-xs text-muted-foreground">
+                          · API Key 已配置
+                        </span>
+                      )}
+                  </div>
+                  {inactiveCredentials && (
+                    <p className="text-xs text-muted-foreground">
+                      {inactiveCredentials}
+                    </p>
                   )}
                 </div>
               </InfoRow>
@@ -463,6 +532,14 @@ export function AppConfigPanel({
                   <span className="text-muted-foreground">未自动配置</span>
                 )}
               </InfoRow>
+
+              {autoDownloadDir && (
+                <InfoRow label="下载目录">
+                  <span className="truncate font-mono text-[13px]">
+                    {autoDownloadDir}
+                  </span>
+                </InfoRow>
+              )}
             </InfoSection>
 
             <InfoSection
@@ -472,7 +549,12 @@ export function AppConfigPanel({
                 (integrationRecords.length > 0 ||
                   !!provisionError ||
                   app.app_name === "moviepilot" ||
-                  app.app_name === "comic-auto") && (
+                  app.app_name === "comic-auto" ||
+                  app.app_name === "music-dl" ||
+                  app.app_name === "music-tag-web" ||
+                  app.app_name === "navidrome" ||
+                  app.app_name === "reader" ||
+                  app.app_name === "ermao-library") && (
                   <Button
                     size="xs"
                     variant="outline"
@@ -564,6 +646,24 @@ export function AppConfigPanel({
           <AppInspectPanel instanceId={detail.id} app={app} />
         </TabsContent>
 
+        {app.app_name === "music-tag-web" && detail && (
+          <TabsContent value="organize" className="pt-4">
+            <MusicAutoOrganizePanel
+              instanceId={detail.id}
+              appName={app.app_name}
+            />
+          </TabsContent>
+        )}
+
+        {app.app_name === "reader" && detail && (
+          <TabsContent value="auto-sync" className="pt-4">
+            <ReaderAutoSyncPanel
+              instanceId={detail.id}
+              appName={app.app_name}
+            />
+          </TabsContent>
+        )}
+
         {app.app_name === "moviepilot" && (
           <TabsContent value="integration" className="pt-4">
             <MoviePilotIntegrationPanel
@@ -602,7 +702,7 @@ export function AppConfigPanel({
                   [
                     ["none", AUTH_TYPE_LABELS.none],
                     ["basic", AUTH_TYPE_LABELS.basic],
-                    ["apikey", AUTH_TYPE_LABELS.apikey],
+                    ["api_key", AUTH_TYPE_LABELS.api_key],
                   ] as const
                 ).map(([type, label]) => (
                   <Button
@@ -659,7 +759,7 @@ export function AppConfigPanel({
               </div>
             )}
 
-            {draft.auth_type === "apikey" && (
+            {draft.auth_type === "api_key" && (
               <div className="space-y-1.5">
                 <Label htmlFor="config-api-key">API Key</Label>
                 <Input
@@ -714,6 +814,13 @@ export function AppConfigPanel({
           </div>
         </DialogContent>
       </Dialog>
+
+      <StackLogsDialog
+        projectId={app.project_id ?? null}
+        projectName={app.display_name}
+        open={logsOpen}
+        onOpenChange={setLogsOpen}
+      />
     </>
   );
 }

@@ -13,9 +13,12 @@ import { AppIcon } from "../apps/AppIcon";
 import { AutomationDeployWizard } from "./AutomationDeployWizard";
 import { AutomationImportDialog } from "./AutomationImportDialog";
 import { AutomationRestoreDialog } from "./AutomationRestoreDialog";
+import { AutomationUpdateEventsDialog } from "./AutomationUpdateEventsDialog";
+import { AutomationUpgradeDialog } from "./AutomationUpgradeDialog";
 import { OrchestrationInstanceManager } from "./OrchestrationInstanceManager";
+import { OrchestrationVersionBadge } from "./OrchestrationVersionBadge";
 import { AppConfigPanel } from "./AppConfigPanel";
-import { GROUP_LABELS, RELATION_LABELS } from "./composition-meta";
+import { RELATION_LABELS } from "./composition-meta";
 import {
   useOrchestrations,
   useOrchestrationInstances,
@@ -31,11 +34,13 @@ import { useDeployTasks } from "@/hooks/useDeployTasks";
 import { cn } from "@/lib/utils";
 import {
   ArrowRight,
+  ArrowUpCircle,
   BookImage,
   BookOpen,
   Boxes,
   Film,
   Gamepad2,
+  History,
   Images,
   Import,
   Loader2,
@@ -180,9 +185,7 @@ function StageFlow({
           !stage.group && stage.items[0]?.relation === "required";
         const mutex = isMutuallyExclusive(stage.items);
         const caption = stage.group
-          ? `${GROUP_LABELS[stage.group] ?? stage.group} · ${
-              mutex ? "二选一" : "可选"
-            }`
+          ? `${stage.group} · ${mutex ? "二选一" : "可选"}`
           : RELATION_LABELS[stage.items[0]?.relation] ?? "可选";
 
         return (
@@ -296,6 +299,8 @@ export function AutomationCategoryPage() {
   const [restoreOrchestration, setRestoreOrchestration] =
     useState<AppOrchestration | null>(null);
   const [redeployId, setRedeployId] = useState<number | null>(null);
+  const [upgradeId, setUpgradeId] = useState<number | null>(null);
+  const [updateEventsOpen, setUpdateEventsOpen] = useState(false);
   const [selectedInstanceId, setSelectedInstanceId] = useState<number | null>(
     null
   );
@@ -370,6 +375,13 @@ export function AutomationCategoryPage() {
       null)
     : null;
 
+  // 升级：同样按实例组加载详情与对应模板
+  const { data: upgradeDetail } = useOrchestrationInstanceDetail(upgradeId);
+  const upgradeOrchestration = upgradeDetail
+    ? (orchestrations.find((o) => o.name === upgradeDetail.orchestration_name) ??
+      null)
+    : null;
+
   const hasInstances = instances.length > 0;
   const apps = selectedDetail?.apps ?? [];
 
@@ -390,7 +402,25 @@ export function AutomationCategoryPage() {
                 {meta.description}
               </p>
             </div>
+            <div className="flex shrink-0 flex-wrap items-center gap-1.5">
+              {orchestrations.map((orchestration) => (
+                <OrchestrationVersionBadge
+                  key={orchestration.name}
+                  orchestration={orchestration}
+                  showName={orchestrations.length > 1}
+                />
+              ))}
+            </div>
             <div className="flex shrink-0 items-center gap-2">
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => setUpdateEventsOpen(true)}
+                className="gap-1.5"
+              >
+                <History className="h-3.5 w-3.5" />
+                更新记录
+              </Button>
               <Button
                 size="sm"
                 variant="outline"
@@ -424,7 +454,7 @@ export function AutomationCategoryPage() {
           <div
             key={displayInstanceId ?? "empty"}
             className={cn(
-              "flex flex-1 flex-col transition-opacity duration-150 ease-out lg:flex-row",
+              "flex min-h-0 flex-1 flex-col transition-opacity duration-150 ease-out lg:flex-row",
               isSwitching ? "opacity-0" : "opacity-100"
             )}
           >
@@ -437,7 +467,12 @@ export function AutomationCategoryPage() {
                   appMap={appMap}
                   composition={currentOrchestration?.app_composition}
                   onSelect={switchInstance}
-                  onSelectApp={setSelectedApp}
+                  onSelectApp={(app) =>
+                    setSelectedApp(
+                      selectedDetail?.apps.find((item) => item.id === app.id) ??
+                        app
+                    )
+                  }
                   onRename={(id, name) =>
                     updateMutation.mutate({
                       id,
@@ -451,6 +486,7 @@ export function AutomationCategoryPage() {
                     })
                   }
                   onRedeploy={(id) => setRedeployId(id)}
+                  onUpgrade={(id) => setUpgradeId(id)}
                   isPending={
                     updateMutation.isPending || deleteMutation.isPending
                   }
@@ -458,7 +494,38 @@ export function AutomationCategoryPage() {
               </div>
             </aside>
 
-            <section className="min-w-0 flex-1">
+            <section className="min-w-0 flex-1 overflow-y-auto">
+              {selectedDetail?.upgrade_available && (
+                <div className="m-4 mb-0 flex flex-wrap items-center gap-3 rounded-xl border border-amber-500/30 bg-amber-500/5 px-3.5 py-2.5">
+                  <ArrowUpCircle className="h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-medium text-foreground">
+                      方案有新版本
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      v{selectedDetail.orchestration_version || "未知"}
+                      <span className="mx-1 text-muted-foreground/60">→</span>
+                      v
+                      {selectedDetail.template_version ||
+                        currentOrchestration?.version ||
+                        "最新"}
+                    </p>
+                    {selectedDetail.template_changelog?.trim() && (
+                      <p className="mt-1 line-clamp-2 whitespace-pre-wrap text-xs leading-relaxed text-muted-foreground/80">
+                        {selectedDetail.template_changelog}
+                      </p>
+                    )}
+                  </div>
+                  <Button
+                    size="sm"
+                    className="shrink-0 gap-1.5"
+                    onClick={() => setUpgradeId(selectedDetail.id)}
+                  >
+                    <ArrowUpCircle className="h-3.5 w-3.5" />
+                    升级方案
+                  </Button>
+                </div>
+              )}
               {!selectedDetail || (apps.length > 0 && !selectedApp) ? (
                 <div className="flex min-h-[320px] items-center justify-center gap-2 text-sm text-muted-foreground">
                   <Loader2 className="h-4 w-4 animate-spin" />
@@ -497,12 +564,30 @@ export function AutomationCategoryPage() {
         </div>
       ) : (
         <Card className="rounded-xl flex-1 flex flex-col">
-          <CardHeader className="flex flex-row items-start justify-between py-1 px-4 pb-0">
-            <CardTitle className="text-base font-medium">
-              {label}自动化
-            </CardTitle>
+          <CardHeader className="flex flex-row items-start justify-between gap-3 py-1 px-4 pb-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <CardTitle className="text-base font-medium">
+                {label}自动化
+              </CardTitle>
+              {orchestrations.map((orchestration) => (
+                <OrchestrationVersionBadge
+                  key={orchestration.name}
+                  orchestration={orchestration}
+                  showName={orchestrations.length > 1}
+                />
+              ))}
+            </div>
             {orchestrations.length > 0 && (
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center justify-end gap-2">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setUpdateEventsOpen(true)}
+                  className="gap-1.5 rounded-lg h-9"
+                >
+                  <History className="h-4 w-4" />
+                  更新记录
+                </Button>
                 <Button
                   size="sm"
                   variant="outline"
@@ -562,6 +647,19 @@ export function AutomationCategoryPage() {
         open={!!redeployOrchestration}
         onOpenChange={(open) => !open && setRedeployId(null)}
         redeployGroup={redeployDetail ?? null}
+      />
+
+      <AutomationUpgradeDialog
+        orchestration={upgradeOrchestration}
+        group={upgradeDetail ?? null}
+        open={!!upgradeDetail}
+        onOpenChange={(open) => !open && setUpgradeId(null)}
+      />
+
+      <AutomationUpdateEventsDialog
+        open={updateEventsOpen}
+        onOpenChange={setUpdateEventsOpen}
+        orchestrations={orchestrations}
       />
 
       <AutomationImportDialog

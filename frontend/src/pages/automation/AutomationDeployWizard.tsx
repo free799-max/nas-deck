@@ -24,6 +24,7 @@ import { previewApp } from "@/api/apps";
 import {
   useDeployOrchestration,
   useRedeployOrchestrationInstance,
+  useUpgradeOrchestrationInstance,
   type AppOrchestration,
   type OrchestrationInstanceDetail,
 } from "@/hooks/useOrchestrations";
@@ -39,7 +40,15 @@ import {
   mergeSharedConfig,
 } from "@/lib/schema-utils";
 import { AppIcon } from "../apps/AppIcon";
-import { Check, ChevronRight, ChevronLeft, ChevronUp, ChevronDown } from "lucide-react";
+import {
+  AlertTriangle,
+  Check,
+  ChevronRight,
+  ChevronLeft,
+  ChevronUp,
+  ChevronDown,
+  Sparkles,
+} from "lucide-react";
 
 type Step = "select" | "shared" | "apps" | "confirm";
 
@@ -49,6 +58,8 @@ interface AutomationDeployWizardProps {
   onOpenChange: (open: boolean) => void;
   /** 提供时进入修复模式：预填组内配置并调用 redeploy 接口 */
   redeployGroup?: OrchestrationInstanceDetail | null;
+  /** 提供时进入升级模式：把实例组升级到当前方案版本 */
+  upgradeGroup?: OrchestrationInstanceDetail | null;
 }
 
 export function AutomationDeployWizard({
@@ -56,11 +67,17 @@ export function AutomationDeployWizard({
   open,
   onOpenChange,
   redeployGroup,
+  upgradeGroup,
 }: AutomationDeployWizardProps) {
   const toast = useToast();
   const deployMutation = useDeployOrchestration();
   const redeployMutation = useRedeployOrchestrationInstance();
-  const submitMutation = redeployGroup ? redeployMutation : deployMutation;
+  const upgradeMutation = useUpgradeOrchestrationInstance();
+  const submitMutation = upgradeGroup
+    ? upgradeMutation
+    : redeployGroup
+      ? redeployMutation
+      : deployMutation;
   const { startTask } = useDeployTasks();
 
   const [step, setStep] = useState<Step>("select");
@@ -77,9 +94,16 @@ export function AutomationDeployWizard({
   const [expandedPreviews, setExpandedPreviews] = useState<Set<string>>(
     new Set()
   );
+  // 已初始化的目标（模板 + 修复/升级组），用于避免后台刷新数据时
+  // 重置用户正在填写的表单
+  const initializedTargetRef = useRef<string | null>(null);
 
   // 重置状态当 orchestration 变化
   useEffect(() => {
+    if (!open) {
+      initializedTargetRef.current = null;
+      return;
+    }
     if (!orchestration) {
       setStep("select");
       setInstanceName("");
@@ -89,7 +113,36 @@ export function AutomationDeployWizard({
       return;
     }
 
+    const targetKey = `${orchestration.name}|${redeployGroup?.id ?? ""}|${
+      upgradeGroup?.id ?? ""
+    }`;
+    if (initializedTargetRef.current === targetKey) return;
+    initializedTargetRef.current = targetKey;
+
     setStep("select");
+
+    if (upgradeGroup) {
+      // 升级模式：沿用实例名称与历史配置，预选组内仍存在的应用，
+      // 以及模板中新增的必选应用；新应用的配置随后由默认值补齐。
+      const deployedApps = new Set(
+        upgradeGroup.apps.map((app) => app.app_name)
+      );
+      const initialSelected = new Set<string>();
+      for (const item of orchestration.app_composition) {
+        if (deployedApps.has(item.app_name) || item.relation === "required") {
+          initialSelected.add(item.app_name);
+        }
+      }
+      setInstanceName(upgradeGroup.instance_name);
+      setSelectedApps(initialSelected);
+      setSharedConfig(upgradeGroup.shared_config || {});
+      const initialConfigs: Record<string, Record<string, unknown>> = {};
+      for (const app of upgradeGroup.apps) {
+        initialConfigs[app.app_name] = app.config || {};
+      }
+      setAppConfigs(initialConfigs);
+      return;
+    }
 
     if (redeployGroup) {
       // 修复模式：沿用组内的实例名称与历史配置，
@@ -112,14 +165,16 @@ export function AutomationDeployWizard({
     }
 
     // 默认实例名：优先取可转为 Compose 项目名的显示名；
-    // 中文名称会被 slugify 清空，此时回退到首个必选应用名（如 comic-auto）。
+    // 中文名称会被 slugify 清空，此时改用方案自身的名称（如 music-auto），
+    // 避免落到某个组件名（如 music-dl）上。
     const primaryApp = orchestration.app_composition.find(
       (item) => item.relation === "required"
     );
     setInstanceName(
       slugify(orchestration.display_name || "") ||
+        slugify(orchestration.name) ||
         primaryApp?.app_name ||
-        slugify(orchestration.name)
+        ""
     );
     setSharedConfig(extractDefaults(orchestration.shared_config_schema));
 
@@ -131,7 +186,7 @@ export function AutomationDeployWizard({
     }
 
     setSelectedApps(initialSelected);
-  }, [orchestration, redeployGroup]);
+  }, [open, orchestration, redeployGroup, upgradeGroup]);
 
   // 获取所有应用商店应用，用于渲染选中应用的配置表单
   const { data: allApps = [], isLoading: appsLoading } = useApps();
@@ -166,6 +221,25 @@ export function AutomationDeployWizard({
     );
   }, [orchestration]);
 
+  // 升级模式：组内已部署应用与模板应用的差异
+  const upgradeDeployedApps = useMemo(
+    () => new Set(upgradeGroup?.apps.map((app) => app.app_name) ?? []),
+    [upgradeGroup]
+  );
+
+  const removedApps = useMemo(() => {
+    if (!upgradeGroup || !orchestration) return [];
+    return upgradeGroup.apps.filter(
+      (app) => !compositionByName[app.app_name]
+    );
+  }, [upgradeGroup, orchestration, compositionByName]);
+
+  const templateChangelog = (
+    upgradeGroup?.template_changelog ??
+    orchestration?.changelog ??
+    ""
+  ).trim();
+
   const selectedAppList = useMemo(
     () => Array.from(selectedApps),
     [selectedApps]
@@ -186,9 +260,9 @@ export function AutomationDeployWizard({
     return total;
   }, [selectedAppList, appDetailsMap]);
 
-  // 修复模式沿用旧配置中的端口，不再请求端口建议
+  // 修复/升级模式沿用旧配置中的端口，不再请求端口建议
   const { data: portSuggestions } = usePortSuggestions(
-    redeployGroup ? 0 : totalPorts
+    redeployGroup || upgradeGroup ? 0 : totalPorts
   );
 
   // 记录已预填过建议端口的应用，避免覆盖用户手动修改
@@ -202,7 +276,7 @@ export function AutomationDeployWizard({
 
   // 建议端口到达后，按选中顺序为尚未填充的应用预填端口
   useEffect(() => {
-    if (redeployGroup) return;
+    if (redeployGroup || upgradeGroup) return;
     if (!orchestration || !portSuggestions || portSuggestions.length === 0) {
       return;
     }
@@ -234,7 +308,7 @@ export function AutomationDeployWizard({
       portsFilledRef.current.add(name);
     }
     setAppConfigs((prev) => ({ ...prev, ...updates }));
-  }, [orchestration, redeployGroup, portSuggestions, selectedAppList, appDetailsMap, appConfigs]);
+  }, [orchestration, redeployGroup, upgradeGroup, portSuggestions, selectedAppList, appDetailsMap, appConfigs]);
 
   // 进入确认步骤后，并发加载各选中的应用 Compose YAML 预览
   useEffect(() => {
@@ -315,7 +389,9 @@ export function AutomationDeployWizard({
 
   const toggleApp = (appName: string) => {
     const item = compositionByName[appName];
-    if (!item || item.relation === "required") return;
+    if (!item) return;
+    // 修复模式下按需选择要重部署的应用，必选应用也可取消/重新勾选
+    if (item.relation === "required" && !redeployGroup) return;
 
     setSelectedApps((prev) => {
       const next = new Set(prev);
@@ -342,6 +418,27 @@ export function AutomationDeployWizard({
     });
   };
 
+  const validateSharedConfig = (): boolean => {
+    const volumes = sharedConfig.volumes;
+    if (!Array.isArray(volumes)) return true;
+    for (let index = 0; index < volumes.length; index += 1) {
+      const row = volumes[index];
+      if (!row || typeof row !== "object") continue;
+      const entry = row as Record<string, unknown>;
+      const hostPath = String(entry.host_path ?? "").trim();
+      const containerPath = String(entry.container_path ?? "").trim();
+      if (!hostPath) {
+        toast.error(`存储空间第 ${index + 1} 项缺少本地路径`);
+        return false;
+      }
+      if (!containerPath) {
+        toast.error(`存储空间第 ${index + 1} 项缺少容器路径`);
+        return false;
+      }
+    }
+    return true;
+  };
+
   const validateStep = (): boolean => {
     if (step === "select") {
       const projectName = slugify(instanceName);
@@ -349,14 +446,25 @@ export function AutomationDeployWizard({
         toast.error("请输入有效的实例名称");
         return false;
       }
-      // 校验必选应用都已选中
-      for (const item of orchestration.app_composition) {
-        if (item.relation === "required" && !selectedApps.has(item.app_name)) {
-          toast.error(`${item.app_name} 为必选应用`);
+      if (redeployGroup) {
+        // 修复模式按需选择应用，不强制包含必选应用，但至少要选一个
+        if (selectedApps.size === 0) {
+          toast.error("请至少选择一个要修复的应用");
           return false;
+        }
+      } else {
+        // 校验必选应用都已选中
+        for (const item of orchestration.app_composition) {
+          if (item.relation === "required" && !selectedApps.has(item.app_name)) {
+            toast.error(`${item.app_name} 为必选应用`);
+            return false;
+          }
         }
       }
       return true;
+    }
+    if (step === "shared") {
+      return validateSharedConfig();
     }
     return true;
   };
@@ -385,6 +493,7 @@ export function AutomationDeployWizard({
       toast.error("请输入有效的实例名称");
       return;
     }
+    if (!validateSharedConfig()) return;
 
     const filteredAppConfigs: Record<string, Record<string, unknown>> = {};
     for (const appName of selectedApps) {
@@ -399,7 +508,9 @@ export function AutomationDeployWizard({
     };
     const options = {
       onSuccess: (response: { task_ids: string[] }) => {
-        toast.success(redeployGroup ? "修复已启动" : "组合部署已启动");
+        if (!upgradeGroup) {
+          toast.success(redeployGroup ? "修复已启动" : "组合部署已启动");
+        }
         for (const taskId of response.task_ids) {
           startTask(taskId);
         }
@@ -407,7 +518,9 @@ export function AutomationDeployWizard({
       },
     };
 
-    if (redeployGroup) {
+    if (upgradeGroup) {
+      upgradeMutation.mutate({ id: upgradeGroup.id, data: payload }, options);
+    } else if (redeployGroup) {
       redeployMutation.mutate({ id: redeployGroup.id, data: payload }, options);
     } else {
       deployMutation.mutate({ name: orchestration.name, data: payload }, options);
@@ -425,6 +538,23 @@ export function AutomationDeployWizard({
 
   const renderSelectStep = () => (
     <div className="space-y-4">
+      {upgradeGroup && templateChangelog && (
+        <div className="rounded-xl border border-primary/25 bg-primary/5 px-3 py-2.5">
+          <div className="flex items-center gap-1.5 text-xs font-medium text-primary">
+            <Sparkles className="h-3.5 w-3.5" />
+            本次更新内容
+            {upgradeGroup.template_version && (
+              <span className="font-normal text-muted-foreground">
+                （目标版本 v{upgradeGroup.template_version}）
+              </span>
+            )}
+          </div>
+          <div className="mt-1.5 max-h-40 overflow-y-auto whitespace-pre-wrap text-xs leading-relaxed text-muted-foreground">
+            {templateChangelog}
+          </div>
+        </div>
+      )}
+
       <div className="space-y-1">
         <Label htmlFor="instance-name">实例名称</Label>
         <Input
@@ -433,19 +563,46 @@ export function AutomationDeployWizard({
           onChange={(e) => setInstanceName(sanitizeInstanceName(e.target.value))}
           onBlur={() => setInstanceName(slugify(instanceName))}
           placeholder="如：my-media-stack"
+          disabled={!!upgradeGroup}
         />
         <p className="text-xs text-muted-foreground">
-          仅支持小写字母、数字、- 和 _，不能包含中文或特殊字符
+          {upgradeGroup
+            ? "升级时实例名称保持不变"
+            : "仅支持小写字母、数字、- 和 _，不能包含中文或特殊字符"}
         </p>
       </div>
 
+      {upgradeGroup && removedApps.length > 0 && (
+        <div className="rounded-xl border border-destructive/30 bg-destructive/5 px-3 py-2.5">
+          <div className="flex items-center gap-1.5 text-xs font-medium text-destructive">
+            <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+            以下应用在新方案中已移除，升级时将被删除
+          </div>
+          <div className="mt-1.5 flex flex-wrap gap-1.5">
+            {removedApps.map((app) => (
+              <Badge
+                key={app.id}
+                variant="destructive"
+                className="font-normal"
+              >
+                {app.display_name}
+              </Badge>
+            ))}
+          </div>
+        </div>
+      )}
+
       <div className="space-y-2">
-        <Label>选择要部署的应用</Label>
+        <Label>{upgradeGroup ? "确认要升级的应用" : "选择要部署的应用"}</Label>
         <div className="grid grid-cols-2 gap-3">
           {orchestration.app_composition.map((item) => {
             const app = appDetailsMap[item.app_name];
             const selected = selectedApps.has(item.app_name);
-            const disabled = item.relation === "required";
+            const disabled = item.relation === "required" && !redeployGroup;
+            const isNewApp =
+              !!upgradeGroup && !upgradeDeployedApps.has(item.app_name);
+            const isDeployed =
+              !!upgradeGroup && upgradeDeployedApps.has(item.app_name);
             return (
               <Card
                 key={item.app_name}
@@ -471,7 +628,7 @@ export function AutomationDeployWizard({
                   )}
 
                   <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-1.5">
                       <span className="text-sm font-medium truncate">
                         {app?.display_name || item.app_name}
                       </span>
@@ -493,6 +650,19 @@ export function AutomationDeployWizard({
                           ? "互斥"
                           : "可选"}
                       </Badge>
+                      {isNewApp && (
+                        <Badge className="h-4 shrink-0 bg-emerald-500/15 px-1.5 py-0 text-[10px] font-medium text-emerald-600 dark:text-emerald-400">
+                          新增
+                        </Badge>
+                      )}
+                      {isDeployed && (
+                        <Badge
+                          variant="outline"
+                          className="h-4 shrink-0 px-1.5 py-0 text-[10px] font-normal text-muted-foreground"
+                        >
+                          已部署
+                        </Badge>
+                      )}
                     </div>
                     {app?.description && (
                       <p className="text-xs text-muted-foreground line-clamp-1 mt-0.5">
@@ -601,10 +771,19 @@ export function AutomationDeployWizard({
             <div className="text-sm font-medium truncate">{instanceName}</div>
           </div>
           <div className="space-y-1">
-            <div className="text-xs text-muted-foreground">部署应用数</div>
+            <div className="text-xs text-muted-foreground">
+              {upgradeGroup ? "升级应用数" : "部署应用数"}
+            </div>
             <div className="text-sm font-medium">{selectedApps.size} 个</div>
           </div>
         </div>
+
+        {upgradeGroup && removedApps.length > 0 && (
+          <div className="rounded-lg border border-destructive/25 bg-destructive/5 px-3 py-2 text-xs leading-relaxed text-destructive">
+            升级时将删除已从新方案移除的应用：
+            {removedApps.map((app) => app.display_name).join("、")}
+          </div>
+        )}
 
         <div className="space-y-2">
           <div className="text-xs text-muted-foreground">应用列表</div>
@@ -686,11 +865,13 @@ export function AutomationDeployWizard({
     </div>
   );
 
+  const modeLabel = upgradeGroup ? "升级" : redeployGroup ? "修复" : "部署";
+
   const stepTitles: Record<Step, string> = {
     select: "选择应用",
     shared: "共享配置",
     apps: "应用配置",
-    confirm: "确认部署",
+    confirm: upgradeGroup ? "确认升级" : "确认部署",
   };
 
   return (
@@ -698,10 +879,12 @@ export function AutomationDeployWizard({
       <DialogContent className="sm:max-w-4xl max-h-[90vh] flex flex-col overflow-hidden">
         <DialogHeader className="flex-shrink-0">
           <DialogTitle>
-            {redeployGroup ? "修复" : "部署"} {orchestration.display_name}
+            {modeLabel} {orchestration.display_name}
           </DialogTitle>
           <DialogDescription>
-            {orchestration.description || "选择应用并填写配置后一键部署"}
+            {upgradeGroup
+              ? "将实例组升级到当前方案版本，未勾选的可选应用将不会被升级"
+              : orchestration.description || "选择应用并填写配置后一键部署"}
           </DialogDescription>
         </DialogHeader>
 
@@ -772,10 +955,14 @@ export function AutomationDeployWizard({
                 disabled={submitMutation.isPending}
               >
                 {submitMutation.isPending
-                  ? "部署中..."
-                  : redeployGroup
-                    ? "确认修复"
-                    : "确认部署"}
+                  ? upgradeGroup
+                    ? "升级中..."
+                    : "部署中..."
+                  : upgradeGroup
+                    ? "确认升级"
+                    : redeployGroup
+                      ? "确认修复"
+                      : "确认部署"}
               </Button>
             )}
           </div>

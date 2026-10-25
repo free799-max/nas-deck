@@ -15,10 +15,13 @@ class _FakeSession:
     """替换真实数据库会话上下文，仅用于单元测试。"""
 
     async def __aenter__(self):
-        return None
+        return self
 
     async def __aexit__(self, *exc_info):
         return False
+
+    async def commit(self):
+        return None
 
 
 def _patch_group(monkeypatch, app_configs: dict) -> None:
@@ -164,3 +167,82 @@ async def test_provision_tracking_task_does_not_consume_deploy_slots(monkeypatch
     manager.complete_task(deploy_task_id)
     another = manager.create_task("app_deploy")
     assert another
+
+
+@pytest.mark.asyncio
+async def test_provision_group_retries_failed_app_while_container_running(
+    monkeypatch,
+):
+    """首次配置失败且容器仍在运行时自动重试，成功后标记任务完成。"""
+    manager = DeployTaskManager()
+    monkeypatch.setattr(provisioning_module, "deploy_task_manager", manager)
+    _patch_group(
+        monkeypatch,
+        {"moviepilot": {"url": "http://host:3000"}},
+    )
+    monkeypatch.setattr(
+        orchestration_service,
+        "_wait_task_terminal",
+        AsyncMock(return_value="completed"),
+    )
+    provision = AsyncMock(
+        side_effect=[
+            ProvisionResult(ok=False, message="服务未就绪"),
+            ProvisionResult(ok=True, message="账号已配置并验证通过"),
+        ]
+    )
+    monkeypatch.setattr(orchestration_service, "_provision_app", provision)
+    monkeypatch.setattr(orchestration_service, "_project_running", lambda name: True)
+    monkeypatch.setattr(orchestration_service, "PROVISION_RETRY_DELAYS", (0,))
+    monkeypatch.setattr(
+        orchestration_service, "_wire_group", AsyncMock(return_value=None)
+    )
+
+    task_id = manager.create_task(
+        "orchestration_provision",
+        meta={"operation": "provision", "instance_name": "test-stack"},
+        enforce_limit=False,
+    )
+
+    await orchestration_service._provision_group(1, _items()[:1], task_id)
+
+    assert provision.await_count == 2
+    task = manager.get_task(task_id)
+    assert task is not None
+    assert task["status"] == "completed"
+    assert task["progress"]["message"] == "账号与集成已自动配置完成"
+
+
+@pytest.mark.asyncio
+async def test_provision_group_skips_retry_when_container_stopped(monkeypatch):
+    """容器已退出时不做无意义的重试。"""
+    manager = DeployTaskManager()
+    monkeypatch.setattr(provisioning_module, "deploy_task_manager", manager)
+    _patch_group(
+        monkeypatch,
+        {"moviepilot": {"url": "http://host:3000"}},
+    )
+    monkeypatch.setattr(
+        orchestration_service,
+        "_wait_task_terminal",
+        AsyncMock(return_value="completed"),
+    )
+    provision = AsyncMock(
+        return_value=ProvisionResult(ok=False, message="服务未就绪")
+    )
+    monkeypatch.setattr(orchestration_service, "_provision_app", provision)
+    monkeypatch.setattr(orchestration_service, "_project_running", lambda name: False)
+    monkeypatch.setattr(orchestration_service, "PROVISION_RETRY_DELAYS", (0,))
+    monkeypatch.setattr(
+        orchestration_service, "_wire_group", AsyncMock(return_value=None)
+    )
+
+    task_id = manager.create_task(
+        "orchestration_provision",
+        meta={"operation": "provision", "instance_name": "test-stack"},
+        enforce_limit=False,
+    )
+
+    await orchestration_service._provision_group(1, _items()[:1], task_id)
+
+    assert provision.await_count == 1

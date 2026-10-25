@@ -76,6 +76,7 @@ class RestoreMixin:
             _get_env,
         )
         from app.services.system import system_config_service
+        from app.services.system.config_service import resolve_username_for_app
 
         if await resolve_app_data_root(db) is None:
             raise APIException("未配置应用数据目录，无法恢复备份", 400)
@@ -156,6 +157,7 @@ class RestoreMixin:
         default_username = (
             (sys_config.default_admin_username or "").strip() or "admin"
         )
+        email_domain = (sys_config.default_email_domain or "").strip()
         unified_password = (
             (sys_config.default_admin_password or "").strip() or None
         )
@@ -183,6 +185,8 @@ class RestoreMixin:
                     config, spec["env_key"], spec["api_token_key"]
                 )
 
+            username = resolve_username_for_app(app_name, username, email_domain)
+
             if not password:
                 # 旧备份没有凭据记录：交给部署流程按统一密码/随机生成处理
                 continue
@@ -205,6 +209,10 @@ class RestoreMixin:
                 if entry.get(key)
             }
             if seeded:
+                if seeded.get("username"):
+                    seeded["username"] = resolve_username_for_app(
+                        app_name, str(seeded["username"]), email_domain
+                    )
                 initial_app_configs[app_name] = seeded
 
         logger.info(
@@ -223,4 +231,5 @@ class RestoreMixin:
             user_id=user_id,
             credential_overrides=credential_overrides,
             initial_app_configs=initial_app_configs,
+            allow_existing_group=True,
         )

@@ -1,5 +1,7 @@
 """编排模板与部署相关的 Pydantic Schema。"""
 
+from datetime import datetime
+
 from pydantic import BaseModel, ConfigDict
 
 from app.schemas.orchestration.composition import AppCompositionItem
@@ -13,11 +15,12 @@ class OrchestrationOut(BaseModel):
     display_name: str
     description: str | None
     category: str
-    tags: list[str]
     icon: str | None
     website: str | None
     source_url: str | None
     version: str
+    # 管理端当前版本的更新说明
+    changelog: str | None = None
     is_builtin: bool
     app_composition: list[AppCompositionItem]
     shared_config_schema: dict
@@ -47,3 +50,21 @@ class OrchestrationDeployResponse(BaseModel):
     instance_name: str
     status: str
     task_ids: list[str]
+
+
+class OrchestrationUpdateEventOut(BaseModel):
+    """模板/实例组版本变更记录。"""
+
+    id: int
+    orchestration_name: str
+    scope: str
+    group_id: int | None = None
+    from_version: str | None = None
+    to_version: str | None = None
+    mode: str
+    status: str
+    detail: dict = {}
+    message: str | None = None
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)

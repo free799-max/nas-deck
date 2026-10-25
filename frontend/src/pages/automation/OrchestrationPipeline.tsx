@@ -12,7 +12,7 @@ import { AppIcon } from "../apps/AppIcon";
 import type { App } from "@/hooks/useApps";
 import type { AppCompositionItem } from "@/hooks/useOrchestrations";
 import { cn } from "@/lib/utils";
-import { GROUP_LABELS, RELATION_LABELS } from "./composition-meta";
+import { RELATION_LABELS } from "./composition-meta";
 
 /** 流程阶段：同一 group 的连续应用合并为同一阶段（如多个播放器） */
 interface Stage {
@@ -91,9 +91,7 @@ export function OrchestrationPipeline({
         const isRequired = !stage.group && relation === "required";
         const mutex = isMutuallyExclusive(stage.items);
         const caption = stage.group
-          ? `${GROUP_LABELS[stage.group] ?? stage.group} · ${
-              mutex ? "二选一" : "可多选"
-            }`
+          ? `${stage.group} · ${mutex ? "二选一" : "可多选"}`
           : RELATION_LABELS[relation ?? "optional"];
 
         return (

@@ -13,6 +13,7 @@ import {
   DialogTitle,
   DialogFooter,
 } from "@/components/ui/dialog";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -23,6 +24,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import {
   AlertTriangle,
+  ArrowUpCircle,
   MoreHorizontal,
   Pencil,
   Trash2,
@@ -50,6 +52,7 @@ interface OrchestrationInstanceManagerProps {
   onRename: (id: number, name: string) => void;
   onDelete: (id: number) => void;
   onRedeploy: (id: number) => void;
+  onUpgrade: (id: number) => void;
   isPending?: boolean;
 }
 
@@ -127,6 +130,7 @@ export function OrchestrationInstanceManager({
   onRename,
   onDelete,
   onRedeploy,
+  onUpgrade,
   isPending = false,
 }: OrchestrationInstanceManagerProps) {
   const [renameInstance, setRenameInstance] =
@@ -191,14 +195,25 @@ export function OrchestrationInstanceManager({
                       : "text-foreground/75 hover:text-foreground"
                   )}
                 >
-                  <span
-                    className={cn(
-                      "truncate text-base tracking-tight",
-                      expanded ? "font-semibold" : "font-medium"
-                    )}
-                    title={instance.instance_name}
-                  >
-                    {instance.instance_name}
+                  <span className="flex min-w-0 flex-1 flex-col items-start gap-0.5">
+                    <span className="flex w-full min-w-0 items-center gap-1.5">
+                      <span
+                        className={cn(
+                          "truncate text-base tracking-tight",
+                          expanded ? "font-semibold" : "font-medium"
+                        )}
+                        title={instance.instance_name}
+                      >
+                        {instance.instance_name}
+                      </span>
+                      <Badge
+                        variant="outline"
+                        className="h-4 shrink-0 px-1.5 py-0 text-[10px] font-normal tabular-nums text-muted-foreground"
+                        title="实例部署时的方案版本"
+                      >
+                        v{instance.orchestration_version || "未知"}
+                      </Badge>
+                    </span>
                   </span>
                   <span
                     className={cn(
@@ -240,6 +255,13 @@ export function OrchestrationInstanceManager({
                     alignOffset={-16}
                     className="w-28 min-w-0 rounded-md p-1"
                   >
+                    <DropdownMenuItem
+                      onClick={() => onUpgrade(instance.id)}
+                      className="gap-2 px-2 py-1.5 text-xs"
+                    >
+                      <ArrowUpCircle className="h-3.5 w-3.5" />
+                      升级方案
+                    </DropdownMenuItem>
                     <DropdownMenuItem
                       onClick={() => onRedeploy(instance.id)}
                       className="gap-2 px-2 py-1.5 text-xs"

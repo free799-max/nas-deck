@@ -470,7 +470,7 @@ async def test_wire_endpoint_starts_background_wiring(
     client_with_group, monkeypatch
 ):
     """认证管理员触发后台装配并立即返回。"""
-    schedule = MagicMock()
+    schedule = MagicMock(return_value="task-wire")
     monkeypatch.setattr(orchestration_service, "schedule_wiring", schedule)
     token = await _login_admin(client_with_group)
 
@@ -484,7 +484,8 @@ async def test_wire_endpoint_starts_background_wiring(
     assert body["success"] is True
     assert body["data"]["ok"] is True
     assert body["data"]["message"] == "装配已开始"
-    schedule.assert_called_once_with(client_with_group.group_id)
+    assert body["data"]["task_id"] == "task-wire"
+    schedule.assert_called_once_with(client_with_group.group_id, "media")
 
 
 @pytest.mark.asyncio

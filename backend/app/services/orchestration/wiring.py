@@ -16,6 +16,7 @@ from app.core.background import create_background_task
 from app.core.exceptions import APIException
 from app.database import async_session
 from app.services.apps import get_client
+from app.services.orchestration.deploy_task_service import deploy_task_manager
 
 logger = logging.getLogger(__name__)
 
@@ -23,9 +24,40 @@ logger = logging.getLogger(__name__)
 class WiringMixin:
     """把编排内来源应用自动装配进目标应用的能力。"""
 
-    def schedule_wiring(self, group_id: int) -> None:
-        """后台重跑自动配置与自动装配（手动触发入口，立即返回）。"""
-        create_background_task(self._reprovision_and_wire(group_id))
+    def schedule_wiring(
+        self,
+        group_id: int,
+        instance_name: str | None = None,
+    ) -> str | None:
+        """后台重跑自动配置与自动装配（手动触发入口，立即返回）。
+
+        Returns:
+            进度跟踪任务 ID；同一实例组已有装配任务在进行时直接复用
+        """
+        inflight = getattr(self, "_wire_task_ids", None)
+        if inflight is None:
+            inflight = {}
+            self._wire_task_ids = inflight
+
+        existing = inflight.get(group_id)
+        if existing:
+            task = deploy_task_manager.get_task(existing)
+            if task and task.get("status") == "deploying":
+                return existing
+
+        task_id = deploy_task_manager.create_task(
+            "orchestration_provision",
+            meta={
+                "instance_name": instance_name,
+                "orchestration_group_id": group_id,
+                "description": "补做账号配置并重新装配",
+                "operation": "provision",
+            },
+            enforce_limit=False,
+        )
+        inflight[group_id] = task_id
+        create_background_task(self._reprovision_and_wire(group_id, task_id))
+        return task_id
 
     async def _wire_group(self, group_id: int) -> None:
         """按模板 integrations 声明执行装配并落库，异常只记日志。"""

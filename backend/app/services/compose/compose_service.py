@@ -23,6 +23,8 @@ from app.models.orchestration import AppInstance
 from app.services.compose.compose_discovery import ComposeDiscoveryService
 from app.services.compose.log_utils import detect_stage, strip_ansi
 from app.services.compose.permissions import extract_bind_sources, parse_puid_pgid
+from app.services.apps.asset_copy import AssetCopyError, copy_assets, find_container
+from app.services.apps.offline_assets import apply_offline_profile, profiles_in_compose
 from app.services.compose.yaml_utils import (
     inject_labels,
     rewrite_ports,
@@ -133,12 +135,17 @@ class ComposeService:
     async def _write_compose_file(
         self, project: DockerComposeProject, version: DockerComposeVersion
     ) -> Path:
-        """将当前版本 YAML 写入项目工作目录。"""
+        """将当前版本 YAML 写入项目工作目录。
+
+        写盘前按客户端内置的离线资源档案补充固定镜像与离线环境变量，
+        应用模板本身无需维护这些信息。
+        """
         config_files = self._config_files(project)
         compose_file = config_files[0]
         working_dir = self._working_dir(project)
         working_dir.mkdir(parents=True, exist_ok=True)
         content = inject_labels(version.content, project.project_name)
+        content = apply_offline_profile(content)
         compose_file.write_text(content, encoding="utf-8")
         return compose_file
 
@@ -261,7 +268,7 @@ class ComposeService:
             if progress_callback:
                 progress_callback(stage, percentage, message, detail)
 
-        _progress("pulling_images", 50, "拉取/启动服务中")
+        _progress("pulling_images", 50, "拉取镜像并启动服务")
         current_stage = "pulling_images"
 
         if progress_callback:
@@ -286,7 +293,62 @@ class ComposeService:
         if result["returncode"] != 0:
             stderr = result.get("stderr", "").strip()
             raise RuntimeError(stderr or "docker compose up -d 执行失败")
+
+        await self._copy_offline_assets(project, progress_callback)
         return result
+
+    async def _copy_offline_assets(
+        self,
+        project: DockerComposeProject,
+        progress_callback: Callable[..., Any] | None = None,
+    ) -> None:
+        """服务启动后把离线资源拷进容器。
+
+        资源是否已存在由容器内标记判断，重复执行只做一次 ``docker cp``
+        读取；拷贝失败不阻断部署，用户可在应用详情页手动重试。
+        """
+        compose_file = next(
+            (path for path in self._config_files(project) if path.exists()), None
+        )
+        if compose_file is None:
+            return
+        try:
+            content = compose_file.read_text(encoding="utf-8")
+        except OSError as exc:
+            logger.warning("读取 Compose 配置失败，跳过离线资源拷贝: %s", exc)
+            return
+
+        profiles = profiles_in_compose(content)
+        if not profiles:
+            return
+
+        def _mapped(stage: str, percentage: int, message: str, detail: str | None = None):
+            if progress_callback:
+                progress_callback(
+                    stage, 85 + int(percentage * 10 / 100), message, detail
+                )
+
+        for profile in profiles:
+            container = await find_container(project.project_name, profile.service)
+            if not container:
+                continue
+            try:
+                result = await copy_assets(container, profile, _mapped)
+                if result["copied"]:
+                    logger.info(
+                        "已为容器 %s 拷贝离线资源（%s）",
+                        container,
+                        profile.assets_image,
+                    )
+            except AssetCopyError as exc:
+                logger.warning("离线资源拷贝失败（%s）: %s", project.project_name, exc)
+                if progress_callback:
+                    progress_callback(
+                        "copying_assets",
+                        90,
+                        "离线数据拷贝失败，可在应用详情重试",
+                        str(exc),
+                    )
 
     async def _docker_cli(self, *args: str, timeout: int = 60) -> tuple[int, str]:
         """执行 docker CLI 命令，返回 (returncode, stdout)。"""
@@ -513,7 +575,7 @@ class ComposeService:
         db.add(version)
         await db.flush()
 
-        _progress("writing_compose", 25, "写入 compose 文件")
+        _progress("writing_compose", 25, "写入 Compose 配置")
         await self._write_compose_file(project, version)
 
         # 首次创建需要拉取镜像，大镜像耗时较长，超时放宽到 30 分钟
@@ -678,7 +740,7 @@ class ComposeService:
         validate_yaml(content)
 
         async with self._lock(project.id):
-            _progress("preparing", 5, "准备编辑部署")
+            _progress("preparing", 5, "准备应用新配置")
             if description is not None:
                 project.description = description
 
@@ -707,8 +769,12 @@ class ComposeService:
             await db.commit()
             await db.refresh(version)
 
-            _progress("writing_compose", 25, "写入 compose 文件")
+            _progress("writing_compose", 25, "写入 Compose 配置")
             await self._write_compose_file(project, version)
+
+            # 编辑部署可能引入新的 bind mount：先以本进程身份创建目录，
+            # 避免 Docker 以 root 自动创建，导致之后删除实例时数据目录搬不走
+            await self._ensure_host_directories(content)
 
             await self._run_up_with_progress(project, progress_callback, timeout=300)
 
@@ -744,6 +810,7 @@ class ComposeService:
             result = await self._run(project, "up", "-d", timeout=300)
             if result["returncode"] != 0:
                 raise RuntimeError(f"切换后启动失败: {result['stderr']}")
+            await self._copy_offline_assets(project)
 
             await self.sync_stack_status(db, project, action="rollback")
             return version

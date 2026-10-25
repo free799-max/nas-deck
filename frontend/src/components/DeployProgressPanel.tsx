@@ -14,18 +14,21 @@ import { Progress } from "@/components/ui/progress";
 import { Badge } from "@/components/ui/badge";
 import { AppIcon } from "@/pages/apps/AppIcon";
 import { cn } from "@/lib/utils";
-import { CheckCircle2, XCircle, Loader2, Package, Terminal } from "lucide-react";
+import { CheckCircle2, XCircle, Loader2, Package, Terminal, AlertTriangle } from "lucide-react";
 
 interface DeployProgressPanelProps {
   taskIds: string[];
   onComplete?: (taskId: string, state: DeployTaskState) => void;
   onError?: (taskId: string, state: DeployTaskState) => void;
+  /** 任务已被后端清理（404）：从跟踪列表移除，不做失败展示 */
+  onExpired?: (taskId: string) => void;
 }
 
 const stageMap: Record<string, string> = {
   preparing: "准备中",
   creating_project: "创建项目",
   writing_compose: "写入配置",
+  copying_assets: "拷贝离线数据",
   pulling_images: "拉取镜像",
   preparing_packages: "准备依赖",
   starting_services: "启动服务",
@@ -94,6 +97,10 @@ function LogTerminal({ logs, isFailed }: { logs: string[]; isFailed: boolean }) 
         <span className="text-slate-500">等待日志输出…</span>
       ) : (
         logs.map((line, idx) => {
+          // 升级流程用空行分隔各个应用，空字符串行渲染为一段留白
+          if (line === "") {
+            return <div key={idx} className="h-2" aria-hidden="true" />;
+          }
           const isStageLine = line.startsWith("[");
           const isErrorLine = /error|fail/i.test(line);
           return (
@@ -186,7 +193,22 @@ function DeployTaskCard({ state, logs }: { state: DeployTaskState; logs: string[
         </div>
       )}
 
-      {isCompleted ? (
+      {isCompleted && state.warning ? (
+        <div className="mt-3 flex items-start gap-2.5 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2.5">
+          <AlertTriangle
+            className="mt-0.5 h-4 w-4 shrink-0 text-amber-600"
+            aria-hidden="true"
+          />
+          <div className="min-w-0">
+            <p className="text-xs font-medium text-amber-700">
+              {state.progress.message || stageLabel}
+            </p>
+            <p className="mt-1 whitespace-pre-wrap break-words text-[11px] text-amber-700/80">
+              {state.warning}
+            </p>
+          </div>
+        </div>
+      ) : isCompleted ? (
         <div className="mt-3 flex items-center gap-2.5 rounded-lg border border-green-500/25 bg-green-500/10 px-3 py-2.5">
           <CheckCircle2 className="h-4 w-4 shrink-0 text-green-600" aria-hidden="true" />
           <div className="min-w-0">
@@ -227,9 +249,15 @@ export function DeployProgressPanel({
   taskIds,
   onComplete,
   onError,
+  onExpired,
 }: DeployProgressPanelProps) {
   const activeTaskIds = useMemo(() => taskIds.filter(Boolean), [taskIds]);
-  const states = useDeployTasksEvents(activeTaskIds, onComplete, onError);
+  const states = useDeployTasksEvents(
+    activeTaskIds,
+    onComplete,
+    onError,
+    onExpired
+  );
 
   // 已完成的任务排在前面，让用户一眼看到哪些部署完了；进行中/失败的保持在后
   const orderedTaskIds = useMemo(() => {

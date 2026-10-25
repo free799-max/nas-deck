@@ -23,10 +23,10 @@ function hasDirectoryItem(prop: SchemaProperty): boolean {
   );
 }
 
-/** 数组行网格：含目录字段时给第一列（本地路径）更多宽度 */
+/** 数组行网格：含目录字段时本地路径列更宽，保证容器路径列清晰可见 */
 function arrayGridClass(hasDirectory: boolean): string {
   return hasDirectory
-    ? "grid-cols-[minmax(0,4fr)_minmax(0,1fr)_90px_auto]"
+    ? "grid-cols-[minmax(0,3fr)_minmax(0,2fr)_90px_auto]"
     : "grid-cols-[1fr_1fr_90px_auto]";
 }
 
@@ -339,18 +339,38 @@ function ArrayField({
 
   const itemPropEntries = Object.entries(itemProps);
   const isTwoColumnRow = itemPropEntries.length === 2;
-  // 3 字段布局（ports/volumes）把第一列（本地端口/本地路径）放到最右面，
-  // 协议/权限列仍占 90px 固定列，按钮在最后 auto 列。
+  // 3 字段布局（ports/volumes）把协议/权限字段放到最后，
+  // 前面依次是（本地端口、容器端口）/（本地路径、容器路径）。
   const displayEntries = isTwoColumnRow
     ? itemPropEntries
     : [...itemPropEntries.slice(1), itemPropEntries[0]];
 
   // 使用 display: contents 让每行子元素直接参与外层统一 grid：
   // grid-cols-[1fr_1fr_90px_auto]
-  // - 3 字段（ports/volumes）：容器端口/路径、本地端口/路径、协议/权限、按钮
+  // - 3 字段（ports/volumes）：本地端口/路径、容器端口/路径、协议/权限、按钮
   // - 2 字段（env）：key 占 1 列，value 跨 2-3 列，按钮在第 4 列，不留空白
   return (
     <>
+      {rows.length > 0 && (
+        <div className="contents">
+          {displayEntries.map(([key, p]) => (
+            <div
+              key={`${propKey}-header-${key}`}
+              className={`px-1 text-[11px] font-medium text-muted-foreground ${
+                isTwoColumnRow && key === "value" ? "col-span-2" : "col-span-1"
+              }`}
+            >
+              {p.title || key}
+              {itemRequired.has(key) && (
+                <span className="ml-0.5 text-destructive" aria-hidden="true">
+                  *
+                </span>
+              )}
+            </div>
+          ))}
+          <div className="col-span-1" />
+        </div>
+      )}
       {rows.map((row, index) => (
         <div key={`${propKey}-row-${index}`} className="contents">
           {displayEntries.map(([key, p]) => {

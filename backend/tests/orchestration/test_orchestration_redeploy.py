@@ -13,6 +13,7 @@ from app.models.orchestration import (
     AppInstance,
     AppOrchestration,
     AppOrchestrationInstance,
+    OrchestrationUpdateEvent,
 )
 from app.services.app_store import app_service
 from app.services.compose.compose_service import compose_manager
@@ -193,6 +194,55 @@ async def test_redeploy_cleans_old_instance_and_project(
         )
     )
     assert result.scalar_one_or_none() is None
+
+    # 版本快照同步到模板当前版本，并记录一条 instance 更新事件
+    assert group.orchestration_version == orchestration.version
+    events = (
+        await db.execute(
+            select(OrchestrationUpdateEvent).where(
+                OrchestrationUpdateEvent.group_id == failed_group.id
+            )
+        )
+    ).scalars().all()
+    assert len(events) == 1
+    event = events[0]
+    assert event.scope == "instance"
+    assert event.mode == "manual"
+    assert event.status == "applied"
+    assert event.from_version is None
+    assert event.to_version == orchestration.version
+    assert event.detail == {"selected_apps": ["moviepilot"]}
+
+
+@pytest.mark.asyncio
+async def test_redeploy_optional_app_without_required(
+    db, apps, orchestration, failed_group, monkeypatch
+):
+    """修复时可只重部署部分应用，不要求再次选中必选应用。"""
+    created: list[str] = []
+    monkeypatch.setattr(app_service, "deploy", _make_fake_deploy(db, created))
+
+    group, task_ids = await orchestration_service.redeploy_instance(
+        db,
+        group_id=failed_group.id,
+        instance_name="test-stack",
+        selected_apps=["jellyfin"],
+        app_configs={"jellyfin": {"port": 8096}},
+        shared_config={"env": [{"key": "TZ", "value": "Asia/Shanghai"}]},
+        user_id=1,
+    )
+
+    assert created == ["jellyfin"]
+    assert task_ids[0] == "task-jellyfin"
+
+    # 未选中的必选应用保持原状
+    result = await db.execute(
+        select(AppInstance).where(
+            AppInstance.orchestration_group_id == failed_group.id,
+            AppInstance.instance_name == "test-stack-moviepilot",
+        )
+    )
+    assert result.scalar_one_or_none() is not None
 
 
 @pytest.mark.asyncio

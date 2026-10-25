@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+from datetime import datetime
 
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,6 +14,7 @@ from app.models.orchestration import (
     AppInstance,
     AppOrchestration,
     AppOrchestrationInstance,
+    OrchestrationUpdateEvent,
 )
 
 logger = logging.getLogger(__name__)
@@ -50,8 +52,68 @@ class InstanceMixin:
         for group in groups:
             for instance in group.instances:
                 await asyncio.to_thread(self._refresh_instance_status, instance)
+            await self._reconcile_stuck_group_status(db, group)
 
         return groups
+
+    async def _reconcile_stuck_group_status(
+        self,
+        db: AsyncSession,
+        group: AppOrchestrationInstance,
+    ) -> None:
+        """恢复因进程重启而卡在 deploying 的实例组。
+
+        部署与升级任务只存在于后端内存，进程重启后这些任务已消失，
+        但数据库里的组状态仍停在 ``deploying``。读取时若找不到任何
+        关联的进行中任务，就把组状态置为 ``error``，允许用户重新升级或修复。
+        """
+        if group.status != "deploying":
+            return
+        # 刚创建的部署/升级请求可能还没创建出任务，给一个宽限窗口避免误判
+        created_at = group.created_at
+        if created_at is not None:
+            elapsed = (datetime.now() - created_at).total_seconds()
+            if elapsed < 60:
+                return
+        from app.services.orchestration.deploy_task_service import deploy_task_manager
+
+        if deploy_task_manager.has_active_group_task(group.id):
+            return
+        if any(
+            deploy_task_manager.has_active_task(instance_id=instance.id)
+            for instance in group.instances
+        ):
+            return
+
+        logger.warning(
+            "实例组 %s（%s）卡在 deploying 且没有进行中的任务，置为 error",
+            group.id,
+            group.instance_name,
+        )
+        group.status = "error"
+        await db.commit()
+
+    async def list_update_events(
+        self,
+        db: AsyncSession,
+        scope: str | None = None,
+        orchestration_name: str | None = None,
+        limit: int = 20,
+    ) -> list[OrchestrationUpdateEvent]:
+        """查询模板/实例组版本变更记录，按创建时间倒序。"""
+        stmt = select(OrchestrationUpdateEvent)
+        if scope:
+            stmt = stmt.where(OrchestrationUpdateEvent.scope == scope)
+        if orchestration_name:
+            stmt = stmt.where(
+                OrchestrationUpdateEvent.orchestration_name == orchestration_name
+            )
+        stmt = stmt.order_by(
+            OrchestrationUpdateEvent.created_at.desc(),
+            OrchestrationUpdateEvent.id.desc(),
+        ).limit(limit)
+        result = await db.execute(stmt)
+        return list(result.scalars().all())
 
     async def get_instance(self, db: AsyncSession, instance_id: int) -> AppInstance:
         """获取单个编排实例（携带编排、项目及 Stack 关系）。"""
@@ -114,6 +176,7 @@ class InstanceMixin:
 
         for instance in group.instances:
             await asyncio.to_thread(self._refresh_instance_status, instance)
+        await self._reconcile_stuck_group_status(db, group)
 
         return group
 
@@ -153,7 +216,9 @@ class InstanceMixin:
                 供后台删除任务推送进度
 
         Returns:
-            备份目录路径；未产生备份时返回 None
+            ``(backup_dir, failures)``：备份目录路径（未产生备份时为 None）
+            与未能备份的数据目录列表；后者非空时旧数据仍留在原路径，
+            调用方必须向用户告警
         """
         from app.services.app_store.app_service import _slugify
         from app.services.compose.compose_service import compose_manager
@@ -173,20 +238,30 @@ class InstanceMixin:
         # 先记录应用信息：delete_project 会级联删除实例行
         projects: list[DockerComposeProject] = []
         entries: list[AppDataEntry] = []
+        seen_project_ids: set[int] = set()
         for instance in list(group.instances):
             app_name = instance.app.name if instance.app else None
             project = None
             if instance.project_id:
                 project = await db.get(DockerComposeProject, instance.project_id)
             if project is not None:
-                projects.append(project)
                 project_name = project.project_name
             else:
-                # 无关联项目的实例（部署中途失败、导入的外部容器）按项目名规则兜底
+                # 无关联项目的实例（部署中途失败、导入的外部容器）按项目名规则兜底；
+                # 部署在 compose up 阶段失败时项目已落库但未回写到实例，仍需一并清理
                 try:
                     project_name = _slugify(instance.instance_name)
                 except ValueError:
                     continue
+                result = await db.execute(
+                    select(DockerComposeProject).where(
+                        DockerComposeProject.project_name == project_name
+                    )
+                )
+                project = result.scalar_one_or_none()
+            if project is not None and project.id not in seen_project_ids:
+                seen_project_ids.add(project.id)
+                projects.append(project)
             entries.append(
                 AppDataEntry(
                     instance_name=instance.instance_name,
@@ -217,7 +292,7 @@ class InstanceMixin:
 
         # 容器已停止，再把应用数据目录移入备份目录
         report("backing_up_data", 65, "备份应用数据目录")
-        backup_dir = await backup_app_data_dirs(
+        backup_dir, backup_failures = await backup_app_data_dirs(
             db,
             entries,
             group_name=group_name,
@@ -225,6 +300,16 @@ class InstanceMixin:
             shared_config=group.shared_config,
             app_configs=group.app_configs,
         )
+        if backup_failures:
+            failed_names = "、".join(
+                item.project_name for item in backup_failures
+            )
+            report(
+                "backing_up_data",
+                75,
+                f"有 {len(backup_failures)} 个应用数据目录未能备份",
+                failed_names,
+            )
 
         # 清理无项目实例（如导入的外部容器）及实例组本身
         report("cleaning_records", 85, "清理实例组记录")
@@ -239,7 +324,7 @@ class InstanceMixin:
             )
         )
         await db.commit()
-        return backup_dir
+        return backup_dir, backup_failures
 
     async def start_delete_instance(
         self,
@@ -294,7 +379,7 @@ class InstanceMixin:
 
         async with async_session() as db:
             try:
-                backup_dir = await self.delete_instance(
+                backup_dir, backup_failures = await self.delete_instance(
                     db, instance_id, progress=progress
                 )
             except Exception as exc:
@@ -303,7 +388,20 @@ class InstanceMixin:
                 deploy_task_manager.fail_task(task_id, str(exc))
                 return
 
-        message = (
-            "删除完成，应用数据已备份" if backup_dir else "删除完成"
-        )
+        if backup_failures:
+            failed_names = "、".join(
+                item.project_name for item in backup_failures
+            )
+            deploy_task_manager.complete_task(
+                task_id,
+                message=f"删除完成，但 {len(backup_failures)} 个应用数据目录未能备份",
+                warning=(
+                    f"{failed_names} 的数据仍保留在原来的应用数据目录中，"
+                    "同名重建会复用旧数据（如已初始化的数据库密码）。"
+                    "通常是数据目录属主为 root、后端进程无权限移动导致，"
+                    "请手动确认并清理这些目录后再部署。"
+                ),
+            )
+            return
+        message = "删除完成，应用数据已备份" if backup_dir else "删除完成"
         deploy_task_manager.complete_task(task_id, message=message)

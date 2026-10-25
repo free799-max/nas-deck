@@ -12,6 +12,9 @@ class AppCompositionItem(BaseModel):
     relation: str  # required / optional / suggested / conflicting
     group: str | None = None
     conflict_with: list[str] = []
+    # 组件级镜像覆盖：管理端/enrich 可下发具体镜像与 tag
+    image: str | None = None
+    tag: str | None = None
     # 部署后自动装配声明，如 [{"type": "downloader", "from": "qbittorrent"}]
     integrations: list[dict] | None = None
 

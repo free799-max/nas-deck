@@ -283,6 +283,64 @@ async def test_start_delete_instance_rejects_active_deploy(
 
 
 @pytest.mark.asyncio
+async def test_delete_instance_reports_backup_failure(
+    db, group, monkeypatch, tmp_path
+):
+    """数据目录无法移入备份时应保留原数据并显性报告，而不是静默成功。"""
+    _set_app_data_root(monkeypatch, str(tmp_path))
+    monkeypatch.setattr(
+        compose_manager, "delete_project", _fake_delete_project(db)
+    )
+
+    app_dir = tmp_path / "test-stack-moviepilot"
+    (app_dir / "postgresql" / "data").mkdir(parents=True)
+    (app_dir / "postgresql" / "data" / "PG_VERSION").write_text("16")
+
+    def denied_rename(src, dst):
+        raise PermissionError(13, "Permission denied", src)
+
+    monkeypatch.setattr(
+        "app.services.orchestration.backup.os.rename", denied_rename
+    )
+
+    backup_dir, failures = await orchestration_service.delete_instance(
+        db, group.id
+    )
+
+    assert backup_dir is None
+    assert [item.project_name for item in failures] == ["test-stack-moviepilot"]
+    # 原数据原样保留，备份目录里不留空壳
+    assert (
+        app_dir / "postgresql" / "data" / "PG_VERSION"
+    ).read_text() == "16"
+    assert not (tmp_path / "_backups").exists()
+    # 实例组记录仍按约定清理
+    assert await db.scalar(
+        select(func.count()).select_from(AppOrchestrationInstance)
+    ) == 0
+
+
+@pytest.mark.asyncio
+async def test_complete_task_carries_warning():
+    """删除成功的告警（如数据目录未能备份）应随完成事件推给前端。"""
+    from app.services.orchestration.deploy_task_service import deploy_task_manager
+
+    task_id = deploy_task_manager.create_task(
+        "orchestration_delete", meta={"operation": "delete"}
+    )
+    deploy_task_manager.complete_task(
+        task_id,
+        message="删除完成，但 1 个应用数据目录未能备份",
+        warning="旧数据仍保留在原路径",
+    )
+
+    latest = deploy_task_manager.get_task_history(task_id)[-1]
+    assert latest["stage"] == "completed"
+    assert latest["_warning"] == "旧数据仍保留在原路径"
+    assert "未能备份" in latest["message"]
+
+
+@pytest.mark.asyncio
 async def test_delete_instance_without_app_data_root_skips_backup(
     db, group, monkeypatch, tmp_path
 ):

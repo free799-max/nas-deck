@@ -29,6 +29,7 @@ export function DeployProgressDialog() {
     queryClient.invalidateQueries({ queryKey: ["orchestration-instances"] });
     queryClient.invalidateQueries({ queryKey: ["apps", "instances"] });
     queryClient.invalidateQueries({ queryKey: ["orchestration-backups"] });
+    queryClient.invalidateQueries({ queryKey: ["dashboard", "overview"] });
   }, [queryClient]);
 
   const handleComplete = useCallback(
@@ -63,6 +64,17 @@ export function DeployProgressDialog() {
     [closePanel, removeTask]
   );
 
+  // 任务已被后端清理（正常完成超过 TTL、旧任务残留或服务重启）：
+  // 直接从跟踪列表移除，避免把“任务不存在”渲染成红色的“部署失败”
+  const handleExpired = useCallback(
+    (taskId: string) => {
+      finishedRef.current.delete(taskId);
+      removeTask(taskId);
+      invalidateInstances();
+    },
+    [removeTask, invalidateInstances]
+  );
+
   if (activeTaskIds.length === 0) {
     return null;
   }
@@ -78,6 +90,7 @@ export function DeployProgressDialog() {
             taskIds={activeTaskIds}
             onComplete={handleComplete}
             onError={handleError}
+            onExpired={handleExpired}
           />
         </div>
       </DialogContent>

@@ -33,11 +33,17 @@ from app.schemas.orchestration.instance import (
     OrchestrationRestoreRequest,
     PluginInstallRequest,
 )
+from app.schemas.orchestration.music_auto import (
+    MusicAutoDirItem,
+    MusicAutoOrganizeConfigIn,
+)
+from app.schemas.orchestration.reader_auto import ReaderAutoSyncConfigIn
 from app.schemas.orchestration.orchestration import (
     OrchestrationDeployRequest,
     OrchestrationDeployResponse,
     OrchestrationDetailOut,
     OrchestrationOut,
+    OrchestrationUpdateEventOut,
 )
 
 __all__ = [
@@ -51,6 +57,9 @@ __all__ = [
     "DeployTaskType",
     "ImportCandidateApp",
     "InspectFixRequest",
+    "MusicAutoDirItem",
+    "MusicAutoOrganizeConfigIn",
+    "ReaderAutoSyncConfigIn",
     "OrchestrationDeployRequest",
     "OrchestrationDeployResponse",
     "OrchestrationDetailOut",
@@ -62,6 +71,7 @@ __all__ = [
     "OrchestrationInstanceGroupOut",
     "OrchestrationInstanceUpdateRequest",
     "OrchestrationOut",
+    "OrchestrationUpdateEventOut",
     "OrchestrationRestoreRequest",
     "OrchestrationBackupAppOut",
     "OrchestrationBackupOut",

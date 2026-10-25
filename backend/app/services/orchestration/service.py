@@ -12,12 +12,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.exceptions import APIException
 from app.models.orchestration import AppOrchestration
 from app.services.apps import AuthVerifyResult, get_client
+from app.services.orchestration.assets import AssetsMixin
 from app.services.orchestration.deploy import DeployMixin
 from app.services.orchestration.importer import ImportMixin
 from app.services.orchestration.inspection import InspectionMixin
 from app.services.orchestration.instances import InstanceMixin
 from app.services.orchestration.provisioning import ProvisionMixin
 from app.services.orchestration.restore import RestoreMixin
+from app.services.orchestration.upgrade import UpgradeMixin
 from app.services.orchestration.wiring import WiringMixin
 
 logger = logging.getLogger(__name__)
@@ -25,12 +27,14 @@ logger = logging.getLogger(__name__)
 
 class OrchestrationService(
     DeployMixin,
+    UpgradeMixin,
     RestoreMixin,
     ImportMixin,
     ProvisionMixin,
     WiringMixin,
     InspectionMixin,
     InstanceMixin,
+    AssetsMixin,
 ):
     """应用编排服务。
 
@@ -43,20 +47,14 @@ class OrchestrationService(
         self,
         db: AsyncSession,
         category: str | None = None,
-        tag: str | None = None,
     ) -> list[AppOrchestration]:
-        """列出应用编排，支持分类和标签筛选。"""
+        """列出应用编排，支持分类筛选。"""
         stmt = select(AppOrchestration)
         if category:
             stmt = stmt.where(AppOrchestration.category == category)
         stmt = stmt.order_by(AppOrchestration.category, AppOrchestration.display_name)
         result = await db.execute(stmt)
-        orchestrations = list(result.scalars().all())
-        # tags 为 JSON 列，PostgreSQL 的 json 类型不支持 contains 查询，
-        # 为保证 SQLite/PG 可移植性，标签过滤在 Python 侧做精确匹配
-        if tag:
-            orchestrations = [o for o in orchestrations if tag in (o.tags or [])]
-        return orchestrations
+        return list(result.scalars().all())
 
     async def get_orchestration(self, db: AsyncSession, name: str) -> AppOrchestration:
         """获取单个编排详情。"""

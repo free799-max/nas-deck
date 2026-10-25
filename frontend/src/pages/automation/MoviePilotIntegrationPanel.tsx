@@ -11,7 +11,9 @@ import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
 import type { ApiError } from "@/api/types";
 import {
+  useAppAssets,
   useAppPlugins,
+  useCopyAppAssets,
   useInstallAppPlugin,
   useWireOrchestrationInstance,
   type AppIntegrations,
@@ -23,6 +25,7 @@ import {
   Check,
   Copy,
   Download,
+  HardDrive,
   Link2,
   Loader2,
   Package,
@@ -137,7 +140,11 @@ export function MoviePilotIntegrationPanel({
   const wireMutation = useWireOrchestrationInstance();
   const pluginsQuery = useAppPlugins(instanceId, "moviepilot");
   const installMutation = useInstallAppPlugin();
+  const assetsQuery = useAppAssets(instanceId, "moviepilot");
+  const copyAssetsMutation = useCopyAppAssets();
   const [installingId, setInstallingId] = useState<string | null>(null);
+
+  const assets = assetsQuery.data;
 
   const rawEntry = (detail.app_configs?.["moviepilot"] ?? {}) as Record<
     string,
@@ -282,6 +289,92 @@ export function MoviePilotIntegrationPanel({
                   />
                 ))}
               </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      <Separator />
+
+      <div className="space-y-3">
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2 text-sm font-medium">
+            <HardDrive className="h-4 w-4 text-muted-foreground" />
+            离线数据
+          </div>
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-8 shrink-0 gap-1.5 rounded-lg"
+            onClick={() =>
+              copyAssetsMutation.mutate({
+                instanceId,
+                appName: "moviepilot",
+              })
+            }
+            disabled={
+              copyAssetsMutation.isPending ||
+              !assets?.supported ||
+              !assets?.container
+            }
+          >
+            {copyAssetsMutation.isPending ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Download className="h-3.5 w-3.5" />
+            )}
+            {assets?.copied ? "重新拷贝到容器" : "拷贝到容器"}
+          </Button>
+        </div>
+
+        <p className="text-xs text-muted-foreground">
+          插件依赖和浏览器内核会从资源镜像直接拷贝进容器，拷贝期间应用会短暂停止；容器重建后需要重新拷贝。
+        </p>
+
+        {assetsQuery.isLoading ? (
+          <div className="flex items-center justify-center gap-2 rounded-lg border border-border bg-muted/30 px-3 py-6 text-sm text-muted-foreground">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            正在查询离线数据状态…
+          </div>
+        ) : !assets?.supported ? (
+          <div className="rounded-lg border border-dashed border-border py-6 text-center text-xs text-muted-foreground">
+            当前应用没有可用的离线数据
+          </div>
+        ) : (
+          <div className="space-y-2 rounded-lg border border-border px-3 py-2.5">
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge
+                variant={assets.copied ? "secondary" : "outline"}
+                className={
+                  assets.copied
+                    ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+                    : "text-muted-foreground"
+                }
+              >
+                {assets.copied ? "已拷贝" : "未拷贝"}
+              </Badge>
+              {assets.copied_at && (
+                <span className="text-xs text-muted-foreground">
+                  拷贝于 {formatWiredAt(assets.copied_at)}
+                </span>
+              )}
+              {assets.assets_image && (
+                <span className="font-mono text-[11px] text-muted-foreground">
+                  {assets.assets_image}
+                </span>
+              )}
+            </div>
+            {(assets.copies ?? []).map((item) => (
+              <div
+                key={item.source}
+                className="flex items-center justify-between gap-2 text-xs text-muted-foreground"
+              >
+                <span>{item.label}</span>
+                <span>{item.size}</span>
+              </div>
+            ))}
+            {assets.message && (
+              <p className="text-xs text-amber-600">{assets.message}</p>
             )}
           </div>
         )}
