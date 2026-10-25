@@ -66,12 +66,12 @@ docker-compose up --build   # 构建并启动前后端容器（后端 :5001，�
 | 入口 | `main.py` | FastAPI 实例、lifespan（初始化DB）、CORS、路由注册、全局异常处理器 |
 | 配置 | `config.py` | pydantic-settings，从 `.env` 加载（APP_NAME/DATABASE_URL/SECRET_KEY/ACCESS_TOKEN_EXPIRE_MINUTES/PLUGIN_DIR/COMPOSE_WORKSPACE_DIR） |
 | 数据库 | `database.py` | SQLAlchemy 2.0 异步引擎(asyncpg/aiosqlite)、会话工厂、`get_db()` 依赖（自动 commit/rollback） |
-| API | `api/` | 路由模块（auth/app_store/settings），编排路由在 `api/orchestration/` 子包（orchestrations/deploy_tasks），Docker 路由按领域拆分为 `api/docker/` 子包 |
+| API | `api/` | 路由模块（auth/app_store/dashboard/settings），编排路由在 `api/orchestration/` 子包（orchestrations/deploy_tasks），Docker 路由按领域拆分为 `api/docker/` 子包 |
 | 核心 | `core/` | 基础设施：security(JWT+bcrypt)、custom_route(响应包装)、exceptions、background(后台任务)、task_manager(任务管理器基类 BaseTaskManager) |
-| 业务服务 | `services/` | 按功能域拆分：`docker/`（容器/镜像/宿主机/拉取任务）、`compose/`（Compose 编排/自动发现/YAML 工具）、`orchestration/`（编排与部署任务，service 按职责拆为 deploy/restore/importer/provisioning/instances mixin）、`apps/`（应用客户端）、`app_store/`、`host/`、`system/`（系统配置/存储路径解析/数据目录/端口分配） |
+| 业务服务 | `services/` | 按功能域拆分：`docker/`（容器/镜像/宿主机/拉取任务）、`compose/`（Compose 编排/自动发现/YAML 工具）、`orchestration/`（编排与部署任务，service 按职责拆为 deploy/restore/importer/provisioning/instances mixin）、`apps/`（应用客户端）、`app_store/`、`overview.py`（服务概览聚合与访问地址生成）、`host/`、`system/`（系统配置/存储路径解析/数据目录/端口分配） |
 | 模型 | `models/` | SQLAlchemy ORM 模型；Docker 相关模型按领域拆分为 `models/docker/` 子包 |
 | Schema | `schemas/` | Pydantic 请求/响应模型；Docker 与编排相关 Schema 分别拆分为 `schemas/docker/`、`schemas/orchestration/` 子包 |
-| 测试 | `tests/` | pytest，按领域分目录：core/、app_store/、docker/、orchestration/、system/ |
+| 测试 | `tests/` | pytest，按领域分目录：core/、app_store/、dashboard/、docker/、orchestration/、system/ |
 
 ### 前端分层（`frontend/src/`）
 
@@ -79,9 +79,9 @@ docker-compose up --build   # 构建并启动前后端容器（后端 :5001，�
 |---|---|---|
 | 入口 | `App.tsx` | QueryClientProvider + AuthProvider + ToastProvider + BrowserRouter + ProtectedRoute |
 | 布局 | `layouts/` | AppLayout(Sidebar+TopBar+Outlet)、Sidebar(导航)、TopBar |
-| 页面 | `pages/` | 按功能域组织子目录：`auth/`、`dashboard/`(含 components/)、`apps/`、`automation/`(自动化编排)、`docker/`(含 containers/images/stacks/host/shared)、`settings/` |
+| 页面 | `pages/` | 按功能域组织子目录：`auth/`、`dashboard/`（服务概览应用墙）、`apps/`、`automation/`(自动化编排)、`docker/`(含 containers/images/stacks/host/shared)、`settings/` |
 | 数据 | `hooks/` | React Query hooks，只做缓存/状态/toast/SSE；**不定义接口类型、不直接拼 URL**，请求一律调用 `api/` 层函数，类型从 `api/` re-export 以兼容既有 import |
-| API 封装 | `api/` | **所有后端请求的唯一入口**：按领域分文件（auth/apps/orchestrations/settings/directories/compose/docker），接口类型定义也在此，与后端 schemas 对齐只改这层。`types.ts` 导出共享 `ApiError` |
+| API 封装 | `api/` | **所有后端请求的唯一入口**：按领域分文件（auth/apps/dashboard/orchestrations/settings/directories/compose/docker），接口类型定义也在此，与后端 schemas 对齐只改这层。`types.ts` 导出共享 `ApiError` |
 | HTTP 实例 | `lib/api.ts` | Axios 实例：请求拦截器附加 Bearer token；响应拦截器校验 `success` 标识后解包 `data`；401 时仅当请求 token 与本地一致才清除并跳转 /login（防竞态） |
 | 工具 | `lib/utils.ts` | `cn()`(clsx+twMerge)、`formatBytes()`、`formatDate()` — Docker 页面统一从此导入 |
 | UI | `components/ui/` | shadcn/ui 组件（@base-ui/react 原语），不手动修改 |
@@ -192,6 +192,8 @@ DockerComposeProject 1--1 DockerComposeStack
 - 后端：POST 接口立即返回 `task_id`（`DeployTaskCreateResponse`），实际部署由 `services/orchestration/deploy_task_service.py` 在后台执行；进度通过 SSE `GET /api/deploy-tasks/{task_id}/events` 推送（事件内嵌 `_task_status` 标记完成/失败）。
 - 前端：`hooks/useDeployTasks.ts` 管理任务状态与 SSE 连接，`components/DeployProgressDialog.tsx` 通过 `DeployTaskContext` 全局监听并展示进度；发起部署的组件调用 `startTask(taskId)` 接入。
 - 镜像拉取有独立的任务机制（`pull_task_service` + `useAllPullProgress`），不复用部署任务通道。
+- 组合部署在创建实例组前预检并发槽位与 Compose 项目名：槽位不足或项目名被占用时直接返回 409，避免留下没有应用的空实例组。删除实例组时，即使部署失败导致项目未回写到实例的 `project_id`，也会按项目名兜底一并清理。
+- `group` 只是应用角色的展示分组（如播放器、阅读器），同一 group 内的应用可以同时选中部署；只有显式声明 `conflict_with` 的应用才互斥。
 
 ## 删除实例组与数据备份/恢复
 
@@ -200,23 +202,56 @@ DockerComposeProject 1--1 DockerComposeStack
 - 只备份应用自身的数据目录（应用数据目录下、以 Compose 项目名命名的直接子目录）；共享存储（媒体/下载等）与应用数据目录之外的路径不动。若未配置应用数据目录则跳过备份。
 - 备份目录内写入 `backup.json`（实例组、编排、删除时间、各应用 `config`、`app_configs` 凭据、`shared_config`、目录映射），用于恢复。
 - 恢复：`GET /api/orchestrations/backups?orchestration=<name>` 列出备份，`POST /api/orchestrations/backups/restore`（`{backup, instance_name?}`）把数据目录移回并按备份配置重新部署，凭据沿用备份（系统统一密码变化时用 `previous_password` 登录旧密码再改密）；实现见 `services/orchestration/restore.py`，前端入口为自动化页右上角「恢复」按钮（`pages/automation/AutomationRestoreDialog.tsx`）。恢复成功后备份目录被消费。恢复后的账号自动配置与集成装配由 `orchestration_provision` 进度任务持续展示，完成后自动刷新实例详情。
-- 重新部署（修复）不走备份：它有意保留数据卷，并继承上次部署的密钥类 env。
+- 重新部署（修复）不走备份：它有意保留数据卷，并继承上次部署的密钥类 env。修复时可只勾选需要重部署的应用（包括取消必选应用），未勾选的应用保持运行；后端 `_validate_composition(require_required=False)` 只校验所选应用。
 
-## 应用商店数据维护
+## 离线资源（客户端内置档案）
 
-- 应用定义存放在数据库 `apps` 表；批量收录的源文件在 `backend/scripts/apps_data/<name>.json`（格式见 `scripts/import_app.py` 的 `AppImportInput`），`_` 开头的文件（如参考样例）会被忽略。
-- 批量导入/更新：在 `backend/` 下执行 `PYTHONPATH=. .venv/bin/python -m scripts.import_apps_batch`。脚本逐文件校验模板与 schema，**同名应用为 upsert**；任一文件失败则整体回滚。
-- 新增应用时：参照 `apps_data/_reference_jellyfin.txt` 的范式（单服务 compose、`containers` 表单分组、`<name>_env` 环境变量数组），先写 JSON 再跑批量脚本，不要直接改库、不要写 migration。
-- 分类为自由字符串，前端标签硬编码在 `frontend/src/pages/apps/AppsTab.tsx`（CATEGORY_LABELS）与 `pages/apps/edit/form-types.ts`（CATEGORY_OPTIONS），新增分类需两处同步；当前已覆盖 movie/comic/book/music/game/gallery/news/download/docker/tool/media/network/web/other。
+- MoviePilot 这类应用启动时需要额外的插件依赖和浏览器内核，离线档案由客户端维护在 `services/apps/offline_assets.py`，管理端的应用模板保持官方原样，不再携带资源镜像/挂载信息。
+- 写盘时（`ComposeService._write_compose_file`）给匹配的服务注入固定镜像与离线环境变量（关闭程序/资源包/内核自动更新），因此实际落盘的 compose 与模板会略有差异。
+- 服务启动后 `_copy_offline_assets` 把资源镜像目录 `docker cp` 进容器：先从资源镜像解包到宿主机缓存 `<DATA_ROOT>/offline-assets/<镜像>`（docker 不支持容器间直接 cp，缓存按镜像复用），再 `docker cp` 进容器；拷贝期间先 `docker stop`，完成后 `docker start`。
+- 完成标记写在容器可写层 `/opt/venv/.nasdeck-assets`，标记一致则跳过。容器重建后标记丢失，会随下一次 `up` 自动重拷（命中本地缓存，不再解包镜像）。
+- 拷贝失败不阻断部署，只在进度里提示；用户可在应用详情页手动重试。
+- 前端入口：自动化实例详情 → MoviePilot → 集成 → 「离线数据」卡片；接口为 `GET/POST /api/orchestrations/instances/{id}/apps/{app}/assets[/copy]`，拷贝走后台任务并通过部署任务 SSE 展示进度。
+
+## 服务概览
+
+- 首页采用 sun-panel 式应用墙：顶部展示宿主机 CPU/内存/磁盘/运行时间与当前时间，下方按应用分类（`apps.category`，缺失时回落到编排分类）自动分组；前端展示名称与顺序见 `frontend/src/lib/categories.ts`。
+- 只展示真实存在的部署：平台应用按 Compose 项目关联的容器校验，导入应用按 `container_id`/`container_name` 校验；失败、已清理或没有容器的历史记录会被过滤，运行状态以 Docker 实际状态为准。
+- 接口 `GET /api/dashboard/overview`（`api/dashboard.py` + `services/overview.py`）只返回展示所需字段，不下发实例配置中的密码等敏感信息；`GET /api/dashboard/apps/{id}` 返回单个应用的容器基本信息（镜像、容器 ID/名称、项目、端口映射、启动时间）和实时监控指标（CPU、内存、网络、磁盘 I/O、进程数）。
+- 访问地址无需落库：优先使用实例配置中显式填写的 `url`，否则按当前请求主机名 + 实例端口自动生成（兼容 `ports` 端口数组、单端口字段及导入容器的 `host_port`）；编排实例组的 `app_configs.url` 仅作兜底。
+- 宿主机实时指标来自 `GET /api/docker/host/info`（`services/docker/host_service.py`）：`resources.cpu_usage_percent`、`resources.memory_used`、`uptime_seconds`、`load_average` 由 `/proc` 采样；前端 `useDockerHostInfo` 每 10 秒刷新。
+- 前端 `pages/dashboard/DashboardPage.tsx` 负责状态栏、应用墙、分类统计与搜索；卡片右上角「详情」按钮打开 `AppDetailDialog`，展示容器基本信息与监控指标，打开期间每 5 秒刷新；`hooks/useDashboard.ts` 每 60 秒刷新概览，部署任务完成后会主动失效 `["dashboard", "overview"]` 缓存。
+- 测试：`backend/tests/dashboard/`。
+
+## 应用市场数据同步
+
+- 应用定义由配套管理端（nas-deck-manage）维护，本仓库**不再提供应用创建/编辑/删除/图标上传**。原 `POST/PUT/DELETE /api/apps`、`POST /api/apps/preview-template`、`POST/GET /api/apps/{name}/icon` 接口与前端 `/appstore/create`、`/appstore/:name/edit` 页面均已移除。
+- 配置 `MANAGE_BASE_URL` 后，后端启动时与每 `MANAGE_SYNC_INTERVAL_MINUTES` 分钟从 `GET {MANAGE_BASE_URL}/api/public/apps` 拉取已发布应用，upsert 到本地 `apps` 表作为只读缓存（实现见 `services/catalog_sync.py` 的 `sync_apps`）。
+- 只同步带 `compose_template` 且通过模板 / Schema 校验的条目，校验失败仅告警跳过；管理端下架（远端不再返回）的应用会删除本地缓存，但只删非内置且没有部署实例的记录，远端返回空列表时不做清理；`is_builtin` 等本地字段保持不变。
+- 分类为自由字符串，前端展示名称与排序集中在 `frontend/src/lib/categories.ts`（应用市场与服务概览共用），新增分类需同步该文件；当前已覆盖 movie/comic/book/music/game/gallery/news/download/docker/tool/media/network/web/other。
+- 应用定义与应用目录 JSON 已整体迁移到管理端仓库：数据文件在 `nas-deck-manage/backend/app/data/apps/`，由管理端启动种子与 `scripts/import_apps.py` 导入；本仓库不再保留应用导入脚本。
+
+## Hosts 优选（AdGuard）
+
+- 系统设置页新增「Hosts 优选」Tab，配置保存在 `system_config.hosts_optimizer_*` 字段；支持手动运行与按间隔自动运行。
+- 后端服务：`services/system/hosts_optimizer_service.py`。通过 DNSPod DoH（`doh.pub` / `1.12.12.12`）获取候选 IP，配置了系统代理时再补充 Cloudflare / Google DoH；对候选 IP 做 TLS + HTTP 探测后，写入 AdGuard Home 的 DNS 重写（`/control/rewrite/*`）。
+- 接口：`GET/PUT /api/settings/hosts-optimizer/config`、`GET .../status`、`POST .../test`、`POST .../run`（同步执行，上限 180 秒）。
+- 调度器在 `main.py` lifespan 中启动，每 30 秒检查一次配置；`enabled && mode == "auto"` 且到达 `finished_at + interval` 时运行。配置保存后调用 `wake()` 立即重新判断。
+- 探测失败（某域名没有可用 IP）时保留 AdGuard 中已有的重写，避免临时网络抖动导致回退到被污染的默认解析。
+- **只对把 DNS 指向 AdGuard 的客户端生效**；本功能不写宿主机 `/etc/hosts`。Docker 容器需在 compose 中显式配置 `dns: [<AdGuard-IP>]`。
+- 管理端 AdGuard 应用默认映射 `3000 -> 3000`（初始化）与 `8080 -> 80`（管理界面），部署后可在本 Tab 填写 `http://<NAS-IP>:8080`。
+- 「影视自动化」方案（管理端 `movie`/`movie-auto` 与内置 `media-stack`，1.1.0 起）把 AdGuard Home 列为可选组件（分组「网络优化」），与 MoviePilot、qBittorrent 等一起部署；已有实例可在「升级」时勾选安装。
+- 方案中 AdGuard 固定使用稳定版 `adguard/adguardhome:v0.107.79`（与 1.23 上实际运行的版本一致），不使用 `latest`。
+- AdGuard 应用定义标记 `x-fixed-ports`（`config_schema` 顶层），`app_service._validate_and_prepare` 会跳过顺序端口分配，保留 53、3000、8080 等端口；否则 DNS 会被改到高位端口导致无法作为局域网 DNS 使用。固定端口在部署前会检测占用并纳入预留表，避免同批部署的其他应用分配到同一端口；前端端口建议（`lib/schema-utils.ts`）同样跳过 `x-fixed-ports` 应用。
+- 测试：`backend/tests/system/test_hosts_optimizer.py`。
 
 ## 应用商店图标规则
 
 - 内置/本地应用图标统一放在 `frontend/public/icons/apps/<app-name>.svg`，Vite 构建时会自动复制到 `dist/icons/apps/`。
 - 前端统一使用 `frontend/src/pages/apps/AppIcon.tsx` 渲染图标：
-  - 当 `app.icon` 为 `http/https` 外链或以 `/` 开头的本地路径（如后端上传图标接口 `/api/apps/{name}/icon`）时直接使用；
-  - 其他情况（空值）一律回退到 `/icons/apps/${app.name}.svg`。
-- **用户上传的图标**例外：通过 `POST /api/apps/{name}/icon`（仅管理员）上传，后端保存到 `APP_ICON_DIR`（默认 `./data/app-icons/<name>.<ext>`），并由 `GET /api/apps/{name}/icon` 匿名提供（`<img>` 标签无法携带 Bearer token）；上传后 `apps.icon` 自动更新为该接口路径。内置图标仍不走后端接口。
-- 新增或替换内置图标时，无需修改数据库，只要按应用名放置/替换 svg 文件即可。
+  - 当 `app.icon` 为 `http/https` 外链或以 `/` 开头的本地路径时直接使用；
+  - 其他情况（空值或管理端的图标标识）一律回退到 `/icons/apps/${app.name}.svg`。
+- 管理端下发的图标会覆盖本地 `apps.icon`，更换图标无需修改数据库，按应用名放置/替换 svg 文件即可。
 
 ## 应用客户端与认证检测
 
@@ -238,27 +273,63 @@ DockerComposeProject 1--1 DockerComposeStack
   ```
 
 - `verify_auth(config: dict)` 接收编排实例中保存的认证配置（`url`、`auth_type`、`username`、`password`、`api_key` 等），返回 `AuthVerifyResult(valid, message)`。
+- 认证方式枚举统一为 `none` / `basic` / `api_key`（历史数据里的 `apikey` 客户端均兼容）。编排实例的 `app_configs` 里账号密码与 API Key 可以同时存在，`auth_type` 只标记当前生效的一套；切换认证方式或保存配置都不会清除另一套凭据，账号自动配置也只在 `auth_type` 为空或 `none` 时补成 `basic`，不覆盖用户显式选择的 `api_key`。
 - 统一检测入口为 `POST /api/orchestrations/auth/verify`，由 `orchestration_service.verify_app_auth()` 根据 `app_name` 调度对应客户端。
 - 新增应用时，只需新增客户端子包并注册，无需修改 API 路由或 Service 调度逻辑。
-- 当前已注册客户端：`moviepilot`、`qbittorrent`、`jellyfin`（`emby` 复用）、`comic-auto`、`komga`、`kavita`。
+- 当前已注册客户端：`moviepilot`、`qbittorrent`、`jellyfin`（`emby` 复用）、`comic-auto`、`komga`、`kavita`、`music-dl`、`music-tag-web`、`navidrome`、`reader`、`ermao-library`。
 
 ### 应用检测/优化与自动装配
 
 - `AppClient.inspect(ctx)` / `apply_fix(ctx, item_ids)` 提供每应用检测项与一键修复（qBittorrent 优化项、Jellyfin 库/Webhook、MoviePilot 装配完整性）；调度入口为 `GET/POST /api/orchestrations/instances/{id}/apps/{app}/inspect[/fix]`。
 - 部署/修复后 `WiringMixin._wire_group` 按编排模板 `app_composition` 条目里的 `integrations` 声明自动装配跨应用集成（当前：把 qBittorrent、Jellyfin/Emby 写入 MoviePilot 的 `Downloaders`/`MediaServers` 系统设置），结果落库 `group.app_configs[app]['integrations']`；手动重跑：`POST /api/orchestrations/instances/{id}/wire`。
-- 手动重跑装配会先执行 `ProvisionMixin._reprovision_pending`：对 `app_configs` 里尚未 `provisioned` 的应用补做账号自动配置（复用统一密码和部署配置里的 `API_TOKEN`），覆盖后端重启导致后台配置协程中断的场景，然后再装配。
+- 手动重跑装配会先执行 `ProvisionMixin._reprovision_pending`：对 `app_configs` 里尚未 `provisioned` 的应用补做账号自动配置（复用统一密码和部署配置里的 `API_TOKEN`），覆盖后端重启导致后台配置协程中断的场景，然后再装配。手动重跑同样返回进度任务 ID（`POST .../wire` 的 `task_id`），前端会把它接入全局进度弹窗。
+- 自动配置的等待策略（`ProvisionMixin`）：部署凭据在开始配置前先写入 `app_configs`（已有密码保持不变，仅在成功后更新为目标密码；失败时保留旧密码，保证「重新装配」能用当前有效密码登录后改密）；配置期间每 15 秒刷新一次进度并附带容器日志尾行（`PROVISION_HEARTBEAT_SECONDS`），避免 MoviePilot 首次启动下载浏览器内核等长耗时场景被误判超时；首次失败后若容器仍在运行，按 `PROVISION_RETRY_DELAYS`（60/180/300 秒）自动重试。
+- 需要容器内执行命令的应用（如 Music Tag Web 免费版改密）通过 `AppClient.provision(command_runner=...)` 使用调度方注入的回调，客户端本身不依赖 Docker SDK；回调实现为 `ProvisionMixin._make_command_runner`（`container.exec_run`）。
+- 客户端首次启动超时：MoviePilot 首次启动会下载 200MB+ 浏览器内核，`PROVISION_TIMEOUT` 为 3600 秒；Jellyfin 首次初始化数据库较慢，为 1800 秒。服务暂时返回 5xx（如 Jellyfin `503`）时继续轮询而不是抛出；Jellyfin 的 `/Startup/User` 在服务未初始化完成时可能返回 404，此时不能视为向导已完成，必须重试。
 - 部署/修复/恢复后的自动配置与装配通过独立的进度跟踪任务（`orchestration_provision`）推送：`_schedule_provisioning` 创建任务并把 ID 追加到部署响应的 `task_ids`，前端进度弹窗依次展示「等待部署 → 配置账号 → 自动装配 → 完成」。跟踪任务不占用并发部署槽位（`create_task(..., enforce_limit=False)`），完成时刷新实例详情，因此恢复后无需再手动点「重新装配」。
 - MoviePilot 插件管理：`GET/POST /api/orchestrations/instances/{id}/apps/moviepilot/plugins[/install]`。
-- 前端：`AppConfigPanel` 分 Tab（概览/检测优化/集成），检测面板 `AppInspectPanel`、MoviePilot 集成面板 `MoviePilotIntegrationPanel` 均在 `pages/automation/`。
+- 前端：`AppConfigPanel` 分 Tab（概览/检测优化/自动整理/自动同步/集成），应用头部提供「编排日志」按钮（复用 `StackLogsDialog` 查看该应用 Compose 项目日志），检测面板 `AppInspectPanel`、MoviePilot 集成面板 `MoviePilotIntegrationPanel`、Music Tag Web 自动整理面板 `MusicAutoOrganizePanel`、Reader 自动同步面板 `ReaderAutoSyncPanel` 均在 `pages/automation/`。
 
 ### 漫画自动化（Comic Auto + Komga/Kavita）
 
-- 编排模板为 `comics-stack`（`category=comics`），组合为 `comic-auto`（必选）+ `komga` / `kavita`（可选，`group=reader`）。
-- 应用数据：`scripts/apps_data/comic-auto.json`、`scripts/apps_data/kavita.json`，Komga 复用已有 `komga.json`；图标在 `frontend/public/icons/apps/<name>.svg`。
-- 初始化模板（幂等）：`PYTHONPATH=. .venv/bin/python -m scripts.init_comics_orchestration`；应用缺失时先执行 `PYTHONPATH=. .venv/bin/python -m scripts.import_apps_batch`。
+- 编排模板为 `comics-stack`（`category=comics`），组合为 `comic-auto`（必选）+ `komga` / `kavita`（可选，`group=阅读器`）。分组名由管理端填写、原样展示，不再做英文映射。
+- 应用数据由配套管理端（nas-deck-manage）下发并缓存到本地 `apps` 表；图标在 `frontend/public/icons/apps/<name>.svg`。
+- 应用与编排模板数据均由配套管理端（nas-deck-manage）下发：配置 `MANAGE_BASE_URL` 后，后端定时从 `GET {MANAGE_BASE_URL}/api/public/apps` 与 `GET {MANAGE_BASE_URL}/api/public/automations` 拉取并 upsert 到本地 `apps` / `app_orchestrations` 表作为只读缓存（实现见 `services/catalog_sync.py`）。
 - 共享存储：`comics` 宿主机目录统一挂载到各容器 `/mnt/media`；Comic Auto 下载目录 `/mnt/media/down` 与 Komga / Kavita 媒体库目录一致，缓存目录 `/mnt/media/cache`，新章节下载后可直接被媒体库扫描入库。
 - 账号自动配置：Comic Auto 通过 `/api/v1/app/init/setup/` 创建管理员；Komga 通过 `/api/v1/claim` claim 服务器并创建 API Key；Kavita 通过 `/api/Account/register` 注册首个管理员，登录接口返回 API Key。
 - 自动装配：`comic-auto` 条目的 `integrations` 声明 Komga/Kavita 为 `mediaserver`，部署后由 `ComicAutoClient.setup_mediaserver` 写入媒体服务器、下载目录与缓存目录；结果落在 `group.app_configs['comic-auto']['integrations']`。Comic Auto 使用账号密码换取 JWT 完成装配，因此客户端标记 `requires_api_key = False`。
+
+### 音乐自动化（music-dl + Music Tag Web + Navidrome）
+
+- 编排模板为 `music-auto`（`category=music`），组合为 `music-dl`（下载）+ `music-tag-web`（整理）+ `navidrome`（可选播放器）。共享卷约定：`downloads` 下载、`library` 曲库、`playlists` 歌单。
+- 账号自动配置：music-dl 首次启动会在容器日志输出一次性 `Web setup token`，`MusicDLClient` 解析后调用 `POST /music/setup` 创建管理员；已初始化时直接用账号密码登录。music-dl 没有改密接口，配置卷复用时若统一密码与旧密码不一致，会明确失败并提示手动重置或重新部署数据卷。
+- 账号自动配置：Music Tag Web 内置默认管理员 `admin/admin`，`MusicTagWebClient` 先尝试统一密码，失败后回退默认账号；免费版（V1）的用户管理接口返回 403，改密通过容器内 `python manage.py shell` 执行 Django `set_password`（由 `ProvisionMixin._make_command_runner` 注入的命令回调完成），随后用新密码复验。
+- 账号自动配置：Navidrome 首次启动没有管理员，`NavidromeClient` 通过 `POST /auth/createAdmin` 创建；已有管理员时登录后用 `PUT /api/user/{id}` 同步统一密码。
+- 目录自动配置：从实例组 `shared_config.volumes` 的容器挂载路径推导 music-dl 下载目录（优先 `/app/media/downloads`，其次 `/mnt/music/downloads`），登录后通过 `POST /music/settings` 写入 `downloadDir`，结果落库 `group.app_configs['music-dl']['download_dir']`，前端概览页展示。Music Tag Web 与 Navidrome 的曲库目录由共享卷和 `ND_MUSICFOLDER` 提供，无需额外写入应用设置。
+- 认证检测：`MusicDLClient` / `MusicTagWebClient` / `NavidromeClient` 均使用账号密码登录校验，不支持 API Key。
+- 自动刮削/整理（集成在 NasDeck 内）：免费版 V1 不开放后台刮削配置接口（`/apimt/sys/background_scrape_configs/` 返回 403），但网页端单次操作使用的 `/apimt/batch_auto_update_id3/` 与 `/apimt/tidy_folder/` 可用。实现在 `services/orchestration/music_auto.py`，通过 `MusicTagWebSession` 调用这两个接口，整理后可选触发 Navidrome `startScan`；不修改应用镜像。
+  - 配置保存在 `group.app_configs['music-tag-web']['auto_organize']`（目录、间隔、音乐源、写入字段、目录层级等），由 `main.py` lifespan 启动的后台调度器按间隔执行，也可从自动化页手动触发。
+  - 目录默认从应用实例的真实挂载推导（优先 `/app/media/downloads` 与 `/app/media/music`），在 `AppConfigPanel` 的「自动整理」Tab 中编辑。
+  - 文件处理状态与失败退避存于 `music_auto_organize_files` 表；接口为 `GET/PUT /api/orchestrations/instances/{id}/apps/music-tag-web/auto-organize` 与 `POST .../auto-organize/run`。
+  - 定时触发使用 `force=False`：新发现的文件按 Music Tag Web 返回的 mtime（用容器 `TZ` 解释）判断是否已稳定，已放够 `min_age_seconds` 的文件当轮处理，仍在写入的文件留到下一轮；手动触发 `force=True` 会立即处理。
+  - 旧的 `scripts/music_auto_pipeline.py` 与 cron 方案已由上述服务取代，避免重复处理同一批文件。
+
+### 书籍自动化（Reader + 二毛读书）
+
+- 编排模板为 `book-auto`（`category=books`），组合为 `reader`（书源/书架）+ `ermao-library`（书库）。
+- 自动同步（集成在 NasDeck 内）：原先由 `nas-deck-manage/apps/reader/3.2.14` 镜像内置的 Book Bridge 移植到后端，不再需要构建/推送改造镜像。实现在 `services/orchestration/reader_auto.py`：
+  - `ReaderSession` 调用 Reader 的 `/reader3/getShelfBookWithCacheInfo`、`getChapterList`、`getBookContent`、`exportBook`，补齐缺失章节后导出 EPUB；
+  - `ErmaoClient` 负责二毛的初始化、登录、书库列表/创建、`/api/libraries/{id}/scan` 与导入任务轮询；
+  - `fix_epub`（`services/apps/reader/epub.py`）转义裸 `&`、剔除非法 XML 控制字符，并按 `mimetype` 首条且 STORED 重新打包。
+- 账号自动配置：`ReaderAppClient` 在部署时通过 `reader_env` 注入 `READER_APP_SECURE=true` 开启登录认证，首次调用 `/reader3/login`（`isLogin=false`）注册管理员，已有账号直接登录。Reader 每次登录都会轮换 `accessToken`，因此只落库用户名/密码，不保存令牌；自动同步每次用账号密码重新登录。统一密码变化时会先尝试用旧密码登录并调用 `/reader3/resetPassword`，未配置 `READER_APP_SECUREKEY` 时该管理接口不可用，会提示手动重置密码或重新部署数据卷。
+- 账号自动配置：`ErmaoLibraryClient` 通过 `/api/auth/setup` 创建首个管理员（邮箱密码），已初始化时登录并用 `/api/auth/account/password` 同步统一密码；普通用户名映射为 `<用户名>@example.com`，实际生效的邮箱写入 `app_configs`。
+- 自动同步优先使用 `app_configs` 中已完成自动配置的账号（`reader` 的用户名/密码、`ermao-library` 的邮箱/密码），面板里首次运行前生成的旧密码不会再覆盖真实账号。
+- 配置保存在 `group.app_configs['reader']['auto_sync']`，由 `main.py` lifespan 启动的后台调度器按间隔执行，也可从自动化页手动触发。
+  - 地址、书库目录与二毛书库目录默认从运行中容器的真实挂载和同组二毛配置推导（Docker 不可用时回退到实例配置），在 `AppConfigPanel` 的「自动同步」Tab 中可一键填入或手动修改。
+  - 首次运行遇到二毛尚未初始化时，可用配置中的邮箱/密码自动创建管理员和书库（`auto_setup`）；已有账号时直接登录，失败会明确提示填写原密码。
+  - 书籍导出状态与失败退避存于 `reader_auto_sync_books` 表；接口为 `GET/PUT /api/orchestrations/instances/{id}/apps/reader/auto-sync` 与 `POST .../auto-sync/run`。
+  - 后端需要能写到书库的宿主机目录（当前 PM2 部署直接可写；Docker 部署后端时需把该目录按相同路径挂载进 backend 容器）。
+  - 旧的 `apps/reader/3.2.14` 镜像与 `BRIDGE_*` 环境变量不再参与运行，Reader 使用官方 `hectorqin/reader:latest` 即可。
 
 ### 前端
 
