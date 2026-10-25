@@ -8,4 +8,6 @@ export PYTHONPATH="$BACKEND_DIR"
 
 cd "$BACKEND_DIR"
 "$BACKEND_DIR/.venv/bin/python" -m alembic upgrade head
-exec "$BACKEND_DIR/.venv/bin/python" -m uvicorn app.main:app --reload --host 0.0.0.0 --port 5001 --lifespan off
+# 保留 lifespan：数据库 reconciliation、目录同步与音乐自动整理调度器
+# 都依赖启动/关闭钩子，关闭后定时任务不会运行。
+exec "$BACKEND_DIR/.venv/bin/python" -m uvicorn app.main:app --reload --host 0.0.0.0 --port 5001

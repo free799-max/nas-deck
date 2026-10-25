@@ -20,6 +20,19 @@ def _open_registration(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _valid_license_by_default(request, monkeypatch):
+    """既有用例默认持有有效授权，授权专项测试使用真实门禁。"""
+    if "licensing" in request.node.path.parts:
+        return
+    from app.services.licensing import licensing_service
+
+    async def valid_license(db):
+        return {"valid": True, "status": "active"}
+
+    monkeypatch.setattr(licensing_service, "require_valid", valid_license)
+
+
+@pytest.fixture(autouse=True)
 def _restore_docker_client():
     """docker_manager 为全局单例且客户端惰性缓存，
     测试间需还原缓存的客户端，避免 mock 泄漏到后续测试。"""
@@ -28,6 +41,17 @@ def _restore_docker_client():
     original = docker_manager._client_obj
     yield
     docker_manager._client_obj = original
+
+
+@pytest.fixture(autouse=True)
+def _reset_deploy_tasks():
+    """部署任务管理器是全局单例，测试间清空任务避免残留任务互相影响。"""
+    from app.services.orchestration.deploy_task_service import deploy_task_manager
+
+    with deploy_task_manager._lock:
+        deploy_task_manager._tasks.clear()
+        deploy_task_manager._listeners.clear()
+    yield
 
 
 @pytest_asyncio.fixture

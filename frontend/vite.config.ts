@@ -47,7 +47,8 @@ export default defineConfig({
     proxy: {
       "/api": {
         target: "http://localhost:5001",
-        changeOrigin: true,
+        // 保留浏览器的 Host，后端据此生成服务跳转链接的内网地址
+        changeOrigin: false,
         ws: true,
       },
     },
