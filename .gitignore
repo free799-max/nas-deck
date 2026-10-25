@@ -27,6 +27,10 @@ Thumbs.db
 # Internal tools
 .zcf/
 .playwright-mcp/
+.image-tools/
+
+# 本地生成的图片产物
+generated-images/
 
 # 数据库与运行时产物（仅数据目录，不影响 frontend/public 下的项目图标资源）
 *.db
