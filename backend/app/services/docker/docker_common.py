@@ -112,15 +112,20 @@ class BaseDockerService:
 
         config = container.attrs.get("Config", {}) or {}
 
-        ports_summary = ""
         network_settings = container.attrs.get("NetworkSettings", {}) or {}
         port_bindings = network_settings.get("Ports") or {}
         parts = []
+        structured_bindings = []
         for container_port, bindings in port_bindings.items():
             if isinstance(bindings, list):
                 for binding in bindings:
                     host_ip = binding.get("HostIp", "0.0.0.0")
                     host_port = binding.get("HostPort", "")
+                    structured_bindings.append({
+                        "container_port": container_port,
+                        "host_ip": host_ip,
+                        "host_port": host_port,
+                    })
                     if host_ip == "0.0.0.0":
                         parts.append(f"{host_port}:{container_port}")
                     else:
@@ -135,6 +140,7 @@ class BaseDockerService:
             "health": health,
             "image": str(container.image.tags[0]) if container.image.tags else "unknown",
             "ports": ports_summary,
+            "port_bindings": structured_bindings,
             "created": container.attrs.get("Created", ""),
             "labels": config.get("Labels") or {},
         }

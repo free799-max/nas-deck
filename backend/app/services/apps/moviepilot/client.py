@@ -22,8 +22,11 @@ class MoviePilotClient(MoviePilotIntegrationMixin, MoviePilotInspectionMixin, Ap
 
     name = "moviepilot"
     TIMEOUT = 10.0
-    # MoviePilot 首次启动初始化耗时较长（依赖安装、数据库迁移）
-    PROVISION_TIMEOUT = 600.0
+    # 首次启动会下载 200MB+ 的浏览器内核并初始化数据库，慢网络下可能
+    # 超过 30 分钟；给足等待时间，避免刚部署完就判失败
+    PROVISION_TIMEOUT = 3600.0
+    # 登录被拒且没有旧密码可改密时，再等下去大概率不会恢复
+    AUTH_FAILURE_GRACE_SECONDS = 120.0
     supports_provision = True
 
     async def provision(
@@ -48,10 +51,13 @@ class MoviePilotClient(MoviePilotIntegrationMixin, MoviePilotInspectionMixin, Ap
             return ProvisionResult(ok=False, message="访问地址不能为空")
 
         deadline = time.monotonic() + self.PROVISION_TIMEOUT
+        auth_deadline: float | None = None
         last_error = "服务未就绪"
         password_change_attempted = False
 
         while time.monotonic() < deadline:
+            # 心跳读取该状态，避免进度里只有容器日志看不出卡在哪一步
+            self.last_status = last_error
             try:
                 async with httpx.AsyncClient(
                     timeout=self.TIMEOUT,
@@ -90,6 +96,15 @@ class MoviePilotClient(MoviePilotIntegrationMixin, MoviePilotInspectionMixin, Ap
                                 last_error = change_error
                         else:
                             last_error = "登录被拒绝，管理员可能尚未初始化完成"
+                            if auth_deadline is None:
+                                auth_deadline = (
+                                    time.monotonic()
+                                    + self.AUTH_FAILURE_GRACE_SECONDS
+                                )
+                            elif time.monotonic() >= auth_deadline:
+                                return ProvisionResult(
+                                    ok=False, message=last_error
+                                )
                     else:
                         last_error = f"服务响应异常: HTTP {token_resp.status_code}"
             except httpx.RequestError as exc:
@@ -153,7 +168,7 @@ class MoviePilotClient(MoviePilotIntegrationMixin, MoviePilotInspectionMixin, Ap
         auth_type = config.get("auth_type") or "none"
 
         try:
-            if auth_type == "api_key":
+            if auth_type in ("api_key", "apikey"):
                 return await self._verify_api_key(base_url, config.get("api_key", ""))
             if auth_type == "basic":
                 return await self._verify_basic(

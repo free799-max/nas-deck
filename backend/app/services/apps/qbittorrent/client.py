@@ -75,6 +75,8 @@ class QBittorrentClient(QBittorrentInspectionMixin, AppClient):
         last_error = "服务未就绪"
 
         while time.monotonic() < deadline:
+            # 心跳读取该状态，避免进度里只有容器日志看不出卡在哪一步
+            self.last_status = last_error
             try:
                 async with httpx.AsyncClient(
                     timeout=self.TIMEOUT,
@@ -179,7 +181,7 @@ class QBittorrentClient(QBittorrentInspectionMixin, AppClient):
         auth_type = config.get("auth_type") or "none"
 
         try:
-            if auth_type == "api_key":
+            if auth_type in ("api_key", "apikey"):
                 return await self._verify_api_key(
                     base_url,
                     config.get("api_key", ""),

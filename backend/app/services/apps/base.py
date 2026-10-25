@@ -23,6 +23,8 @@ class ProvisionResult:
     #: 实际生效的用户名。部分应用会改写用户名（如 Komga 使用邮箱登录），
     #: 由客户端回传后写入 app_configs，保证后续检测/装配使用正确凭据。
     username: str | None = None
+    #: 实际写入应用的业务目录（如 music-dl 的下载目录）。
+    download_dir: str | None = None
 
 
 @dataclass
@@ -62,6 +64,13 @@ class FixResultItem:
 # 读取容器日志的异步回调，由调度方注入（避免客户端依赖 docker SDK）
 LogsReader = Callable[[], Awaitable[str]]
 
+# 在应用主容器内执行命令的异步回调，返回 (退出码, 输出)。
+# 参数依次为命令、环境变量、工作目录；由调度方注入（避免客户端依赖 docker SDK）。
+CommandRunner = Callable[
+    [list[str], dict[str, str] | None, str | None],
+    Awaitable[tuple[int, str]],
+]
+
 
 class AppClientError(Exception):
     """应用客户端内部异常。"""
@@ -83,6 +92,9 @@ class AppClient(ABC):
     #: 是否支持部署后自动配置账号密码/API Key
     supports_provision: bool = False
 
+    #: 自动配置最近一次等待/失败原因，供调度方在进度心跳中展示
+    last_status: str | None = None
+
     @abstractmethod
     async def verify_auth(self, config: dict) -> AuthVerifyResult:
         """校验应用访问地址与认证信息是否有效。"""
@@ -97,6 +109,8 @@ class AppClient(ABC):
         logs_reader: LogsReader | None = None,
         previous_password: str | None = None,
         host_header_port: int | None = None,
+        download_dir: str | None = None,
+        command_runner: CommandRunner | None = None,
     ) -> ProvisionResult:
         """把统一账号密码/API Key 配置进真实服务并复验。
 
@@ -111,6 +125,10 @@ class AppClient(ABC):
             host_header_port: 容器内 WebUI 监听端口。Docker 端口映射导致
                 Host 头端口与监听端口不一致时，qBittorrent 5.x 的 Host 头
                 校验会拒绝请求，需按此端口伪装 Host/Referer 头
+            download_dir: 编排共享目录对应的容器内下载目录（如 music-dl），
+                未配置共享目录时为空，由应用保留自身默认值
+            command_runner: 在应用主容器内执行命令的回调（如 Music Tag Web
+                免费版无法通过 API 改密时，改用 Django 管理命令写入）
         """
         return ProvisionResult(ok=False, message="该应用不支持自动配置")
 

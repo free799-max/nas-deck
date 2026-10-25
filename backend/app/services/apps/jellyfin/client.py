@@ -21,7 +21,10 @@ class JellyfinClient(JellyfinInspectionMixin, AppClient):
 
     name = "jellyfin"
     TIMEOUT = 10.0
-    PROVISION_TIMEOUT = 300.0
+    # 首次启动要初始化数据库与元数据，慢机器上可能超过 10 分钟
+    PROVISION_TIMEOUT = 1800.0
+    # 向导已完成但账号密码不匹配时，无需继续等到超时
+    AUTH_FAILURE_GRACE_SECONDS = 60.0
     supports_provision = True
 
     async def provision(
@@ -45,10 +48,14 @@ class JellyfinClient(JellyfinInspectionMixin, AppClient):
             return ProvisionResult(ok=False, message="访问地址不能为空")
 
         deadline = time.monotonic() + self.PROVISION_TIMEOUT
+        auth_deadline: float | None = None
         last_error = "服务未就绪"
         wizard_handled = False
+        wizard_completed = False
 
         while time.monotonic() < deadline:
+            # 心跳读取该状态，避免进度里只有容器日志看不出卡在哪一步
+            self.last_status = last_error
             try:
                 async with httpx.AsyncClient(
                     timeout=self.TIMEOUT,
@@ -59,29 +66,74 @@ class JellyfinClient(JellyfinInspectionMixin, AppClient):
                         last_error = f"服务响应异常: HTTP {public.status_code}"
                         await asyncio.sleep(5)
                         continue
+                    try:
+                        public_info = public.json()
+                    except json.JSONDecodeError:
+                        public_info = {}
 
-                    if not wizard_handled:
-                        wizard_handled = True
+                    if not wizard_handled and not public_info.get(
+                        "StartupWizardCompleted"
+                    ):
                         user_resp = await client.post(
                             f"{base_url}/Startup/User",
                             json={"Name": username, "Password": password},
                         )
                         if user_resp.status_code in (200, 204):
                             # 完成向导（失败不致命：管理员已创建）
-                            await client.post(f"{base_url}/Startup/Complete")
-                        elif user_resp.status_code not in (400, 401, 403, 404):
+                            complete_resp = await client.post(
+                                f"{base_url}/Startup/Complete"
+                            )
+                            wizard_completed = complete_resp.status_code in (
+                                200,
+                                204,
+                            )
+                            wizard_handled = True
+                        elif user_resp.status_code in (400, 401, 403):
+                            # 已有管理员账号，降级为直接验证目标凭据
+                            wizard_handled = True
+                        else:
+                            # 404/5xx 说明服务还没初始化完成（如 Jellyfin 12
+                            # 首次启动），不能据此认定向导已结束，下一轮重试
                             last_error = (
                                 f"创建管理员失败: HTTP {user_resp.status_code}"
                             )
                             await asyncio.sleep(5)
                             continue
-                        # 4xx 视为向导已完成，直接进入凭据验证
 
                     login_resp = await client.post(
                         f"{base_url}/Users/AuthenticateByName",
                         headers={"Authorization": self._AUTHORIZATION_HEADER},
                         json={"Username": username, "Pw": password},
                     )
+                    if login_resp.status_code == 200:
+                        try:
+                            login_data = login_resp.json()
+                        except json.JSONDecodeError:
+                            login_data = {}
+                        token = login_data.get("AccessToken")
+                        if not token:
+                            last_error = "登录接口未返回 Token"
+                            await asyncio.sleep(5)
+                            continue
+                        if (
+                            not public_info.get("StartupWizardCompleted")
+                            and not wizard_completed
+                        ):
+                            # 管理员已存在（复用配置卷）时向导标记可能仍未写入，
+                            # 补一次完成请求，避免 Web UI 继续展示初始化向导
+                            complete_resp = await client.post(
+                                f"{base_url}/Startup/Complete"
+                            )
+                            wizard_completed = complete_resp.status_code in (
+                                200,
+                                204,
+                            )
+                        return ProvisionResult(
+                            ok=True,
+                            message="账号已配置并验证通过",
+                            api_key=token,
+                        )
+
                     if login_resp.status_code in (401, 403):
                         # 配置卷复用（修复）时服务当前密码是旧密码：
                         # 用旧密码登录后改为目标密码
@@ -90,21 +142,23 @@ class JellyfinClient(JellyfinInspectionMixin, AppClient):
                                 client, base_url, username, previous_password, password
                             )
                             if changed:
+                                auth_deadline = None
                                 continue
                         last_error = "登录失败，服务可能已有其他管理员账号"
-                        await asyncio.sleep(5)
-                        continue
-                    login_resp.raise_for_status()
-                    token = login_resp.json().get("AccessToken")
-                    if not token:
-                        last_error = "登录接口未返回 Token"
-                        await asyncio.sleep(5)
-                        continue
-                    return ProvisionResult(
-                        ok=True,
-                        message="账号已配置并验证通过",
-                        api_key=token,
-                    )
+                        # 向导已完成仍登录失败，再等下去大概率也不会恢复
+                        if auth_deadline is None:
+                            auth_deadline = (
+                                time.monotonic() + self.AUTH_FAILURE_GRACE_SECONDS
+                            )
+                        elif time.monotonic() >= auth_deadline:
+                            return ProvisionResult(ok=False, message=last_error)
+                    elif login_resp.status_code >= 500:
+                        # 服务启动中（Jellyfin 初始化时会短暂返回 503），继续等待
+                        last_error = f"服务启动中: HTTP {login_resp.status_code}"
+                    else:
+                        last_error = (
+                            f"登录接口响应异常: HTTP {login_resp.status_code}"
+                        )
             except httpx.RequestError as exc:
                 last_error = f"无法连接到应用: {exc}"
             await asyncio.sleep(5)
@@ -164,7 +218,7 @@ class JellyfinClient(JellyfinInspectionMixin, AppClient):
         auth_type = config.get("auth_type") or "none"
 
         try:
-            if auth_type == "api_key":
+            if auth_type in ("api_key", "apikey"):
                 return await self._verify_api_key(base_url, config.get("api_key", ""))
             if auth_type == "basic":
                 return await self._verify_basic(
