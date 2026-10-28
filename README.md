@@ -1,6 +1,6 @@
 # NasDeck
 
-NAS 管理平台：Docker 容器/镜像/Compose Stack 管理、应用商店（内置 NAS 应用模板一键部署）、自动化编排与看板视图。前后端分离，支持 docker compose 一键部署。
+NAS 管理平台：Docker 容器/镜像/Compose Stack 管理、应用商店（内置 NAS 应用模板一键部署）、自动化编排与看板视图。开发时前后端分离，生产环境合并为一个应用容器，支持 Docker Compose 一键部署。
 
 ## 技术栈
 
@@ -10,9 +10,14 @@ NAS 管理平台：Docker 容器/镜像/Compose Stack 管理、应用商店（�
 | 数据库 | PostgreSQL 16（asyncpg 异步驱动）+ Alembic 迁移 |
 | 前端 | React 19 + TypeScript + Vite + Tailwind CSS + shadcn/ui（pnpm 管理）|
 | 认证 | JWT Bearer Token + bcrypt（首个注册用户自动成为管理员）|
-| 部署 | Docker + docker compose（前端 nginx 静态托管并反代 /api）|
+| 部署 | Docker + Docker Compose（前端静态文件与 FastAPI 合并到同一应用容器）|
 
 ## Docker Compose 部署（推荐）
+
+生产环境只启动两个容器：
+
+- `app`：Nginx 对外提供前端并反代 `/api`，容器内运行 FastAPI；启动时自动执行数据库迁移。
+- `postgres`：PostgreSQL 16，仅加入内部网络，不向宿主机暴露端口。
 
 环境要求：Docker 与 Docker Compose v2.24+。
 
@@ -20,20 +25,72 @@ NAS 管理平台：Docker 容器/镜像/Compose Stack 管理、应用商店（�
 git clone <仓库地址>
 cd nas-deck
 
-# 复制环境变量模板，至少修改 POSTGRES_PASSWORD 与 SECRET_KEY
 cp .env.example .env
+# 必填：POSTGRES_PASSWORD、SECRET_KEY
 $EDITOR .env
 
-# 构建并启动全部服务（postgres + backend + frontend）
 docker compose up --build -d
+docker compose ps
 ```
 
-- 前端入口：`http://localhost:5000`
-- 后端 API：`http://localhost:5001`（文档见 `/docs`）
-- 数据持久化：PostgreSQL 使用命名卷 `postgres_data`；应用数据（Compose 工作区、图标等）映射到 `./data/`
-- 首次启动自动执行数据库迁移；访问前端注册首个账号即为管理员
+访问 `http://localhost:${APP_PORT}`（默认 `http://localhost:5000`），API 文档位于 `/docs`。
 
-> 说明：compose 中挂载了 `/var/run/docker.sock` 以提供容器/Compose 管理功能，等同于授予容器宿主机 root 权限，请仅在受信环境使用；不需要时可删除该挂载（相关功能自动降级）。
+### 环境变量
+
+`.env` 是唯一的配置来源：Compose 用它做变量替换，并通过 `env_file` 把整份文件注入 `app` 容器，配置文件里不再重复维护这些变量。表中未填的项由应用内置默认值兜底。
+
+| 变量 | 必填 | 默认值 | 说明 |
+|---|---|---|---|
+| `APP_PORT` | 否 | `5000` | 宿主机访问端口，容器内固定为 80 |
+| `POSTGRES_DB` | 否 | `nasdeck` | 数据库名，仅首次初始化数据卷时生效 |
+| `POSTGRES_USER` | 否 | `nasdeck` | 数据库用户，仅首次初始化数据卷时生效 |
+| `POSTGRES_PASSWORD` | **是** | 无 | 数据库密码，建议用 `openssl rand -hex 24` 生成 |
+| `SECRET_KEY` | **是** | 无 | JWT 签名密钥，用 `openssl rand -hex 32` 生成 |
+| `ACCESS_TOKEN_EXPIRE_MINUTES` | 否 | `1440` | 登录令牌有效期 |
+| `REGISTRATION_OPEN` | 否 | `false` | `false` 时仅首个用户可注册并成为管理员 |
+| `CORS_ORIGINS` | 否 | 空 | 跨域来源，逗号分隔；同源部署无需配置 |
+| `TZ` | 否 | `Asia/Shanghai` | 应用与数据库时区 |
+| `APP_NAME` | 否 | `NasDeck` | 页面中的应用名称 |
+| `DATA_DIR` | 否 | `./data` | Compose 工作区、图标等应用数据的宿主机目录 |
+| `MANAGE_BASE_URL` | 否 | 镜像内置 `https://deck-m.freeapps.uk` | 配套管理端 `nas-deck-manage` 的对外地址；应用商店需要它，`.env` 中显式填写会覆盖镜像默认值 |
+| `MANAGE_SYNC_INTERVAL_MINUTES` | 否 | `30` | 应用市场与自动化方案同步间隔 |
+| `MANAGE_SYNC_ON_STARTUP` | 否 | `true` | 启动时立即同步一次 |
+
+应用市场数据来自管理端。镜像构建时会把 `MANAGE_BASE_URL` 的默认值写进镜像（当前为 `https://deck-m.freeapps.uk`），运行时可用 `.env` 中的同名变量覆盖。该地址必须是 `app` 容器可访问的地址，不能填写容器内的 `localhost`。
+
+数据库数据保存在命名卷 `nas-deck_postgres_data`，应用数据保存在 `${DATA_DIR}`。首次启动自动迁移；访问首页注册首个账号即为管理员。
+
+> 说明：`app` 挂载了 `/var/run/docker.sock` 以提供容器/Compose 管理功能，等同于授予容器宿主机 root 权限，请仅在受信环境使用；不需要时可删除该挂载（相关功能自动降级）。系统设置中的宿主机存储目录也需要按相同路径额外挂载进 `app`，否则容器内无法浏览或写入。
+
+## 镜像构建与发布（GitLab CI + Harbor）
+
+根目录的 `.gitlab-ci.yml` 负责构建并推送镜像到 `harbor.cacty.top`。使用前需要：
+
+1. 在 Harbor 创建项目 `library`（或修改流水线变量 `HARBOR_PROJECT`）。
+2. 在 GitLab 项目 Settings → CI/CD → Variables 中添加 `HARBOR_USER`、`HARBOR_PASSWORD`（勾选 Masked）。
+3. Runner 支持 Docker-in-Docker（privileged），且能拉取 `moby/buildkit`（buildx 的 docker-container 驱动使用）。
+4. `PLATFORMS` 默认 `linux/amd64`；NAS 是 ARM 时在 CI/CD 变量中改为 `linux/arm64`，base 标签含平台，不会互相覆盖。
+
+流水线分两个阶段：
+
+| 阶段 | 产物 | 说明 |
+|---|---|---|
+| `base` | `harbor.cacty.top/library/nas-deck-base:<内容哈希>` | 系统依赖 + Docker CLI + Python 依赖；标签由 `Dockerfile` 与 `backend/requirements.txt` 的哈希决定，已存在则跳过，不重复构建 |
+| `image` | `harbor.cacty.top/library/nas-deck:<commit-sha>`，默认分支另打 `latest` | 直接以 base 镜像为起点，只构建后端代码与前端，配合 buildx registry 缓存 |
+
+`nas-deck:buildcache` 与 `nas-deck-base:<哈希>-cache` 是 buildx 的层缓存标签，不是可部署镜像。
+
+构建期的 `MANAGE_BASE_URL` 由流水线变量传入并写入镜像（默认 `https://deck-m.freeapps.uk`），不随代码写死；运行时 `.env` 里的同名变量优先级更高。
+
+部署时在 NAS 上拉取推送好的镜像：
+
+```bash
+docker login harbor.cacty.top
+APP_IMAGE=harbor.cacty.top/library/nas-deck:latest docker compose pull app
+APP_IMAGE=harbor.cacty.top/library/nas-deck:latest docker compose up -d app
+```
+
+本地仍可直接 `docker compose up -d --build`：不传 `BASE_IMAGE` 时使用 Dockerfile 内的 `base` 阶段，不依赖 Harbor 上的基础镜像。
 
 ## 本地开发（Linux）
 
@@ -85,10 +142,12 @@ nas-deck/
 ├── frontend/               # React + Vite 前端
 │   ├── src/api/            # 后端请求的唯一封装入口（与后端 schema 对齐）
 │   ├── src/pages/          # 页面（dashboard/apps/automation/docker/settings/auth）
-│   └── nginx.conf          # 生产环境 nginx 配置（反代 /api）
+│   └── public/             # 图标等静态资源
+├── docker/                 # 合并容器的 Nginx 配置与启动脚本
+├── Dockerfile              # 前端构建 + Python 运行时的多阶段镜像
 ├── docs/                   # 设计文档与 API 规范
-├── docker-compose.yml      # postgres + backend + frontend 一键部署
-└── .env.example            # 环境变量模板
+├── docker-compose.yml      # app + postgres 一键部署
+└── .env.example            # Compose 环境变量模板
 ```
 
 ## 更多文档

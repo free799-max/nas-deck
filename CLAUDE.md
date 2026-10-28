@@ -44,8 +44,13 @@ npm run lint         # ESLint 检查
 ### Docker
 
 ```bash
-docker-compose up --build   # 构建并启动前后端容器（后端 :5001，前端 :5000）
+docker compose up --build -d   # 构建并启动 app（前端 + FastAPI）与 postgres 两个容器
+docker compose logs -f app     # 查看应用、迁移与定时任务日志
 ```
+
+生产环境只有 `app` 与 `postgres` 两个容器；`app` 内的 Nginx 对外监听 80，FastAPI 只监听容器内回环地址 5001，前端与 API 使用同一端口。
+
+镜像发布走 GitLab CI（`.gitlab-ci.yml`）：先把 Dockerfile 的 `base` 阶段（系统依赖 + Docker CLI + Python 依赖）按内容哈希推送到 `harbor.cacty.top/library/nas-deck-base`，应用镜像再通过 `--build-arg BASE_IMAGE=<base>` 复用该层，只构建后端代码与前端。`MANAGE_BASE_URL` 在构建期写入镜像（默认 `https://deck-m.freeapps.uk`），运行时 `.env` 可覆盖。本地构建不传 `BASE_IMAGE`，使用 Dockerfile 内的 `base` 阶段。
 
 ## 架构
 
@@ -64,7 +69,7 @@ docker-compose up --build   # 构建并启动前后端容器（后端 :5001，�
 | 层 | 目录 | 职责 |
 |---|---|---|
 | 入口 | `main.py` | FastAPI 实例、lifespan（初始化DB）、CORS、路由注册、全局异常处理器 |
-| 配置 | `config.py` | pydantic-settings，从 `.env` 加载（APP_NAME/DATABASE_URL/SECRET_KEY/ACCESS_TOKEN_EXPIRE_MINUTES/PLUGIN_DIR/COMPOSE_WORKSPACE_DIR） |
+| 配置 | `config.py` | pydantic-settings；Compose 通过 `env_file: .env` 把项目根 `.env` 整份注入 app 容器，config.py 不重复声明注入项；仅 `DATA_ROOT`（固定 `/data`）与 `DATABASE_URL`（由 POSTGRES_* 拼接）由 Compose 显式覆盖；授权相关配置未在 `.env` 暴露，走后端默认值；本地开发从 `backend/.env` 加载 |
 | 数据库 | `database.py` | SQLAlchemy 2.0 异步引擎(asyncpg/aiosqlite)、会话工厂、`get_db()` 依赖（自动 commit/rollback） |
 | API | `api/` | 路由模块（auth/app_store/dashboard/settings），编排路由在 `api/orchestration/` 子包（orchestrations/deploy_tasks），Docker 路由按领域拆分为 `api/docker/` 子包 |
 | 核心 | `core/` | 基础设施：security(JWT+bcrypt)、custom_route(响应包装)、exceptions、background(后台任务)、task_manager(任务管理器基类 BaseTaskManager) |
@@ -161,7 +166,7 @@ DockerComposeProject 1--1 DockerComposeStack
 
 ## 存储目录约定
 
-- **存储目录**统一由 `storage_directories` 表管理（CRUD 在 `/api/settings/storage-directories`），每条维护 `host_path`（宿主机路径，compose bind source）↔ `mount_path`（容器内/表单视角路径）对应关系；保存时校验 `mount_path` 在后端容器内可见，其宿主机路径需挂载进 backend 容器（见 docker-compose.yml 注释示例）。
+- **存储目录**统一由 `storage_directories` 表管理（CRUD 在 `/api/settings/storage-directories`），每条维护 `host_path`（宿主机路径，compose bind source）↔ `mount_path`（容器内/表单视角路径）对应关系；保存时校验 `mount_path` 在应用容器内可见，其宿主机路径需按相同路径挂载进 `app` 容器（见 docker-compose.yml 注释示例）。
 - **应用数据目录**（`is_app_data=True`，全局至多一条）是特殊的存储目录，存应用自身持久化小数据，自动按 `<dir>/<app>/<service>/<mount>` 生成挂载；其余为普通**数据目录**（多条），供大数据量应用使用。
 - 部署表单的目录字段强制落在应用数据目录或某个启用数据目录下；部署时 volumes 的绝对 `host_path` 会经 `StoragePathResolver.is_managed_path` 校验。
 
@@ -215,7 +220,7 @@ DockerComposeProject 1--1 DockerComposeStack
 
 ## 服务概览
 
-- 首页采用 sun-panel 式应用墙：顶部展示宿主机 CPU/内存/磁盘/运行时间与当前时间，下方按应用分类（`apps.category`，缺失时回落到编排分类）自动分组；前端展示名称与顺序见 `frontend/src/lib/categories.ts`。
+- 首页采用 sun-panel 式应用墙：顶部展示宿主机 CPU/内存/磁盘/运行时间与当前时间，下方按应用分类（`apps.category`，缺失时回落到编排分类）自动分组；分组顺序取管理端下发的分类字典（`GET /api/public/categories`），前端展示名称同样来自该字典。
 - 只展示真实存在的部署：平台应用按 Compose 项目关联的容器校验，导入应用按 `container_id`/`container_name` 校验；失败、已清理或没有容器的历史记录会被过滤，运行状态以 Docker 实际状态为准。
 - 接口 `GET /api/dashboard/overview`（`api/dashboard.py` + `services/overview.py`）只返回展示所需字段，不下发实例配置中的密码等敏感信息；`GET /api/dashboard/apps/{id}` 返回单个应用的容器基本信息（镜像、容器 ID/名称、项目、端口映射、启动时间）和实时监控指标（CPU、内存、网络、磁盘 I/O、进程数）。
 - 访问地址无需落库：优先使用实例配置中显式填写的 `url`，否则按当前请求主机名 + 实例端口自动生成（兼容 `ports` 端口数组、单端口字段及导入容器的 `host_port`）；编排实例组的 `app_configs.url` 仅作兜底。
@@ -226,9 +231,9 @@ DockerComposeProject 1--1 DockerComposeStack
 ## 应用市场数据同步
 
 - 应用定义由配套管理端（nas-deck-manage）维护，本仓库**不再提供应用创建/编辑/删除/图标上传**。原 `POST/PUT/DELETE /api/apps`、`POST /api/apps/preview-template`、`POST/GET /api/apps/{name}/icon` 接口与前端 `/appstore/create`、`/appstore/:name/edit` 页面均已移除。
-- 配置 `MANAGE_BASE_URL` 后，后端启动时与每 `MANAGE_SYNC_INTERVAL_MINUTES` 分钟从 `GET {MANAGE_BASE_URL}/api/public/apps` 拉取已发布应用，upsert 到本地 `apps` 表作为只读缓存（实现见 `services/catalog_sync.py` 的 `sync_apps`）。
+- 管理端地址、同步间隔与启动同步通过 `.env` 的 `MANAGE_BASE_URL` / `MANAGE_SYNC_INTERVAL_MINUTES` / `MANAGE_SYNC_ON_STARTUP` 注入：后端启动时与每 30 分钟从 `GET {MANAGE_BASE_URL}/api/public/apps` 拉取已发布应用，upsert 到本地 `apps` 表作为只读缓存（实现见 `services/catalog_sync.py` 的 `sync_apps`）。当前生产环境管理端地址为 `http://192.168.1.17:5101`。
 - 只同步带 `compose_template` 且通过模板 / Schema 校验的条目，校验失败仅告警跳过；管理端下架（远端不再返回）的应用会删除本地缓存，但只删非内置且没有部署实例的记录，远端返回空列表时不做清理；`is_builtin` 等本地字段保持不变。
-- 分类为自由字符串，前端展示名称与排序集中在 `frontend/src/lib/categories.ts`（应用市场与服务概览共用），新增分类需同步该文件；当前已覆盖 movie/comic/book/music/game/gallery/news/download/docker/tool/media/network/web/other。
+- 分类为自由字符串，展示名称与排序由管理端 `backend/app/core/categories.py` 统一维护，经 `GET /api/public/categories` 下发；本仓库启动/定时同步到进程内缓存，前端通过 `GET /api/apps/categories` 获取（`frontend/src/lib/categories.ts` 仅保留查表辅助，不再内置映射），未配置 `MANAGE_BASE_URL` 时回退显示原始分类值。
 - 应用定义与应用目录 JSON 已整体迁移到管理端仓库：数据文件在 `nas-deck-manage/backend/app/data/apps/`，由管理端启动种子与 `scripts/import_apps.py` 导入；本仓库不再保留应用导入脚本。
 
 ## Hosts 优选（AdGuard）
@@ -292,16 +297,17 @@ DockerComposeProject 1--1 DockerComposeStack
 
 ### 漫画自动化（Comic Auto + Komga/Kavita）
 
-- 编排模板为 `comics-stack`（`category=comics`），组合为 `comic-auto`（必选）+ `komga` / `kavita`（可选，`group=阅读器`）。分组名由管理端填写、原样展示，不再做英文映射。
+- 编排模板为 `comics-stack`（`category=漫画`），组合为 `comic-auto`（必选）+ `komga` / `kavita`（可选，`group=阅读器`）。分组名由管理端填写、原样展示，不再做英文映射。
 - 应用数据由配套管理端（nas-deck-manage）下发并缓存到本地 `apps` 表；图标在 `frontend/public/icons/apps/<name>.svg`。
-- 应用与编排模板数据均由配套管理端（nas-deck-manage）下发：配置 `MANAGE_BASE_URL` 后，后端定时从 `GET {MANAGE_BASE_URL}/api/public/apps` 与 `GET {MANAGE_BASE_URL}/api/public/automations` 拉取并 upsert 到本地 `apps` / `app_orchestrations` 表作为只读缓存（实现见 `services/catalog_sync.py`）。
+- 应用与编排模板数据均由配套管理端（nas-deck-manage）下发：后端通过 `.env` 的 `MANAGE_BASE_URL` 获取地址，定时从 `GET {MANAGE_BASE_URL}/api/public/apps` 与 `GET {MANAGE_BASE_URL}/api/public/automations` 拉取并 upsert 到本地 `apps` / `app_orchestrations` 表作为只读缓存（实现见 `services/catalog_sync.py`）。
+- 编排模板按管理端 `/api/public/automations` 返回数组的位置持久化 `sort_order`，仅调整顺序也会同步；列表 API 按 `sort_order, id` 返回。分类统一使用管理端填写的中文值，同版本分类变化也会同步。远端缺失的模板保留记录但标记 `is_listed=false`，从目录隐藏且重新下发时恢复，实例详情仍可按名称读取。侧边栏与自动化分类卡片按组合分类首次出现的顺序动态生成，展示元数据集中在 `frontend/src/lib/automation-categories.ts`，不再由前端固定分类列表决定入口。
 - 共享存储：`comics` 宿主机目录统一挂载到各容器 `/mnt/media`；Comic Auto 下载目录 `/mnt/media/down` 与 Komga / Kavita 媒体库目录一致，缓存目录 `/mnt/media/cache`，新章节下载后可直接被媒体库扫描入库。
 - 账号自动配置：Comic Auto 通过 `/api/v1/app/init/setup/` 创建管理员；Komga 通过 `/api/v1/claim` claim 服务器并创建 API Key；Kavita 通过 `/api/Account/register` 注册首个管理员，登录接口返回 API Key。
 - 自动装配：`comic-auto` 条目的 `integrations` 声明 Komga/Kavita 为 `mediaserver`，部署后由 `ComicAutoClient.setup_mediaserver` 写入媒体服务器、下载目录与缓存目录；结果落在 `group.app_configs['comic-auto']['integrations']`。Comic Auto 使用账号密码换取 JWT 完成装配，因此客户端标记 `requires_api_key = False`。
 
 ### 音乐自动化（music-dl + Music Tag Web + Navidrome）
 
-- 编排模板为 `music-auto`（`category=music`），组合为 `music-dl`（下载）+ `music-tag-web`（整理）+ `navidrome`（可选播放器）。共享卷约定：`downloads` 下载、`library` 曲库、`playlists` 歌单。
+- 编排模板为 `music-auto`（`category=音乐`），组合为 `music-dl`（下载）+ `music-tag-web`（整理）+ `navidrome`（可选播放器）。共享卷约定：`downloads` 下载、`library` 曲库、`playlists` 歌单。
 - 账号自动配置：music-dl 首次启动会在容器日志输出一次性 `Web setup token`，`MusicDLClient` 解析后调用 `POST /music/setup` 创建管理员；已初始化时直接用账号密码登录。music-dl 没有改密接口，配置卷复用时若统一密码与旧密码不一致，会明确失败并提示手动重置或重新部署数据卷。
 - 账号自动配置：Music Tag Web 内置默认管理员 `admin/admin`，`MusicTagWebClient` 先尝试统一密码，失败后回退默认账号；免费版（V1）的用户管理接口返回 403，改密通过容器内 `python manage.py shell` 执行 Django `set_password`（由 `ProvisionMixin._make_command_runner` 注入的命令回调完成），随后用新密码复验。
 - 账号自动配置：Navidrome 首次启动没有管理员，`NavidromeClient` 通过 `POST /auth/createAdmin` 创建；已有管理员时登录后用 `PUT /api/user/{id}` 同步统一密码。
@@ -316,7 +322,7 @@ DockerComposeProject 1--1 DockerComposeStack
 
 ### 书籍自动化（Reader + 二毛读书）
 
-- 编排模板为 `book-auto`（`category=books`），组合为 `reader`（书源/书架）+ `ermao-library`（书库）。
+- 编排模板为 `book-auto`（`category=书籍`），组合为 `reader`（书源/书架）+ `ermao-library`（书库）。
 - 自动同步（集成在 NasDeck 内）：原先由 `nas-deck-manage/apps/reader/3.2.14` 镜像内置的 Book Bridge 移植到后端，不再需要构建/推送改造镜像。实现在 `services/orchestration/reader_auto.py`：
   - `ReaderSession` 调用 Reader 的 `/reader3/getShelfBookWithCacheInfo`、`getChapterList`、`getBookContent`、`exportBook`，补齐缺失章节后导出 EPUB；
   - `ErmaoClient` 负责二毛的初始化、登录、书库列表/创建、`/api/libraries/{id}/scan` 与导入任务轮询；
@@ -328,7 +334,7 @@ DockerComposeProject 1--1 DockerComposeStack
   - 地址、书库目录与二毛书库目录默认从运行中容器的真实挂载和同组二毛配置推导（Docker 不可用时回退到实例配置），在 `AppConfigPanel` 的「自动同步」Tab 中可一键填入或手动修改。
   - 首次运行遇到二毛尚未初始化时，可用配置中的邮箱/密码自动创建管理员和书库（`auto_setup`）；已有账号时直接登录，失败会明确提示填写原密码。
   - 书籍导出状态与失败退避存于 `reader_auto_sync_books` 表；接口为 `GET/PUT /api/orchestrations/instances/{id}/apps/reader/auto-sync` 与 `POST .../auto-sync/run`。
-  - 后端需要能写到书库的宿主机目录（当前 PM2 部署直接可写；Docker 部署后端时需把该目录按相同路径挂载进 backend 容器）。
+  - 后端需要能写到书库的宿主机目录（当前 PM2 部署直接可写；Docker 部署需把该目录按相同路径挂载进 `app` 容器）。
   - 旧的 `apps/reader/3.2.14` 镜像与 `BRIDGE_*` 环境变量不再参与运行，Reader 使用官方 `hectorqin/reader:latest` 即可。
 
 ### 前端
