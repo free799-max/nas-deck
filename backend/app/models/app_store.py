@@ -47,6 +47,8 @@ class App(Base):
     changelog: Mapped[str | None] = mapped_column(Text, nullable=True)
     # 默认需要备份的路径列表（相对于宿主机或容器内）
     backup_paths: Mapped[list[str]] = mapped_column(JSON, default=list)
+    # 应用是否含内置收费（付费软件或付费功能）
+    is_paid: Mapped[bool] = mapped_column(Boolean, default=False)
     is_builtin: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(

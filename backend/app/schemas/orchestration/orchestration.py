@@ -15,6 +15,7 @@ class OrchestrationOut(BaseModel):
     display_name: str
     description: str | None
     category: str
+    sort_order: int
     icon: str | None
     website: str | None
     source_url: str | None
@@ -22,6 +23,7 @@ class OrchestrationOut(BaseModel):
     # 管理端当前版本的更新说明
     changelog: str | None = None
     is_builtin: bool
+    is_listed: bool
     app_composition: list[AppCompositionItem]
     shared_config_schema: dict
 

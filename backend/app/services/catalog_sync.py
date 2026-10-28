@@ -3,8 +3,9 @@
 定时从配套管理端（nas-deck-manage）拉取应用市场与自动化方案数据，
 upsert 到本地 ``apps`` / ``app_orchestrations`` 表作为只读缓存：管理端
 下架（远端不再返回）的应用会删除本地非内置、未部署的缓存；方案不会
-因远端缺失而删除，只清理与管理端方案重复且无实例引用的内置旧方案，
-已有记录的 ``is_builtin`` 保持不变。
+因远端缺失而删除，而是通过 ``is_listed`` 从目录隐藏，重新下发时恢复；
+仅额外清理与管理端方案重复且无实例引用的内置旧方案，已有记录的
+``is_builtin`` 保持不变。
 编排方案检测到版本变化时写一条 ``orchestration_update_events`` 记录，
 供前端展示模板更新历史与实例组升级提示。
 """
@@ -13,7 +14,7 @@ import logging
 from datetime import datetime, timezone
 
 import httpx
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, update
 
 from app.config import settings
 from app.core.exceptions import APIException
@@ -38,6 +39,23 @@ last_error: str | None = None
 
 last_result: dict | None = None
 """最近一次成功同步的统计结果（created/updated/removed/total）。"""
+
+categories: list[dict] = []
+"""管理端下发的应用分类字典（value/label/order），本地不再维护映射。"""
+
+
+def get_categories() -> list[dict]:
+    """返回管理端同步下来的分类字典，未同步时为空列表。"""
+    return categories
+
+
+def get_category_rank() -> dict[str, int]:
+    """分类值到展示顺序的映射，未知分类排在最后由调用方兜底。"""
+    return {
+        str(item.get("value")): int(item.get("order", index))
+        for index, item in enumerate(categories)
+        if isinstance(item, dict) and item.get("value")
+    }
 
 
 def _extract_items(payload) -> list[dict]:
@@ -100,6 +118,36 @@ async def _delete_removed_apps(session, remote_names: set[str]) -> int:
         await session.delete(app)
         removed += 1
     return removed
+
+
+async def sync_categories() -> dict:
+    """从管理端拉取应用分类字典并缓存到进程内。
+
+    分类显示名与排序由管理端统一维护，本地不再内置映射；
+    MANAGE_BASE_URL 未配置时直接跳过，前端回退为显示原始分类值。
+    """
+    global categories
+
+    base_url = settings.MANAGE_BASE_URL.rstrip("/")
+    if not base_url:
+        return {"skipped": True}
+
+    url = f"{base_url}/api/public/categories"
+    async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
+        resp = await client.get(url)
+        resp.raise_for_status()
+        items = _extract_items(resp.json())
+
+    categories = [
+        {
+            "value": str(item.get("value")),
+            "label": str(item.get("label") or item.get("value")),
+            "order": int(item.get("order", index)),
+        }
+        for index, item in enumerate(items)
+        if isinstance(item, dict) and item.get("value")
+    ]
+    return {"total": len(categories)}
 
 
 async def sync_apps() -> dict:
@@ -184,6 +232,9 @@ async def sync_apps() -> dict:
             # 旧版管理端不返回 backup_paths，此时保留本地已有配置
             if "backup_paths" in item:
                 values["backup_paths"] = item.get("backup_paths") or []
+            # 旧版管理端不返回 is_paid，此时保留本地已有标识
+            if "is_paid" in item:
+                values["is_paid"] = bool(item.get("is_paid", False))
 
             if app is None:
                 session.add(App(name=name, is_builtin=False, **values))
@@ -325,7 +376,7 @@ async def sync_orchestrations(mode: str = "auto") -> dict:
             if item.get("name")
         }
         async with async_session() as session:
-            for item in items:
+            for sort_order, item in enumerate(items):
                 name = item.get("name")
                 if not name:
                     logger.warning("管理端返回的方案缺少 name 字段，已跳过：%s", item)
@@ -377,15 +428,20 @@ async def sync_orchestrations(mode: str = "auto") -> dict:
                         == remote_composition
                         and (orchestration.icon or None)
                         == (item.get("icon") or None)
+                        and orchestration.sort_order == sort_order
+                        and orchestration.category == remote_category
+                        and orchestration.is_listed
                     ):
-                        # 版本、组合与图标都没变：跳过更新，避免无谓写入与噪声
+                        # 内容、顺序与上架状态都没变：跳过更新，避免无谓写入与噪声
                         continue
                     updated += 1
 
-                # 仅更新内容字段，is_builtin 保持不变
+                # 仅更新目录内容与展示状态，is_builtin 保持不变
                 orchestration.display_name = remote_display_name
                 orchestration.description = item.get("description")
                 orchestration.category = remote_category
+                orchestration.sort_order = sort_order
+                orchestration.is_listed = True
                 orchestration.icon = item.get("icon")
                 orchestration.website = item.get("website")
                 orchestration.source_url = item.get("source_url")
@@ -416,6 +472,12 @@ async def sync_orchestrations(mode: str = "auto") -> dict:
                         )
                     )
                     events += 1
+
+            await session.execute(
+                update(AppOrchestration)
+                .where(AppOrchestration.name.notin_(remote_names))
+                .values(is_listed=False)
+            )
 
             if remote_names and remote_categories:
                 removed = await _drop_legacy_builtins(

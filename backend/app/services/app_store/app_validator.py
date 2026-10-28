@@ -68,8 +68,16 @@ def validate_app_config(db_app, config: dict) -> None:
     schema = getattr(db_app, "config_schema", None) or {}
     if not schema:
         return
+    properties = schema.get("properties") or {}
+    # 镜像由部署弹窗统一提供，不要求每个应用模板重复声明；
+    # 模板显式声明的同名字段仍按自身 Schema 校验。
+    validation_config = {
+        key: value
+        for key, value in config.items()
+        if key not in {"image", "image_tag", "container_images"} or key in properties
+    }
     try:
-        jsonschema_validate(instance=config, schema=schema)
+        jsonschema_validate(instance=validation_config, schema=schema)
     except JSONSchemaValidationError as e:
         display_name = getattr(db_app, "display_name", None) or getattr(
             db_app, "name", ""

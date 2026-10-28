@@ -154,6 +154,126 @@ def _apply_template_image(template: str, default_image: str, image: str) -> str:
     return pattern.sub(rf"\g<1>{image}\g<2>", template)
 
 
+def _main_container_name(db_app: App) -> str:
+    """返回应用主容器对应的 Compose 服务名。"""
+    containers = (db_app.config_schema or {}).get("containers") or []
+    names = [str(item.get("name") or "") for item in containers]
+    if db_app.name in names:
+        return db_app.name
+    return next((name for name in names if name), db_app.name)
+
+
+def _extract_container_images(db_app: App) -> dict[str, str]:
+    """从 Compose 模板提取各容器默认镜像，保留可选容器的镜像表达式。"""
+    template = db_app.yaml_template or ""
+    schema = db_app.config_schema or {}
+    default_image = db_app.image or ""
+    if not template or not default_image:
+        return {}
+
+    properties = schema.get("properties") or {}
+    default_tag = str(
+        (properties.get("image_tag") or {}).get("default") or "latest"
+    )
+    template_image = default_image
+    if re.search(
+        r"\{\{\s*image\s*\}\}\s*:\s*\{\{\s*image_tag\s*\}\}", template
+    ):
+        last_segment = default_image.rsplit("/", 1)[-1]
+        if ":" in last_segment:
+            template_image, default_tag = default_image.rsplit(":", 1)
+
+    container_names = {
+        str(item.get("name") or "")
+        for item in (schema.get("containers") or [])
+        if item.get("name")
+    }
+    images: dict[str, str] = {}
+    env = Environment(loader=BaseLoader(), autoescape=False)
+    in_services = False
+    current_service = ""
+    for line in template.splitlines():
+        if re.match(r"^services:\s*$", line):
+            in_services = True
+            continue
+        if not in_services:
+            continue
+        service_match = re.match(r"^  ([A-Za-z0-9_.-]+):\s*$", line)
+        if service_match:
+            current_service = service_match.group(1)
+            continue
+        image_match = re.match(r"^    image:\s*(.+?)\s*$", line)
+        if not image_match or current_service not in container_names:
+            continue
+        raw_image = image_match.group(1).strip()
+        if (
+            len(raw_image) >= 2
+            and raw_image[0] == raw_image[-1]
+            and raw_image[0] in {"'", '"'}
+        ):
+            raw_image = raw_image[1:-1]
+        try:
+            image = env.from_string(raw_image).render(
+                image=template_image,
+                image_tag=default_tag,
+            ).strip()
+        except Exception:
+            logger.warning("解析容器默认镜像失败: %s/%s", db_app.name, current_service)
+            continue
+        if image:
+            images[current_service] = image
+
+    main_container = _main_container_name(db_app)
+    if main_container not in images:
+        images[main_container] = default_image
+    return images
+
+
+def _normalize_container_image_overrides(config: dict) -> dict[str, str]:
+    """把逐容器表单配置转换为服务名到完整镜像引用的映射。"""
+    raw_overrides = config.get("container_images")
+    if not isinstance(raw_overrides, dict):
+        return {}
+    overrides: dict[str, str] = {}
+    for service_name, value in raw_overrides.items():
+        if isinstance(value, str) and value.strip():
+            overrides[str(service_name)] = value.strip()
+            continue
+        if not isinstance(value, dict):
+            continue
+        repository = str(value.get("repository") or "").strip()
+        tag = str(value.get("tag") or "").strip()
+        if not repository:
+            continue
+        last_segment = repository.rsplit("/", 1)[-1]
+        if ":" in last_segment:
+            repository, embedded_tag = repository.rsplit(":", 1)
+            tag = embedded_tag or tag
+        overrides[str(service_name)] = (
+            f"{repository}:{tag}" if tag else repository
+        )
+    return overrides
+
+
+def _apply_container_images(rendered_yaml: str, images: dict[str, str]) -> str:
+    """按 Compose 服务名覆盖镜像，不创建模板中未启用的服务。"""
+    compose = yaml.safe_load(rendered_yaml) or {}
+    services = compose.get("services") or {}
+    changed = False
+    for service_name, image in images.items():
+        service = services.get(service_name)
+        if (
+            image
+            and isinstance(service, dict)
+            and service.get("image") != image
+        ):
+            service["image"] = image
+            changed = True
+    if not changed:
+        return rendered_yaml
+    return yaml.safe_dump(compose, allow_unicode=True, sort_keys=False)
+
+
 def _slugify(name: str) -> str:
     """将实例名称转换为合法 Compose 项目名。"""
     name = name.lower().strip()
@@ -232,6 +352,7 @@ class AppService:
         app = result.scalar_one_or_none()
         if app is None:
             raise APIException("应用不存在", 404)
+        app.container_images = _extract_container_images(app)
         return app
 
     async def _get_resolver(self, db: AsyncSession) -> StoragePathResolver:
@@ -555,16 +676,19 @@ class AppService:
         if not db_app.yaml_template:
             raise APIException("应用模板为空，无法渲染", 500)
 
-        # 把应用镜像名注入模板上下文，供 yaml_template 使用 {{ image }}；
-        # config 里显式给了非空 image 时（编排组合级覆盖）优先使用，
-        # 空字符串/None 视为未给，回落到应用默认镜像
+        # 主镜像继续注入现有模板上下文；逐容器覆盖优先于旧的全局配置。
         config = config or {}
-        image = config.get("image") or db_app.image
+        container_overrides = _normalize_container_image_overrides(config)
+        main_container = _main_container_name(db_app)
+        image = (
+            container_overrides.get(main_container)
+            or config.get("image")
+            or db_app.image
+        )
         merged_config = {**config, "image": image}
 
         # 部分模板把镜像与标签分开渲染（{{ image }}:{{ image_tag }}）。
-        # 编排覆盖可能传入已带标签的完整镜像（repo:tag），若 image_tag
-        # 仍是旧值会拼成 repo:tag:latest 这类非法引用，这里按模板拆开。
+        # 覆盖镜像可能已带标签，需拆开避免拼成 repo:tag:latest。
         if image and re.search(
             r"\{\{\s*image\s*\}\}\s*:\s*\{\{\s*image_tag\s*\}\}",
             db_app.yaml_template or "",
@@ -581,7 +705,7 @@ class AppService:
         )
 
         try:
-            return _render_yaml_template(
+            rendered = _render_yaml_template(
                 template,
                 db_app.config_schema,
                 merged_config,
@@ -589,6 +713,15 @@ class AppService:
                 db_app.name,
                 resolver,
             )
+            if container_overrides:
+                container_images = {
+                    **_extract_container_images(db_app),
+                    **container_overrides,
+                }
+                if image:
+                    container_images[main_container] = image
+                return _apply_container_images(rendered, container_images)
+            return rendered
         except ValueError as e:
             raise APIException(str(e), 500) from e
 

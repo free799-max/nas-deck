@@ -17,6 +17,7 @@ from app.schemas.app_store import (
     AppPreviewResponse,
 )
 from app.schemas.orchestration.deploy_task import DeployTaskCreateResponse
+from app.services import catalog_sync
 from app.services.app_store import app_service
 
 from app.core.custom_route import CustomAPIRoute
@@ -33,6 +34,12 @@ async def list_apps(
 ):
     """列出应用商店应用。"""
     return await app_service.list_apps(db, category=category, tag=tag)
+
+
+@router.get("/categories")
+async def list_categories(current_user: User = Depends(get_current_user)):
+    """应用分类字典，来源为管理端同步结果；未同步时返回空列表。"""
+    return catalog_sync.get_categories()
 
 
 @router.get("/{name}", response_model=AppDetailOut)

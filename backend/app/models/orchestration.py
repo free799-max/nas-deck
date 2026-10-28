@@ -34,6 +34,9 @@ class AppOrchestration(Base):
     display_name: Mapped[str] = mapped_column(String(100), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     category: Mapped[str] = mapped_column(String(50), nullable=False, default="other")
+    sort_order: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
     icon: Mapped[str | None] = mapped_column(String(255), nullable=True)
     # 官方网站链接
     website: Mapped[str | None] = mapped_column(String(255), nullable=True)
@@ -41,6 +44,9 @@ class AppOrchestration(Base):
     source_url: Mapped[str | None] = mapped_column(String(255), nullable=True)
     version: Mapped[str] = mapped_column(String(20), default="1.0.0")
     is_builtin: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_listed: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="1"
+    )
     # 组合定义：该编排由哪些应用商店 App 组成
     # 示例：
     # [

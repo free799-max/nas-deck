@@ -24,6 +24,7 @@ class AppOut(BaseModel):
     type: str
     changelog: str | None
     backup_paths: list[str]
+    is_paid: bool = False
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -33,6 +34,7 @@ class AppDetailOut(AppOut):
 
     readme: str | None
     yaml_template: str | None
+    container_images: dict[str, str] = {}
 
     model_config = ConfigDict(from_attributes=True)
 

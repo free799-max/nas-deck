@@ -330,6 +330,200 @@ class TestValidateAndPreparePorts:
         assert exc_info.value.status_code == 400
 
 
+class TestValidateAndPrepareImage:
+    """测试通用镜像配置的部署前校验。"""
+
+    @pytest.mark.asyncio
+    async def test_strict_schema_accepts_platform_image_config(self):
+        """Schema 未声明镜像字段时，通用镜像配置仍可通过严格校验。"""
+        from app.services.app_store.app_service import AppService
+
+        db_app = type(
+            "App",
+            (),
+            {
+                "config_schema": {
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": False,
+                },
+                "yaml_template": "services:\n  app:\n    image: {{ image }}",
+            },
+        )()
+        config = {
+            "image": "registry.example.com/apps/demo:v2.1.0",
+            "image_tag": "v2.1.0",
+            "container_images": {
+                "app": {
+                    "repository": "registry.example.com/apps/demo",
+                    "tag": "v2.1.0",
+                }
+            },
+        }
+
+        project_name, allocated = await AppService()._validate_and_prepare(
+            db_app=db_app,
+            instance_name="image-demo",
+            config=config,
+            check_ports=False,
+        )
+
+        assert project_name == "image-demo"
+        assert allocated == []
+        assert config["image"] == "registry.example.com/apps/demo:v2.1.0"
+        assert config["image_tag"] == "v2.1.0"
+        assert config["container_images"]["app"]["tag"] == "v2.1.0"
+
+
+class TestContainerImages:
+    """测试多容器默认镜像提取与逐服务覆盖。"""
+
+    @pytest.fixture
+    def app_service(self):
+        from app.services.app_store.app_service import AppService
+
+        return AppService()
+
+    @staticmethod
+    def _app(template: str, containers: list[str], image: str = "apps/main:v1"):
+        return type(
+            "App",
+            (),
+            {
+                "name": containers[0],
+                "image": image,
+                "config_schema": {
+                    "containers": [
+                        {"name": name, "title": name, "settings": []}
+                        for name in containers
+                    ]
+                },
+                "yaml_template": template,
+            },
+        )()
+
+    @staticmethod
+    def _services(rendered: str) -> dict:
+        import yaml
+
+        return yaml.safe_load(rendered)["services"]
+
+    def test_extracts_default_and_derived_container_images(self):
+        """默认镜像提取支持可选容器和派生镜像表达式。"""
+        from app.services.app_store.app_service import _extract_container_images
+
+        app = self._app(
+            "services:\n"
+            "  beszel:\n"
+            "    image: {{ image }}\n"
+            "  beszel-agent:\n"
+            "    image: {{ image | replace('beszel:', 'beszel-agent:') }}\n",
+            ["beszel", "beszel-agent"],
+            "henrygd/beszel:0.21.1",
+        )
+
+        assert _extract_container_images(app) == {
+            "beszel": "henrygd/beszel:0.21.1",
+            "beszel-agent": "henrygd/beszel-agent:0.21.1",
+        }
+
+    def test_overrides_main_and_dependency_images_independently(self, app_service):
+        """主容器和依赖容器可以分别覆盖为不同镜像。"""
+        app = self._app(
+            "services:\n"
+            "  moviepilot:\n"
+            "    image: {{ image }}\n"
+            "  redis:\n"
+            "    image: redis:7-alpine\n"
+            "  postgresql:\n"
+            "    image: postgres:16-alpine\n",
+            ["moviepilot", "redis", "postgresql"],
+            "jxxghp/moviepilot-v2:latest",
+        )
+        rendered = app_service._render_app(
+            app,
+            {
+                "container_images": {
+                    "moviepilot": {
+                        "repository": "custom/moviepilot",
+                        "tag": "v3",
+                    },
+                    "postgresql": {
+                        "repository": "custom/postgres",
+                        "tag": "17",
+                    },
+                }
+            },
+            "demo",
+            None,
+        )
+
+        services = self._services(rendered)
+        assert services["moviepilot"]["image"] == "custom/moviepilot:v3"
+        assert services["redis"]["image"] == "redis:7-alpine"
+        assert services["postgresql"]["image"] == "custom/postgres:17"
+
+    def test_main_override_does_not_replace_other_containers(self, app_service):
+        """只修改主容器时，依赖容器保留各自默认镜像。"""
+        app = self._app(
+            "services:\n"
+            "  moviepilot:\n"
+            "    image: {{ image }}\n"
+            "  redis:\n"
+            "    image: redis:7-alpine\n",
+            ["moviepilot", "redis"],
+            "jxxghp/moviepilot-v2:latest",
+        )
+        rendered = app_service._render_app(
+            app,
+            {
+                "container_images": {
+                    "moviepilot": {
+                        "repository": "custom/moviepilot",
+                        "tag": "v3",
+                    }
+                }
+            },
+            "demo",
+            None,
+        )
+
+        services = self._services(rendered)
+        assert services["moviepilot"]["image"] == "custom/moviepilot:v3"
+        assert services["redis"]["image"] == "redis:7-alpine"
+
+    def test_main_override_does_not_cascade_through_template_variable(
+        self, app_service
+    ):
+        """多个服务共用 image 变量时，非目标服务仍使用自己的默认值。"""
+        app = self._app(
+            "services:\n"
+            "  hbbs:\n"
+            "    image: {{ image }}\n"
+            "  hbbr:\n"
+            "    image: {{ image }}\n",
+            ["hbbs", "hbbr"],
+            "rustdesk/rustdesk-server:1.1.16",
+        )
+        rendered = app_service._render_app(
+            app,
+            {
+                "container_images": {
+                    "hbbs": {
+                        "repository": "custom/rustdesk",
+                        "tag": "v2",
+                    }
+                }
+            },
+            "demo",
+            None,
+        )
+
+        services = self._services(rendered)
+        assert services["hbbs"]["image"] == "custom/rustdesk:v2"
+        assert services["hbbr"]["image"] == "rustdesk/rustdesk-server:1.1.16"
+
+
 class TestRenderAppImage:
     """测试编排组合覆盖镜像与模板 image_tag 的拼接。"""
 

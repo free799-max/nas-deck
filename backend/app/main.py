@@ -91,8 +91,9 @@ async def lifespan(app: FastAPI):
         from app.services import catalog_sync
 
         async def _sync_catalog(stage: str) -> None:
-            """依次同步应用市场与编排方案，单类失败不影响另一类。"""
+            """依次同步分类字典、应用市场与编排方案，单类失败不影响其他。"""
             for label, sync in (
+                ("分类字典", catalog_sync.sync_categories),
                 ("应用市场", catalog_sync.sync_apps),
                 ("编排方案", catalog_sync.sync_orchestrations),
             ):

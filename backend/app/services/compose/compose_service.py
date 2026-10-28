@@ -4,8 +4,8 @@ import asyncio
 import json
 import logging
 import os
-import re
 import shutil
+import time
 from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
@@ -21,7 +21,12 @@ from app.models.docker import (
 )
 from app.models.orchestration import AppInstance
 from app.services.compose.compose_discovery import ComposeDiscoveryService
-from app.services.compose.log_utils import detect_stage, strip_ansi
+from app.services.compose.log_utils import (
+    detect_stage,
+    is_progress_line,
+    strip_ansi,
+    summarize_compose_error,
+)
 from app.services.compose.permissions import extract_bind_sources, parse_puid_pgid
 from app.services.apps.asset_copy import AssetCopyError, copy_assets, find_container
 from app.services.apps.offline_assets import apply_offline_profile, profiles_in_compose
@@ -54,7 +59,6 @@ class ComposeService:
         self._locks: dict[int, asyncio.Lock] = {}
         self._docker_available: bool | None = None
         self._discovery = ComposeDiscoveryService()
-        self._image_user_cache: dict[str, tuple[int, int] | None] = {}
 
     @property
     def docker_available(self) -> bool:
@@ -270,13 +274,20 @@ class ComposeService:
 
         _progress("pulling_images", 50, "拉取镜像并启动服务")
         current_stage = "pulling_images"
+        last_progress_at = 0.0
 
         if progress_callback:
             def _on_line(line: str, name: str):
                 detected = detect_stage(line)
-                nonlocal current_stage
+                nonlocal current_stage, last_progress_at
                 if detected:
                     current_stage = detected
+                if is_progress_line(line):
+                    # 分层下载进度刷新极快，节流转发，避免刷屏
+                    now = time.monotonic()
+                    if now - last_progress_at < 2:
+                        return
+                    last_progress_at = now
                 _progress(
                     current_stage,
                     50,
@@ -291,8 +302,8 @@ class ComposeService:
             result = await self._run(project, "up", "-d", timeout=timeout)
 
         if result["returncode"] != 0:
-            stderr = result.get("stderr", "").strip()
-            raise RuntimeError(stderr or "docker compose up -d 执行失败")
+            error = summarize_compose_error(result.get("stderr", ""))
+            raise RuntimeError(error or "docker compose up -d 执行失败")
 
         await self._copy_offline_assets(project, progress_callback)
         return result
@@ -350,90 +361,13 @@ class ComposeService:
                         str(exc),
                     )
 
-    async def _docker_cli(self, *args: str, timeout: int = 60) -> tuple[int, str]:
-        """执行 docker CLI 命令，返回 (returncode, stdout)。"""
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                "docker", *args,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-            return proc.returncode or 0, stdout.decode("utf-8", errors="replace").strip()
-        except Exception:
-            return -1, ""
-
-    async def _inspect_image_user(self, image: str) -> str:
-        """查询镜像 Config.User；本地没有镜像时先拉取再查。"""
-        rc, out = await self._docker_cli(
-            "image", "inspect", image, "--format", "{{.Config.User}}"
-        )
-        if rc != 0:
-            rc, _ = await self._docker_cli("pull", image, timeout=600)
-            if rc == 0:
-                rc, out = await self._docker_cli(
-                    "image", "inspect", image, "--format", "{{.Config.User}}"
-                )
-        return out if rc == 0 else ""
-
-    async def _resolve_named_user(self, image: str, name: str) -> tuple[int, int] | None:
-        """在镜像内解析用户名对应的 UID/GID（id 优先，getent 兜底）。"""
-        rc, out = await self._docker_cli(
-            "run", "--rm", "--entrypoint", "id", image, name, timeout=60
-        )
-        if rc == 0:
-            match = re.search(r"uid=(\d+).*?gid=(\d+)", out)
-            if match:
-                return int(match.group(1)), int(match.group(2))
-        rc, out = await self._docker_cli(
-            "run", "--rm", "--entrypoint", "getent", image, "passwd", name, timeout=60
-        )
-        if rc == 0:
-            parts = out.splitlines()[0].split(":") if out else []
-            if len(parts) >= 4 and parts[2].isdigit() and parts[3].isdigit():
-                return int(parts[2]), int(parts[3])
-        return None
-
-    async def _resolve_service_user(self, svc: dict) -> tuple[int, int] | None:
-        """确定服务的容器运行用户 (uid, gid)；root 或无法确定时返回 None。
-
-        优先使用环境变量中显式配置的 PUID/PGID；
-        否则查询镜像 Config.User，数字直接使用，用户名则在镜像内解析。
-        结果按镜像名缓存。
-        """
-        puid_pgid = parse_puid_pgid(svc.get("environment"))
-        if puid_pgid:
-            return puid_pgid
-
-        image = svc.get("image")
-        if not image or not isinstance(image, str) or not self.docker_available:
-            return None
-        if image in self._image_user_cache:
-            return self._image_user_cache[image]
-
-        result: tuple[int, int] | None = None
-        user = (await self._inspect_image_user(image)).strip()
-        if user and user not in ("root", "0", "0:0"):
-            user_part, _, group_part = user.partition(":")
-            if user_part.isdigit():
-                uid = int(user_part)
-                gid = int(group_part) if group_part.isdigit() else uid
-                result = (uid, gid)
-            else:
-                result = await self._resolve_named_user(image, user_part)
-        self._image_user_cache[image] = result
-        if result:
-            logger.info("镜像 %s 运行用户: %s → uid=%d gid=%d", image, user, *result)
-        elif user:
-            logger.warning("无法确定镜像 %s 运行用户 %s 的 UID/GID", image, user)
-        return result
-
     async def _ensure_host_directories(self, content: str) -> None:
         """解析 Compose YAML，为 bind mount 的宿主机路径自动创建目录。
 
-        对本次新建的目录，若服务以非 root 用户运行（显式 PUID/PGID 或镜像
-        Config.User 非 root），将目录属主调整为容器运行用户，避免容器因
-        权限不足无法写入而反复重启。已存在的目录不做任何改动。
+        对本次新建的目录，若服务显式声明了 PUID/PGID，将目录属主调整为
+        该运行用户，避免容器因权限不足无法写入而反复重启。已存在的目录
+        不做任何改动。不检查镜像 Config.User——镜像不在本地时 inspect
+        会触发静默拉取，导致部署长时间无进度。
         """
         try:
             data = yaml.safe_load(content) or {}
@@ -462,7 +396,7 @@ class ComposeService:
             if not new_paths:
                 continue
 
-            uid_gid = await self._resolve_service_user(svc)
+            uid_gid = parse_puid_pgid(svc.get("environment"))
             if not uid_gid:
                 continue
             uid, gid = uid_gid
@@ -470,7 +404,7 @@ class ComposeService:
                 try:
                     os.chown(path, uid, gid)
                     logger.info(
-                        "自动授权 %s → %d:%d（服务镜像 %s 以非 root 运行）",
+                        "自动授权 %s → %d:%d（服务 %s 声明了 PUID/PGID）",
                         path, uid, gid, svc.get("image"),
                     )
                 except OSError as e:

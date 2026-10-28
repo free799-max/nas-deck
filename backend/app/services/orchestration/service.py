@@ -49,10 +49,10 @@ class OrchestrationService(
         category: str | None = None,
     ) -> list[AppOrchestration]:
         """列出应用编排，支持分类筛选。"""
-        stmt = select(AppOrchestration)
+        stmt = select(AppOrchestration).where(AppOrchestration.is_listed.is_(True))
         if category:
             stmt = stmt.where(AppOrchestration.category == category)
-        stmt = stmt.order_by(AppOrchestration.category, AppOrchestration.display_name)
+        stmt = stmt.order_by(AppOrchestration.sort_order, AppOrchestration.id)
         result = await db.execute(stmt)
         return list(result.scalars().all())
 

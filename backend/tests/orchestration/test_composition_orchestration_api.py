@@ -2,6 +2,13 @@
 
 import pytest
 
+from app.database import get_db
+from app.models.orchestration import AppOrchestration
+
+
+def _test_db(client):
+    return client._transport.app.dependency_overrides[get_db]()
+
 
 @pytest.mark.asyncio
 async def test_list_orchestrations_requires_auth(client):
@@ -36,6 +43,83 @@ async def test_orchestration_api_returns_composition_fields(client):
         assert "shared_config_schema" in item
         assert "yaml_template" not in item
         assert "config_schema" not in item
+
+
+@pytest.mark.asyncio
+async def test_list_orchestrations_uses_manage_order(client):
+    """列表接口按管理端顺序返回，相同顺序值按 id 稳定排序。"""
+    await client.post(
+        "/api/auth/register",
+        json={"username": "ordertest", "password": "ordertest123"},
+    )
+    login_resp = await client.post(
+        "/api/auth/login",
+        json={"username": "ordertest", "password": "ordertest123"},
+    )
+    token = login_resp.json()["data"]["access_token"]
+
+    async for db in _test_db(client):
+        db.add_all(
+            [
+                AppOrchestration(
+                    name="hidden",
+                    display_name="已下架",
+                    category="other",
+                    sort_order=0,
+                    is_listed=False,
+                    app_composition=[],
+                    shared_config_schema={},
+                ),
+                AppOrchestration(
+                    name="media-z",
+                    display_name="Z 影视",
+                    category="media",
+                    sort_order=20,
+                    app_composition=[],
+                    shared_config_schema={},
+                ),
+                AppOrchestration(
+                    name="comics-b",
+                    display_name="B 漫画",
+                    category="comics",
+                    sort_order=10,
+                    app_composition=[],
+                    shared_config_schema={},
+                ),
+                AppOrchestration(
+                    name="comics-a",
+                    display_name="A 漫画",
+                    category="comics",
+                    sort_order=10,
+                    app_composition=[],
+                    shared_config_schema={},
+                ),
+            ]
+        )
+        await db.commit()
+        break
+
+    resp = await client.get(
+        "/api/orchestrations",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert [item["name"] for item in data] == [
+        "comics-b",
+        "comics-a",
+        "media-z",
+    ]
+    assert [item["sort_order"] for item in data] == [10, 10, 20]
+    assert all(item["is_listed"] for item in data)
+
+    detail_resp = await client.get(
+        "/api/orchestrations/hidden",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert detail_resp.status_code == 200
+    assert detail_resp.json()["data"]["is_listed"] is False
 
 
 @pytest.mark.asyncio

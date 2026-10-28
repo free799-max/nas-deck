@@ -241,10 +241,7 @@ async def test_ensure_host_directories_creates_bind_mount_dirs(compose_manager, 
         source: {host_dir}/db
         target: /var/lib/postgresql
 """
-    with patch.object(
-        compose_manager, "_resolve_service_user", new=AsyncMock(return_value=None)
-    ):
-        await compose_manager._ensure_host_directories(content)
+    await compose_manager._ensure_host_directories(content)
 
     assert (host_dir / "data").is_dir()
     assert (host_dir / "config").is_dir()
@@ -252,23 +249,24 @@ async def test_ensure_host_directories_creates_bind_mount_dirs(compose_manager, 
 
 
 @pytest.mark.asyncio
-async def test_ensure_host_directories_chowns_new_dirs_for_non_root_image(
+async def test_ensure_host_directories_chowns_new_dirs_for_puid_pgid(
     compose_manager, tmp_path
 ):
-    """镜像以非 root 运行时，新建的宿主机目录授权给容器用户；已存在目录不动。"""
+    """服务显式声明 PUID/PGID 时，新建的宿主机目录授权给该用户；已存在目录不动。"""
     new_dir = tmp_path / "new-data"
     existing_dir = tmp_path / "existing-data"
     existing_dir.mkdir()
     content = f"""services:
   suwayomi:
     image: ghcr.io/suwayomi/suwayomi-server
+    environment:
+      - PUID=1000
+      - PGID=1000
     volumes:
       - {new_dir}:/home/suwayomi/.local/share/Tachidesk
       - {existing_dir}:/existing
 """
-    with patch.object(
-        compose_manager, "_resolve_service_user", new=AsyncMock(return_value=(1000, 1000))
-    ), patch(
+    with patch(
         "app.services.compose.compose_service.os.chown"
     ) as mock_chown:
         await compose_manager._ensure_host_directories(content)
@@ -296,10 +294,7 @@ async def test_ensure_host_directories_ignores_named_volumes(compose_manager, tm
       - data_volume:/data
       - ./relative:/app
 """
-    with patch.object(
-        compose_manager, "_resolve_service_user", new=AsyncMock(return_value=None)
-    ):
-        await compose_manager._ensure_host_directories(content)
+    await compose_manager._ensure_host_directories(content)
 
     # 不应抛出异常，也不应在当前目录创建意外目录
     assert True

@@ -334,7 +334,7 @@ class ImageService(common.BaseDockerService):
         if "/" not in repo:
             repo = f"library/{repo}"
 
-        url = f"https://hub.docker.com/v2/repositories/{repo}/tags/?page_size=100"
+        url = f"https://hub.docker.com/v2/repositories/{repo}/tags/?page_size=20"
         try:
             async with httpx.AsyncClient() as client:
                 resp = await client.get(url, timeout=15)

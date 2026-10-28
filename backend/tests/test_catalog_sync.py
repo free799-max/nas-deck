@@ -224,8 +224,10 @@ async def test_sync_updates_existing_without_touching_is_builtin(
     assert orchestration.is_builtin is True
 
 
-async def test_sync_keeps_local_records_missing_from_remote(sync_db, monkeypatch):
-    """远端没有的本地记录不会被删除。"""
+async def test_sync_hides_and_relists_local_record_without_deleting(
+    sync_db, monkeypatch
+):
+    """远端缺失的记录只下架不删除，重新下发时可恢复展示。"""
     async with sync_db() as session:
         session.add(
             AppOrchestration(
@@ -245,8 +247,22 @@ async def test_sync_keeps_local_records_missing_from_remote(sync_db, monkeypatch
 
     await catalog_sync.sync_orchestrations()
 
-    assert await _get_by_name(sync_db, "local-only") is not None
-    assert await _get_by_name(sync_db, "media-stack") is not None
+    local = await _get_by_name(sync_db, "local-only")
+    remote = await _get_by_name(sync_db, "media-stack")
+    assert local is not None and local.is_listed is False
+    assert remote is not None and remote.is_listed is True
+
+    _patch_http(
+        monkeypatch,
+        payload={
+            "success": True,
+            "data": [_make_item("local-only"), _make_item("media-stack")],
+        },
+    )
+    await catalog_sync.sync_orchestrations()
+
+    local = await _get_by_name(sync_db, "local-only")
+    assert local is not None and local.is_listed is True
 
 
 async def test_sync_removes_duplicate_builtin_orchestration(sync_db, monkeypatch):
@@ -427,6 +443,68 @@ async def _get_events(SessionLocal) -> list[OrchestrationUpdateEvent]:
             select(OrchestrationUpdateEvent).order_by(OrchestrationUpdateEvent.id)
         )
         return list(result.scalars().all())
+
+
+async def test_sync_updates_manage_order_without_version_events(sync_db, monkeypatch):
+    """仅调整管理端顺序时也更新本地缓存，且不产生版本事件。"""
+    _patch_http(
+        monkeypatch,
+        payload={
+            "success": True,
+            "data": [_make_item("media-stack"), _make_item("comics-stack")],
+        },
+    )
+    await catalog_sync.sync_orchestrations()
+
+    media = await _get_by_name(sync_db, "media-stack")
+    comics = await _get_by_name(sync_db, "comics-stack")
+    assert media is not None and comics is not None
+    assert (media.sort_order, comics.sort_order) == (0, 1)
+
+    _patch_http(
+        monkeypatch,
+        payload={
+            "success": True,
+            "data": [_make_item("comics-stack"), _make_item("media-stack")],
+        },
+    )
+    stats = await catalog_sync.sync_orchestrations()
+
+    assert stats == {
+        "created": 0,
+        "updated": 2,
+        "removed": 0,
+        "total": 2,
+        "events": 0,
+    }
+    media = await _get_by_name(sync_db, "media-stack")
+    comics = await _get_by_name(sync_db, "comics-stack")
+    assert media is not None and comics is not None
+    assert (media.sort_order, comics.sort_order) == (1, 0)
+    assert len(await _get_events(sync_db)) == 2
+
+
+async def test_sync_updates_chinese_category_without_version_event(
+    sync_db, monkeypatch
+):
+    """管理端分类中文化后，同版本方案也会更新本地分类。"""
+    _patch_http(
+        monkeypatch,
+        payload={"success": True, "data": [_make_item("movie", category="media")]},
+    )
+    await catalog_sync.sync_orchestrations()
+
+    _patch_http(
+        monkeypatch,
+        payload={"success": True, "data": [_make_item("movie", category="影视")]},
+    )
+    stats = await catalog_sync.sync_orchestrations()
+
+    assert stats["updated"] == 1
+    assert stats["events"] == 0
+    movie = await _get_by_name(sync_db, "movie")
+    assert movie is not None and movie.category == "影视"
+    assert len(await _get_events(sync_db)) == 1
 
 
 async def test_sync_version_change_writes_auto_event(sync_db, monkeypatch):
@@ -615,6 +693,7 @@ async def test_sync_apps_creates_new_app(sync_db, monkeypatch):
     assert app.changelog == "首个版本"
     assert app.is_builtin is False
     assert app.backup_paths == ["/config"]
+    assert app.is_paid is False
 
 
 async def test_sync_apps_updates_existing_and_keeps_is_builtin(
@@ -677,6 +756,45 @@ async def test_sync_apps_preserves_backup_paths_for_legacy_payload(
     app = await _get_app(sync_db, "jellyfin")
     assert app.display_name == "jellyfin 应用"
     assert app.backup_paths == ["/data/config"]
+
+
+async def test_sync_apps_maps_is_paid(sync_db, monkeypatch):
+    """管理端返回 is_paid 时同步到本地应用。"""
+    _patch_http(
+        monkeypatch,
+        payload={"success": True, "data": [_make_app_item("mt-photos", is_paid=True)]},
+    )
+
+    stats = await catalog_sync.sync_apps()
+
+    assert stats == {"created": 1, "updated": 0, "removed": 0, "skipped": 0, "total": 1}
+    app = await _get_app(sync_db, "mt-photos")
+    assert app.is_paid is True
+
+
+async def test_sync_apps_preserves_is_paid_for_legacy_payload(sync_db, monkeypatch):
+    """旧版管理端不返回 is_paid 时，保留本地已有的付费标识。"""
+    async with sync_db() as session:
+        session.add(
+            App(
+                name="mt-photos",
+                display_name="旧名称",
+                category="other",
+                image="old/image",
+                yaml_template="services:\n  app:\n    image: old/image\n",
+                is_paid=True,
+            )
+        )
+        await session.commit()
+
+    item = _make_app_item("mt-photos")
+    _patch_http(monkeypatch, payload={"success": True, "data": [item]})
+
+    stats = await catalog_sync.sync_apps()
+
+    assert stats == {"created": 0, "updated": 1, "removed": 0, "skipped": 0, "total": 1}
+    app = await _get_app(sync_db, "mt-photos")
+    assert app.is_paid is True
 
 
 async def test_sync_apps_skips_unchanged_app(sync_db, monkeypatch):
