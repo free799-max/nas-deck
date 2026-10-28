@@ -337,8 +337,20 @@ class ImageService(common.BaseDockerService):
         url = f"https://hub.docker.com/v2/repositories/{repo}/tags/?page_size=20"
         try:
             async with httpx.AsyncClient() as client:
-                resp = await client.get(url, timeout=15)
-                resp.raise_for_status()
+                # Docker Hub 偶发连接重置，重试一次再放弃
+                for attempt in range(2):
+                    try:
+                        resp = await client.get(url, timeout=15)
+                        resp.raise_for_status()
+                        break
+                    except (
+                        httpx.ConnectError,
+                        httpx.ReadError,
+                        httpx.ReadTimeout,
+                        httpx.RemoteProtocolError,
+                    ):
+                        if attempt:
+                            raise
                 data = resp.json()
             results = data.get("results", [])
             tags = []

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -69,7 +70,11 @@ export function ContainerImageField({
     return () => clearTimeout(timer);
   }, [current.repository]);
 
-  const { data: imageTags = [], isLoading } = useImageTags(queryRepository);
+  const {
+    data: imageTags = [],
+    isLoading,
+    refetch,
+  } = useImageTags(queryRepository);
   const [open, setOpen] = useState(false);
   const [tagQuery, setTagQuery] = useState("");
   const repositoryId = `image-repository-${containerName}`;
@@ -139,15 +144,19 @@ export function ContainerImageField({
           open={open}
           onOpenChange={(next) => {
             setOpen(next);
-            if (!next) setTagQuery("");
+            if (!next) {
+              setTagQuery("");
+            } else if (!isLoading && imageTags.length === 0) {
+              // 网络抖动或 Docker Hub 限流时自动重试一次
+              void refetch();
+            }
           }}
         >
           <PopoverTrigger
             id={tagId}
             type="button"
-            disabled={isLoading || sortedTags.length === 0}
             title={current.tag || "镜像标签"}
-            className="flex h-8 w-full items-center justify-between gap-2 rounded-md border border-input bg-white px-2 text-left text-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50"
+            className="flex h-8 w-full items-center justify-between gap-2 rounded-md border border-input bg-white px-2 text-left text-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
           >
             <span className="flex min-w-0 items-center gap-2">
               <span className="truncate font-medium">
@@ -166,119 +175,147 @@ export function ContainerImageField({
             )}
           </PopoverTrigger>
           <PopoverContent className="w-[340px] p-2">
-            {sortedTags.length > 8 && (
-              <div className="relative mb-2">
-                <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground/60" />
-                <Input
-                  value={tagQuery}
-                  onChange={(event) => setTagQuery(event.target.value)}
-                  placeholder="搜索标签…"
-                  autoComplete="off"
-                  className="h-7 rounded-md border-input bg-muted/40 pl-7 pr-7 text-xs shadow-none"
-                />
-                {tagQuery && (
-                  <button
-                    type="button"
-                    onClick={() => setTagQuery("")}
-                    className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground/60 transition-colors hover:text-foreground"
-                    aria-label="清空搜索"
-                  >
-                    <X className="h-3.5 w-3.5" />
-                  </button>
-                )}
+            {isLoading && sortedTags.length === 0 ? (
+              <div className="flex items-center justify-center gap-2 py-6 text-xs text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                正在加载标签…
               </div>
-            )}
-            <div
-              className="max-h-64 space-y-1 overflow-y-auto"
-              style={{ scrollbarGutter: "stable" }}
-            >
-              {manualTag && (
-                <button
+            ) : sortedTags.length === 0 ? (
+              <div className="py-6 text-center">
+                <p className="text-xs text-muted-foreground">
+                  未获取到标签，可能是网络异常或 Docker Hub 限流
+                </p>
+                <Button
                   type="button"
-                  onClick={() => selectTag(manualTag)}
-                  className="flex w-full items-center gap-2.5 rounded-lg border border-primary/40 bg-primary/5 px-2.5 py-2 text-left"
+                  variant="outline"
+                  size="sm"
+                  className="mt-2 h-7 text-xs"
+                  onClick={() => void refetch()}
                 >
-                  <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full border border-primary bg-primary text-primary-foreground">
-                    <Check className="h-2.5 w-2.5" />
-                  </span>
-                  <span className="min-w-0 flex-1 truncate text-sm font-medium text-primary">
-                    {manualTag}
-                  </span>
-                  <span className="shrink-0 text-[11px] text-muted-foreground">
-                    手动输入
-                  </span>
-                </button>
-              )}
-              {visibleTags.map((tag) => {
-                const selected = tag.name === current.tag;
-                const hasMeta = tag.size > 0 || !!tag.last_updated;
-                return (
-                  <button
-                    type="button"
-                    key={tag.name}
-                    onClick={() => selectTag(tag.name)}
-                    title={`${tag.name}${
-                      tag.last_updated ? ` · ${formatDate(tag.last_updated)}` : ""
-                    }`}
-                    className={`flex w-full items-center gap-2.5 rounded-lg border px-2.5 py-2 text-left transition-colors ${
-                      selected
-                        ? "border-primary/40 bg-primary/5"
-                        : "border-transparent hover:bg-muted/60"
-                    }`}
-                  >
-                    <span
-                      className={`flex h-4 w-4 shrink-0 items-center justify-center rounded-full border ${
-                        selected
-                          ? "border-primary bg-primary text-primary-foreground"
-                          : "border-muted-foreground/30"
-                      }`}
+                  重新获取
+                </Button>
+              </div>
+            ) : (
+              <>
+                {sortedTags.length > 8 && (
+                  <div className="relative mb-2">
+                    <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground/60" />
+                    <Input
+                      value={tagQuery}
+                      onChange={(event) => setTagQuery(event.target.value)}
+                      placeholder="搜索标签…"
+                      autoComplete="off"
+                      className="h-7 rounded-md border-input bg-muted/40 pl-7 pr-7 text-xs shadow-none"
+                    />
+                    {tagQuery && (
+                      <button
+                        type="button"
+                        onClick={() => setTagQuery("")}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground/60 transition-colors hover:text-foreground"
+                        aria-label="清空搜索"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    )}
+                  </div>
+                )}
+                <div
+                  className="max-h-64 space-y-1 overflow-y-auto"
+                  style={{ scrollbarGutter: "stable" }}
+                >
+                  {manualTag && (
+                    <button
+                      type="button"
+                      onClick={() => selectTag(manualTag)}
+                      className="flex w-full items-center gap-2.5 rounded-lg border border-primary/40 bg-primary/5 px-2.5 py-2 text-left"
                     >
-                      {selected && <Check className="h-2.5 w-2.5" />}
-                    </span>
-                    <span className="min-w-0 flex-1">
-                      <span className="flex items-center gap-1.5">
+                      <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full border border-primary bg-primary text-primary-foreground">
+                        <Check className="h-2.5 w-2.5" />
+                      </span>
+                      <span className="min-w-0 flex-1 truncate text-sm font-medium text-primary">
+                        {manualTag}
+                      </span>
+                      <span className="shrink-0 text-[11px] text-muted-foreground">
+                        手动输入
+                      </span>
+                    </button>
+                  )}
+                  {visibleTags.map((tag) => {
+                    const selected = tag.name === current.tag;
+                    const hasMeta = tag.size > 0 || !!tag.last_updated;
+                    return (
+                      <button
+                        type="button"
+                        key={tag.name}
+                        onClick={() => selectTag(tag.name)}
+                        title={`${tag.name}${
+                          tag.last_updated
+                            ? ` · ${formatDate(tag.last_updated)}`
+                            : ""
+                        }`}
+                        className={`flex w-full items-center gap-2.5 rounded-lg border px-2.5 py-2 text-left transition-colors ${
+                          selected
+                            ? "border-primary/40 bg-primary/5"
+                            : "border-transparent hover:bg-muted/60"
+                        }`}
+                      >
                         <span
-                          className={`truncate text-sm ${
-                            selected ? "font-medium text-primary" : "text-foreground"
+                          className={`flex h-4 w-4 shrink-0 items-center justify-center rounded-full border ${
+                            selected
+                              ? "border-primary bg-primary text-primary-foreground"
+                              : "border-muted-foreground/30"
                           }`}
                         >
-                          {tag.name}
+                          {selected && <Check className="h-2.5 w-2.5" />}
                         </span>
-                        {tag.name === "latest" && (
-                          <Badge
-                            variant="outline"
-                            className="h-4 shrink-0 border-primary/20 bg-primary/10 px-1 text-[10px] font-normal text-primary"
-                          >
-                            最新
-                          </Badge>
-                        )}
-                      </span>
-                      {hasMeta && (
-                        <span className="mt-0.5 flex items-center gap-2.5 text-[11px] text-muted-foreground">
-                          {tag.size > 0 && (
-                            <span className="flex items-center gap-1">
-                              <HardDrive className="h-3 w-3" />
-                              {formatBytes(tag.size)}
+                        <span className="min-w-0 flex-1">
+                          <span className="flex items-center gap-1.5">
+                            <span
+                              className={`truncate text-sm ${
+                                selected
+                                  ? "font-medium text-primary"
+                                  : "text-foreground"
+                              }`}
+                            >
+                              {tag.name}
+                            </span>
+                            {tag.name === "latest" && (
+                              <Badge
+                                variant="outline"
+                                className="h-4 shrink-0 border-primary/20 bg-primary/10 px-1 text-[10px] font-normal text-primary"
+                              >
+                                最新
+                              </Badge>
+                            )}
+                          </span>
+                          {hasMeta && (
+                            <span className="mt-0.5 flex items-center gap-2.5 text-[11px] text-muted-foreground">
+                              {tag.size > 0 && (
+                                <span className="flex items-center gap-1">
+                                  <HardDrive className="h-3 w-3" />
+                                  {formatBytes(tag.size)}
+                                </span>
+                              )}
+                              {tag.last_updated && (
+                                <span className="flex items-center gap-1">
+                                  <Clock className="h-3 w-3" />
+                                  {formatRelativeTime(tag.last_updated)}
+                                </span>
+                              )}
                             </span>
                           )}
-                          {tag.last_updated && (
-                            <span className="flex items-center gap-1">
-                              <Clock className="h-3 w-3" />
-                              {formatRelativeTime(tag.last_updated)}
-                            </span>
-                          )}
                         </span>
-                      )}
-                    </span>
-                  </button>
-                );
-              })}
-              {visibleTags.length === 0 && (
-                <p className="py-6 text-center text-xs text-muted-foreground">
-                  未找到匹配的标签
-                </p>
-              )}
-            </div>
+                      </button>
+                    );
+                  })}
+                  {visibleTags.length === 0 && (
+                    <p className="py-6 text-center text-xs text-muted-foreground">
+                      未找到匹配的标签
+                    </p>
+                  )}
+                </div>
+              </>
+            )}
           </PopoverContent>
         </Popover>
       </div>
