@@ -183,11 +183,6 @@ export function ContainerImageField({
               <span className="truncate font-medium">
                 {current.tag || "请选择标签"}
               </span>
-              {selectedMeta && selectedMeta.size > 0 && (
-                <span className="shrink-0 text-xs text-muted-foreground">
-                  {formatBytes(selectedMeta.size)}
-                </span>
-              )}
               {isLoading && (
                 <Loader2 className="h-3 w-3 shrink-0 animate-spin text-muted-foreground" />
               )}
@@ -204,7 +199,7 @@ export function ContainerImageField({
             <div
               role="listbox"
               aria-labelledby={tagId}
-              className="absolute right-0 top-full z-30 mt-1 w-[360px] max-w-[calc(100vw-3rem)] rounded-xl border bg-popover p-2 text-popover-foreground shadow-lg"
+              className="absolute right-0 top-full z-30 mt-1 w-full rounded-xl border bg-popover p-2 text-popover-foreground shadow-lg"
             >
               {isLoading && sortedTags.length === 0 ? (
                 <div className="flex items-center justify-center gap-2 py-8 text-xs text-muted-foreground">
@@ -251,10 +246,7 @@ export function ContainerImageField({
                     </div>
                   )}
 
-                  <div
-                    className="max-h-72 space-y-1 overflow-y-auto"
-                    style={{ scrollbarGutter: "stable" }}
-                  >
+                  <div className="max-h-72 space-y-1 overflow-y-auto [scrollbar-width:thin] [&::-webkit-scrollbar]:w-1 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-muted-foreground/30 [&::-webkit-scrollbar-thumb:hover]:bg-muted-foreground/50">
                     {manualTag && (
                       <button
                         type="button"
