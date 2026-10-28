@@ -1,11 +1,295 @@
 """Docker 镜像业务服务。"""
 
+import asyncio
 import math
+import re
+import time
 import urllib.parse
 
 import httpx
 
 from app.services.docker import docker_common as common
+
+
+_HUB_HOSTS = {"", "docker.io", "index.docker.io", "registry-1.docker.io"}
+_MANIFEST_TYPES = (
+    "application/vnd.oci.image.index.v1+json",
+    "application/vnd.docker.distribution.manifest.list.v2+json",
+    "application/vnd.oci.image.manifest.v1+json",
+    "application/vnd.docker.distribution.manifest.v2+json",
+)
+_MANIFEST_ACCEPT = ", ".join(_MANIFEST_TYPES)
+_INDEX_TYPES = {
+    "application/vnd.oci.image.index.v1+json",
+    "application/vnd.docker.distribution.manifest.list.v2+json",
+}
+_TAG_LIMIT = 50
+_REGISTRY_TAG_LIMIT = 30
+_TAG_META_CONCURRENCY = 16
+_MANIFEST_BUDGET = 8
+_CONFIG_BUDGET = 4
+_TAG_CACHE_TTL = 300
+_tag_cache: dict[str, tuple[float, list[dict]]] = {}
+
+
+def _split_image_ref(image: str) -> tuple[str, str]:
+    """拆出镜像仓库域名与仓库名，未带域名时视为 Docker Hub。"""
+    ref = image.strip().removeprefix("https://").removeprefix("http://")
+    if "@" in ref:
+        ref = ref.split("@", 1)[0]
+    parts = [p for p in ref.split("/") if p]
+    if not parts:
+        return "", ""
+    host = ""
+    if len(parts) > 1 and (
+        "." in parts[0] or ":" in parts[0] or parts[0] == "localhost"
+    ):
+        host = parts.pop(0)
+    if parts and ":" in parts[-1]:
+        parts[-1] = parts[-1].rsplit(":", 1)[0]
+    repo = "/".join(parts)
+    if host in _HUB_HOSTS:
+        host = ""
+        if "/" not in repo:
+            repo = f"library/{repo}"
+    return host, repo
+
+
+def _parse_bearer_challenge(header: str) -> dict[str, str]:
+    if not header or not header.lower().startswith("bearer"):
+        return {}
+    return {k.lower(): v for k, v in re.findall(r'(\w+)="([^"]*)"', header)}
+
+
+def _next_link(header: str | None) -> str | None:
+    if not header:
+        return None
+    match = re.search(r"<([^>]+)>\s*;\s*rel=\"?next\"?", header)
+    return match.group(1) if match else None
+
+
+class _RegistryClient:
+    """OCI Distribution 协议客户端，匿名访问公开仓库。"""
+
+    def __init__(self, client: httpx.AsyncClient, host: str, repo: str):
+        self._client = client
+        self.host = host
+        self.repo = repo
+        self._token: str | None = None
+        self._lock = asyncio.Lock()
+
+    @property
+    def _base(self) -> str:
+        return f"https://{self.host}/v2/{self.repo}"
+
+    def _headers(self) -> dict[str, str]:
+        headers = {"Accept": _MANIFEST_ACCEPT}
+        if self._token:
+            headers["Authorization"] = f"Bearer {self._token}"
+        return headers
+
+    async def _ensure_token(self) -> None:
+        if self._token is not None:
+            return
+        async with self._lock:
+            if self._token is not None:
+                return
+            try:
+                resp = await self._client.get(f"https://{self.host}/v2/")
+            except httpx.HTTPError:
+                raise
+            challenge = _parse_bearer_challenge(
+                resp.headers.get("www-authenticate", "")
+            )
+            realm = challenge.get("realm")
+            if resp.status_code != 401 or not realm:
+                self._token = ""
+                return
+            params = {"scope": f"repository:{self.repo}:pull"}
+            if challenge.get("service"):
+                params["service"] = challenge["service"]
+            token_resp = await self._client.get(realm, params=params)
+            token_resp.raise_for_status()
+            data = token_resp.json()
+            self._token = data.get("token") or data.get("access_token") or ""
+
+    async def list_tags(self, limit: int) -> list[str]:
+        await self._ensure_token()
+        url: str | None = f"{self._base}/tags/list"
+        params: dict | None = {"n": limit}
+        names: list[str] = []
+        while url and len(names) < limit:
+            resp = await self._client.get(url, params=params, headers=self._headers())
+            resp.raise_for_status()
+            names.extend(resp.json().get("tags") or [])
+            url = _next_link(resp.headers.get("link"))
+            params = None
+        return names[:limit]
+
+    async def manifest(self, tag: str) -> dict:
+        """取标签对应的单架构镜像清单，返回大小、摘要与配置摘要。"""
+        resp = await self._client.get(
+            f"{self._base}/manifests/{tag}", headers=self._headers()
+        )
+        resp.raise_for_status()
+        digest = resp.headers.get("docker-content-digest", "")
+        manifest = resp.json()
+        if manifest.get("mediaType") in _INDEX_TYPES or "manifests" in manifest:
+            child = self._pick_platform(manifest.get("manifests") or [])
+            if child:
+                sub = await self._client.get(
+                    f"{self._base}/manifests/{child['digest']}",
+                    headers=self._headers(),
+                )
+                sub.raise_for_status()
+                manifest = sub.json()
+        size = sum(layer.get("size", 0) for layer in manifest.get("layers") or [])
+        size += (manifest.get("config") or {}).get("size", 0)
+        return {
+            "digest": digest,
+            "size": size,
+            "config_digest": (manifest.get("config") or {}).get("digest"),
+        }
+
+    async def config_created(self, config_digest: str) -> str:
+        """读取镜像配置块的创建时间。"""
+        resp = await self._client.get(
+            f"{self._base}/blobs/{config_digest}", headers=self._headers()
+        )
+        resp.raise_for_status()
+        return resp.json().get("created", "") or ""
+
+    @staticmethod
+    def _pick_platform(manifests: list[dict]) -> dict | None:
+        candidates = [
+            m
+            for m in manifests
+            if (m.get("platform") or {}).get("os") == "linux"
+            and (m.get("platform") or {}).get("architecture") in ("amd64", "arm64")
+        ]
+        candidates.sort(
+            key=lambda m: (m.get("platform") or {}).get("architecture") != "amd64"
+        )
+        return candidates[0] if candidates else None
+
+
+async def _hub_tags(repo: str, limit: int) -> list[dict]:
+    url = f"https://hub.docker.com/v2/repositories/{repo}/tags/"
+    async with httpx.AsyncClient() as client:
+        # Docker Hub 偶发连接重置，重试一次再放弃
+        for attempt in range(2):
+            try:
+                resp = await client.get(url, params={"page_size": limit}, timeout=15)
+                resp.raise_for_status()
+                break
+            except (
+                httpx.ConnectError,
+                httpx.ReadError,
+                httpx.ReadTimeout,
+                httpx.RemoteProtocolError,
+            ):
+                if attempt:
+                    raise
+    return [
+        {
+            "name": r.get("name", ""),
+            "last_updated": r.get("last_updated", ""),
+            "size": r.get("full_size", 0),
+            "digest": r.get("digest", ""),
+        }
+        for r in resp.json().get("results", [])
+    ]
+
+
+async def _retry(fn, attempts: int = 2):
+    """偶发连接重置 / 5xx 时重试一次。"""
+    for attempt in range(attempts):
+        try:
+            return await fn()
+        except (httpx.TransportError, httpx.HTTPStatusError):
+            if attempt == attempts - 1:
+                raise
+
+
+async def _registry_tags(host: str, repo: str, limit: int) -> list[dict]:
+    async with httpx.AsyncClient(
+        timeout=15,
+        follow_redirects=True,
+        limits=httpx.Limits(max_connections=32, max_keepalive_connections=32),
+    ) as client:
+        registry = _RegistryClient(client, host, repo)
+        names = await _retry(lambda: registry.list_tags(limit))
+        if not names:
+            return []
+        semaphore = asyncio.Semaphore(_TAG_META_CONCURRENCY)
+
+        async def _manifest(name: str) -> dict:
+            try:
+                async with semaphore:
+                    return {"name": name, **(await registry.manifest(name))}
+            except Exception:
+                common.logger.debug("获取标签清单失败: %s:%s", repo, name)
+                return {"name": name, "size": 0, "digest": "", "config_digest": ""}
+
+        # 元数据只做尽力补充，超出预算的标签仍会列出，只是没有大小与时间
+        done = await _gather_bounded(
+            {name: _manifest(name) for name in names}, _MANIFEST_BUDGET
+        )
+        entries = [
+            done[name].result() if name in done else
+            {"name": name, "size": 0, "digest": "", "config_digest": ""}
+            for name in names
+        ]
+
+        # 多个标签常指向同一清单（如 latest 与 main），按配置块摘要去重
+        config_digests = {e["config_digest"] for e in entries if e["config_digest"]}
+
+        async def _created(digest: str) -> tuple[str, str]:
+            try:
+                async with semaphore:
+                    return digest, await registry.config_created(digest)
+            except Exception:
+                common.logger.debug("获取镜像配置块失败: %s", digest)
+                return digest, ""
+
+        created_map = {
+            key: task.result()[1]
+            for key, task in (
+                await _gather_bounded(
+                    {digest: _created(digest) for digest in config_digests},
+                    _CONFIG_BUDGET,
+                )
+            ).items()
+        }
+
+        return [
+            {
+                "name": e["name"],
+                "last_updated": created_map.get(e["config_digest"], ""),
+                "size": e["size"],
+                "digest": e["digest"],
+            }
+            for e in entries
+        ]
+
+
+async def _gather_bounded(coros: dict, timeout: float) -> dict:
+    """并发的协程在预算内完成则返回，超时的直接放弃。"""
+    tasks = {key: asyncio.create_task(coro) for key, coro in coros.items()}
+    done, pending = await asyncio.wait(tasks.values(), timeout=timeout)
+    for task in pending:
+        task.cancel()
+    if pending:
+        await asyncio.gather(*pending, return_exceptions=True)
+    return {key: task for key, task in tasks.items() if task in done}
+
+
+def _sort_tags(tags: list[dict]) -> list[dict]:
+    return sorted(
+        tags,
+        key=lambda t: t.get("last_updated") or "",
+        reverse=True,
+    )
 
 
 class ImageService(common.BaseDockerService):
@@ -328,44 +612,31 @@ class ImageService(common.BaseDockerService):
     async def get_image_tags(self, image: str) -> list[dict]:
         """获取指定镜像的可用标签列表。
 
+        支持 Docker Hub 与任意 OCI registry（ghcr.io、quay.io 等），
         按最后更新时间倒序排列，最新的标签排在最前面。
         """
-        repo = image.strip()
-        if "/" not in repo:
-            repo = f"library/{repo}"
-
-        url = f"https://hub.docker.com/v2/repositories/{repo}/tags/?page_size=20"
-        try:
-            async with httpx.AsyncClient() as client:
-                # Docker Hub 偶发连接重置，重试一次再放弃
-                for attempt in range(2):
-                    try:
-                        resp = await client.get(url, timeout=15)
-                        resp.raise_for_status()
-                        break
-                    except (
-                        httpx.ConnectError,
-                        httpx.ReadError,
-                        httpx.ReadTimeout,
-                        httpx.RemoteProtocolError,
-                    ):
-                        if attempt:
-                            raise
-                data = resp.json()
-            results = data.get("results", [])
-            tags = []
-            for r in results:
-                tags.append({
-                    "name": r.get("name", ""),
-                    "last_updated": r.get("last_updated", ""),
-                    "size": r.get("full_size", 0),
-                    "digest": r.get("digest", ""),
-                })
-            # 按最后更新时间倒序，最新标签在前
-            tags.sort(key=lambda t: t.get("last_updated") or "", reverse=True)
-            return tags
-        except Exception:
+        host, repo = _split_image_ref(image)
+        if not repo:
             return []
+
+        cache_key = f"{host}/{repo}"
+        cached = _tag_cache.get(cache_key)
+        if cached and time.monotonic() - cached[0] < _TAG_CACHE_TTL:
+            return cached[1]
+
+        try:
+            if host:
+                tags = await _registry_tags(host, repo, _REGISTRY_TAG_LIMIT)
+            else:
+                tags = await _hub_tags(repo, _TAG_LIMIT)
+        except Exception as e:
+            common.logger.info("获取镜像标签失败 %s: %s", image, e)
+            return []
+
+        tags = _sort_tags(tags)
+        if tags:
+            _tag_cache[cache_key] = (time.monotonic(), tags)
+        return tags
 
     def pull_image_async(self, image: str, task_id: str, task_manager):
         """在后台线程中流式拉取指定镜像，并报告进度。"""
