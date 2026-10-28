@@ -34,9 +34,6 @@ class Settings(BaseSettings):
     CORS_ORIGINS: str = "http://localhost:5173"
     """允许的跨域来源，逗号分隔。"""
 
-    ACCESS_HOST: str = ""
-    """生成应用跳转链接时使用的访问地址（内网 IP 或域名），留空时自动探测。"""
-
     DATA_ROOT: str = "./data"
     """数据根目录，Compose 工作区与应用图标默认存放于其下。"""
 
@@ -47,7 +44,7 @@ class Settings(BaseSettings):
     """图标文件存储目录，默认为 DATA_ROOT/app-icons，可单独覆盖。"""
 
     MANAGE_BASE_URL: str = ""
-    """配套管理端（nas-deck-manage）基础地址，留空表示禁用应用与编排方案同步，保持纯本地行为。"""
+    """配套管理端（nas-deck-manage）基础地址，留空表示禁用应用与编排方案同步。"""
 
     MANAGE_SYNC_INTERVAL_MINUTES: int = 30
     """从管理端定时同步应用与编排方案的间隔（分钟）。"""
@@ -80,8 +77,8 @@ class Settings(BaseSettings):
         """解析 CORS_ORIGINS 为来源列表。"""
         return [o.strip() for o in self.CORS_ORIGINS.split(",") if o.strip()]
 
-    model_config = {"env_file": ".env"}
-    """指定 .env 文件路径用于加载环境变量。"""
+    model_config = {"env_file": ".env", "extra": "ignore"}
+    """指定 .env 文件路径用于加载环境变量；忽略已废弃的未知变量，避免旧 .env 导致启动失败。"""
 
 
 # 全局配置单例

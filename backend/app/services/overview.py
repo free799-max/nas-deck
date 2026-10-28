@@ -16,7 +16,6 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.config import settings
 from app.core.exceptions import APIException
 from app.models.app_store import App
 from app.models.orchestration import AppInstance, AppOrchestrationInstance
@@ -28,26 +27,10 @@ from app.schemas.dashboard import (
     OverviewCategoryOut,
     OverviewOut,
 )
+from app.services import catalog_sync
 from app.services.docker import docker, docker_manager
 
-# 分类展示顺序：与侧边栏的自动化分类保持一致，未知分类排在最后
-CATEGORY_ORDER = [
-    "movie",
-    "media",
-    "comic",
-    "book",
-    "music",
-    "download",
-    "gallery",
-    "game",
-    "news",
-    "tool",
-    "network",
-    "web",
-    "docker",
-    "other",
-]
-_CATEGORY_RANK = {name: index for index, name in enumerate(CATEGORY_ORDER)}
+# 分类展示顺序由管理端下发的分类字典决定；未同步时未知分类按名称排序
 
 
 def _as_int(value: object) -> int | None:
@@ -215,11 +198,8 @@ def is_loopback_host(host: str) -> bool:
 def detect_host() -> str:
     """推断宿主机对内提供访问的地址。
 
-    优先使用 ``ACCESS_HOST`` 配置；未配置时通过默认路由探测本机内网 IP。
+    通过默认路由探测本机内网 IP，探测失败时回退到 localhost。
     """
-    configured = str(settings.ACCESS_HOST or "").strip()
-    if configured:
-        return normalize_host(configured)
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
             sock.settimeout(0.5)
@@ -615,14 +595,13 @@ class OverviewService:
             category = _category_of(app, instance)
             grouped[category].append(_build_overview_app(instance, status, host))
 
+        rank = catalog_sync.get_category_rank()
+        unknown_rank = len(rank)
         categories = [
             OverviewCategoryOut(category=category, apps=apps)
             for category, apps in sorted(
                 grouped.items(),
-                key=lambda item: (
-                    _CATEGORY_RANK.get(item[0], len(CATEGORY_ORDER)),
-                    item[0],
-                ),
+                key=lambda item: (rank.get(item[0], unknown_rank), item[0]),
             )
         ]
         return OverviewOut(

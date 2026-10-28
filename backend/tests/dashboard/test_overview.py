@@ -15,7 +15,6 @@ from app.services.overview import (
     _collect_container_info,
     _collect_metrics,
     build_app_url,
-    detect_host,
     is_loopback_host,
     normalize_host,
     overview_service,
@@ -219,7 +218,19 @@ class TestResolveAppUrl:
 
 class TestOverviewService:
     @pytest.mark.asyncio
-    async def test_groups_by_category_and_builds_urls(self, db_session: AsyncSession):
+    async def test_groups_by_category_and_builds_urls(
+        self, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+    ):
+        from app.services import catalog_sync
+
+        monkeypatch.setattr(
+            catalog_sync,
+            "categories",
+            [
+                {"value": "movie", "label": "影视", "order": 0},
+                {"value": "comic", "label": "漫画", "order": 1},
+            ],
+        )
         jellyfin = _make_app(name="jellyfin", category="movie")
         komga = _make_app(
             name="komga",
@@ -280,7 +291,16 @@ class TestOverviewService:
         assert overview.categories[1].apps[0].url == "http://192.168.1.10:10002"
 
     @pytest.mark.asyncio
-    async def test_unknown_category_sorted_last(self, db_session: AsyncSession):
+    async def test_unknown_category_sorted_last(
+        self, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+    ):
+        from app.services import catalog_sync
+
+        monkeypatch.setattr(
+            catalog_sync,
+            "categories",
+            [{"value": "tool", "label": "工具", "order": 0}],
+        )
         tool = _make_app(name="memos", category="tool", default_ports=[])
         other = _make_app(name="custom", category="custom", default_ports=[])
         db_session.add_all([tool, other])
@@ -398,10 +418,3 @@ class TestResolveHost:
             "app.services.overview.detect_host", lambda: "localhost"
         )
         assert resolve_host("localhost") == "localhost"
-
-    def test_detect_host_prefers_configured_access_host(self, monkeypatch):
-        monkeypatch.setattr(
-            "app.services.overview.settings",
-            SimpleNamespace(ACCESS_HOST="http://192.168.1.88:5000"),
-        )
-        assert detect_host() == "192.168.1.88"
