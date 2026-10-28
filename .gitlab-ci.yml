@@ -1,4 +1,7 @@
-# 构建并推送 NasDeck 镜像到 Harbor。
+# 推送 v* 版本标签时构建并推送 NasDeck 镜像到 Harbor。
+#
+# 触发方式：只在推送 v主.次.修订 标签时运行（由 scripts/release.sh 生成并推送），
+# 分支推送、合并请求、手动运行都不会触发，避免每次提交都重新构建。
 #
 # 目标 Runner 使用 shell executor（在宿主机上直接执行），所以这里不声明
 # image / services，也不设置 DOCKER_HOST：直接使用宿主机安装的 Docker 与 buildx。
@@ -31,11 +34,9 @@ variables:
 
 workflow:
   rules:
-    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
-    - if: $CI_COMMIT_BRANCH && $CI_OPEN_MERGE_REQUESTS
-      when: never
-    - if: $CI_COMMIT_BRANCH
-    - if: $CI_COMMIT_TAG
+    # 只响应语义化版本标签；其余情况一律不创建流水线
+    - if: $CI_COMMIT_TAG =~ /^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$/
+    - when: never
 
 .docker:
   before_script:
@@ -78,20 +79,27 @@ app-image:
   script:
     - |
       APP_REF="$HARBOR_REGISTRY/$HARBOR_PROJECT/$APP_IMAGE_NAME"
-      TAGS="--tag $APP_REF:$CI_COMMIT_SHORT_SHA"
-      if [ -n "$CI_COMMIT_TAG" ]; then
-        TAGS="$TAGS --tag $APP_REF:$CI_COMMIT_TAG"
+      TAG="$CI_COMMIT_TAG"
+      TAGS="--tag $APP_REF:$TAG --tag $APP_REF:$CI_COMMIT_SHORT_SHA"
+      # 正式版本额外打 minor / major / latest；预发布标签（如 v1.0.0-rc.1）只保留自身
+      if printf '%s' "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+        CORE="${TAG#v}"
+        MAJOR="${CORE%%.*}"
+        MINOR="${CORE#*.}"
+        MINOR="${MINOR%%.*}"
+        TAGS="$TAGS --tag $APP_REF:v$MAJOR.$MINOR --tag $APP_REF:v$MAJOR --tag $APP_REF:latest"
       fi
-      if [ "$CI_COMMIT_BRANCH" = "$CI_DEFAULT_BRANCH" ]; then
-        TAGS="$TAGS --tag $APP_REF:latest"
-      fi
+      echo "本次构建标签：$TAGS"
       docker buildx create --use --name nasdeck --driver docker-container >/dev/null 2>&1 || docker buildx use nasdeck
       docker buildx build \
         --platform "$PLATFORMS" \
         --build-arg "BASE_IMAGE=$BASE_REF" \
         --build-arg "MANAGE_BASE_URL=$MANAGE_BASE_URL" \
+        --label "org.opencontainers.image.title=NasDeck" \
+        --label "org.opencontainers.image.version=$TAG" \
+        --label "org.opencontainers.image.revision=$CI_COMMIT_SHA" \
         --cache-from "type=registry,ref=$APP_REF:buildcache" \
         --cache-to "type=registry,ref=$APP_REF:buildcache,mode=max" \
         $TAGS \
         --push .
-      echo "已推送：$APP_REF:$CI_COMMIT_SHORT_SHA"
+      echo "已推送：$APP_REF:$TAG"
