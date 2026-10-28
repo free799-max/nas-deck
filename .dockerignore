@@ -1,0 +1,41 @@
+# 依赖与构建产物（镜像内重新安装/构建）
+**/node_modules/
+**/dist/
+**/.venv/
+**/__pycache__/
+**/.pytest_cache/
+**/*.egg-info/
+
+# 本地数据与运行时文件（尤其 backend/data 体积很大，绝不能进入镜像上下文）
+**/data/
+**/*.db
+**/*.db-shm
+**/*.db-wal
+**/*.db.bak
+**/*.dump
+**/*.log
+
+# 环境配置与密钥
+**/.env
+**/.env.*
+
+# 构建镜像不需要的仓库内容
+.git/
+.gitignore
+.gitattributes
+.gitlab-ci.yml
+.github/
+.idea/
+.vscode/
+.image-tools/
+assets/
+docs/
+generated-images/
+scripts/
+backend/tests/
+**/Dockerfile
+**/.dockerignore
+docker-compose.yml
+README.md
+CLAUDE.md
+.DS_Store

@@ -1,60 +1,61 @@
+# NasDeck 生产部署：一个应用容器（React + FastAPI + Nginx）+ 一个 PostgreSQL 容器。
+# 使用前复制 .env.example 为 .env，并填写 POSTGRES_PASSWORD、SECRET_KEY。
+name: nas-deck
+
 services:
   postgres:
     image: postgres:16-alpine
+    restart: unless-stopped
     environment:
-      POSTGRES_USER: nasdeck
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?请在 .env 中设置 POSTGRES_PASSWORD（参考 .env.example）}
-      POSTGRES_DB: nasdeck
+      POSTGRES_DB: "${POSTGRES_DB:-nasdeck}"
+      POSTGRES_USER: "${POSTGRES_USER:-nasdeck}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?请先在 .env 中填写 POSTGRES_PASSWORD}"
+      TZ: "${TZ:-Asia/Shanghai}"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U nasdeck -d nasdeck"]
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
       interval: 5s
       timeout: 5s
-      retries: 10
-    restart: unless-stopped
+      retries: 20
+      start_period: 10s
 
-  backend:
-    build: ./backend
-    ports:
-      - "5001:5001"
-    environment:
-      DATABASE_URL: postgresql+asyncpg://nasdeck:${POSTGRES_PASSWORD}@postgres:5432/nasdeck
-      DATA_ROOT: /data
-      CORS_ORIGINS: ${CORS_ORIGINS:-}
-      REGISTRATION_OPEN: ${REGISTRATION_OPEN:-false}
-      SECRET_KEY: ${SECRET_KEY:-}
-    env_file:
-      # .env 缺失时不报错，其余配置走 environment 默认值；生产密钥请在 .env 中配置
-      - path: .env
-        required: false
-    volumes:
-      - ./data:/data
-      # 存储目录（系统设置-存储配置中配置的宿主机路径，含应用数据目录）如需在后端容器内
-      # 浏览/新建子目录，需将宿主机路径按同样的容器内路径挂载进 backend 容器，例如：
-      # - /mnt/disk1:/mnt/disk1
-      # 挂载 docker.sock 用于容器/Compose 管理功能。
-      # 风险说明：拥有 docker.sock 即等同宿主机 root 权限，请仅在受信环境部署；
-      # 如不需要 Docker 管理功能可删除此挂载（相关功能会自动降级）。
-      - /var/run/docker.sock:/var/run/docker.sock
+  app:
+    image: "${APP_IMAGE:-nas-deck:local}"
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 30s
     depends_on:
       postgres:
         condition: service_healthy
+    ports:
+      - "${APP_PORT:-5000}:80"
+    # 所有应用配置都来自项目根目录的 .env，Compose 只负责注入和拼接
+    env_file:
+      - .env
+    environment:
+      # 容器内固定值，与数据卷挂载点对应
+      DATA_ROOT: /data
+      # 由数据库变量拼接，避免在 .env 中重复维护连接串
+      DATABASE_URL: "postgresql+asyncpg://${POSTGRES_USER:-nasdeck}:${POSTGRES_PASSWORD:?请先在 .env 中填写 POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-nasdeck}"
+    volumes:
+      # 应用数据：Compose 工作区、图标等
+      - "${DATA_DIR:-./data}:/data"
+      # Docker 管理能力；不需要容器/Compose 管理时可删除此行
+      - /var/run/docker.sock:/var/run/docker.sock
+      # 系统设置中的宿主机存储目录需要在容器内可见时，按相同路径额外挂载，例如：
+      # - /mnt/disk1:/mnt/disk1
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:5001/api/health')\""]
+      test:
+        - CMD-SHELL
+        - python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1/api/health', timeout=3)"
       interval: 30s
       timeout: 5s
       retries: 5
-      start_period: 20s
-    restart: unless-stopped
-
-  frontend:
-    build: ./frontend
-    ports:
-      - "5000:80"
-    depends_on:
-      - backend
-    restart: unless-stopped
+      start_period: 30s
 
 volumes:
   postgres_data:
