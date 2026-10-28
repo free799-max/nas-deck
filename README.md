@@ -69,7 +69,7 @@ docker compose ps
 首次使用需要：
 
 1. 在 Harbor 创建项目 `library`（或修改流水线变量 `HARBOR_PROJECT`）。
-2. 在 GitLab 项目 Settings → CI/CD → Variables 中添加 `HARBOR_USER`、`HARBOR_PASSWORD`（勾选 Masked）。
+2. 在 Runner 宿主机上执行 `docker login harbor.cacty.top`，流水线直接复用该登录状态（不再需要 `HARBOR_USER` / `HARBOR_PASSWORD`）。
 3. Runner 使用 shell executor，宿主机需安装 Docker 与 buildx，并以有权限调用 Docker 的用户运行（若改用 docker executor，需要自行恢复 `docker:dind` 服务与 `DOCKER_HOST`）。
 4. `PLATFORMS` 默认 `linux/amd64`；NAS 是 ARM 时在 CI/CD 变量中改为 `linux/arm64`，base 标签含平台，不会互相覆盖。
 

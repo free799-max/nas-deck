@@ -7,9 +7,8 @@
 # image / services，也不设置 DOCKER_HOST：直接使用宿主机安装的 Docker 与 buildx。
 # 如果改用 docker executor，需要恢复 docker:dind 服务并设置 DOCKER_HOST。
 #
-# 需要预先在 GitLab 项目 Settings → CI/CD → Variables 中配置：
-#   HARBOR_USER       Harbor 用户名或机器人账号
-#   HARBOR_PASSWORD   Harbor 密码或机器人 token（勾选 Masked）
+# 推送 Harbor 使用 Runner 宿主机上已有的 Docker 登录状态（需提前在该机器执行
+# docker login harbor.cacty.top），流水线本身不接收 Harbor 账号密码。
 #
 # 流水线分两阶段：
 #   base  把系统依赖、Docker CLI、Python 依赖打成基础镜像推送到 Harbor，
@@ -42,7 +41,6 @@ workflow:
   before_script:
     - docker version
     - docker buildx version
-    - echo "$HARBOR_PASSWORD" | docker login -u "$HARBOR_USER" --password-stdin "$HARBOR_REGISTRY"
 
 base-image:
   extends: .docker
