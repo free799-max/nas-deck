@@ -1,0 +1,110 @@
+# 更新日志
+
+## [v0.1.0] - 2026-10-28
+
+### 新功能
+
+- 新增版本发布脚本与 release skill
+- 仅推送版本标签时构建镜像并按 semver 打标签
+- 更新应用市场、看板与自动化界面
+- 更新应用市场、编排与容器管理能力
+- 接入目录同步、授权与自动整理调度
+- 接入授权守卫并补充通用工具
+- 新增阅读、音乐与二毛读书自动配置客户端
+- 音乐自动整理与阅读自动同步
+- 实例组升级、更新事件与状态对账
+- 新增代理检测、镜像加速、Hosts 优选与邮箱后缀配置
+- 新增仪表盘概览与主机资源监控
+- 新增授权状态管理与访问守卫
+- 自动化页支持实例组恢复并完善表单交互
+- 自动配置与装配进度跟踪及未完成配置补做
+- 实例组删除改为后台任务并支持备份恢复
+- 新增漫画应用客户端与漫画编排模板
+- 实例服务巡检、自动装配与插件管理
+- 合并存储目录配置，移除宿主机根目录
+- 服务端口起始配置、应用认证检测与部署流程增强
+- 应用商店新增批量导入脚本与 30+ 应用图标资源
+- Dashboard 从 mock 数据重写为真实容器/镜像/宿主机指标
+- 应用商店验证与编辑、编排共享配置及前端优化
+- SchemaForm 平铺渲染支持与部署向导预览优化
+- 添加 Jellyfin 应用认证检测客户端
+- 优化认证配置表单布局并实时同步容器状态
+- 优化影视自动化页面交互与样式
+- 优化影视自动化页面结构与交互
+- 全局部署进度弹窗、实时日志与 Compose 删除交互优化
+- 应用商店部署与 Compose 编排多项增强
+- migrate backend from SQLite to PostgreSQL and consolidate migrations
+- 应用商店部署支持目录选择与密码自动生成
+- align array form fields (ports/volumes/env) in deploy dialog
+- 优化应用商店部署弹窗布局，统一环境变量为 key-value 数组格式
+- 优化 Docker 主机页面布局与信息展示
+- 优化 Compose Stack 版本管理弹窗，新增 YAML 版本比对
+- 重构 Docker 镜像详情弹窗，本地镜像表格新增 ID 列
+- 优化 Docker 镜像管理页面交互与数据刷新
+- 优化侧边栏布局与 TopBar 交互，修复 Docker 构建配置
+- enhance Docker management and frontend UI
+- implement unified StandardResponse API format
+- NasDeck 初始提交
+
+### 修复
+
+- 固定端口预留并保留旧密码用于重试
+- 单共享根目录时推导下载与媒体库子目录
+- 修复目录选择器根路径、表单被 refetch 覆盖、未捕获异常、日志无限增长等问题，实装记住我
+- 安全加固——危险端点收敛管理员权限、注册闸门、SSE 连接释放、SSRF 与路径防护
+- 镜像搜索与标签接口改为异步 httpx，影视编排共享配置改为存储映射数组
+- 认证配置密码和 API Key 改为明文显示
+- 修复 frontend 嵌套 git 仓库问题，将前端代码作为普通文件追踪
+
+### 重构
+
+- 配置统一由 .env 注入并移除 ACCESS_HOST
+- 应用目录改为从管理端同步并移除本地编辑
+- 重组后端目录结构
+- 拆分巨型 hooks 为领域模块，拉取进度迁移 zustand 内存态并共享 SSE 连接
+- 修复镜像搜索缺 await、任务管理器抽公共基类、docker 调用收敛线程池并复用单例、清理死代码
+- 新增 src/api 请求封装层并修复 hooks 层多个 bug
+- 清理未使用的 DockerContainer 模型、plugin.docker_id 字段及历史遗留表
+- services/ 按功能域拆分为 docker/ 与 compose/ 子目录
+- 按业务领域拆分 Docker 相关代码
+- 前端 pages 按功能域拆分子目录，后端新增镜像多源配置
+- 精简架构，移除通知/订阅/调度器模块，聚焦 Docker 与插件核心
+
+### 文档
+
+- 补充标签发版与镜像版本说明
+- 更新部署方式与环境变量说明
+- 更新整体架构与开发说明
+- 补充漫画编排、实例组备份恢复与任务进度说明
+- 更新 CLAUDE.md 对齐后端新目录结构
+- 重写 README 对齐实际架构，文档命令统一 pnpm
+- 更新 CLAUDE.md（前端 api 层、异步部署任务机制、命令与约定修正）
+
+### 构建与 CI
+
+- 适配 shell executor 直接使用宿主机 Docker
+- 新增 GitLab CI 构建并推送镜像到 Harbor
+- 合并为单容器镜像并拆分可复用基础层
+- 修复 compose 部署链路——补 postgres 服务、nginx 端口与 SSE 配置、dockerignore、Python 3.12
+
+### 测试
+
+- 新增权限矩阵与注册闸门等 79 个安全加固测试，适配注册开关与导入路径变更
+- 删除过时测试并修复 StandardResponse 断言
+
+### 样式
+
+- 调整容器编排/容器管理页面间距与标题图标
+
+### 其他
+
+- 更新启动脚本与测试/构建配置
+- 忽略本地图片工具与生成产物
+- 删除根目录残留的运行时数据 data/
+- 移除未被调用的 docker_initializer 死代码
+- 统一 pnpm、清理 sonner/shadcn 等冗余依赖、vendor 分包与 shadcn 样式本地化
+- 从版本库移除运行时数据与数据库备份，收紧 gitignore 规则
+- 更新应用商店部署弹窗交互与全局输入框配置
+- add .gitattributes and rewrite README.md
+- Initial commit
+
