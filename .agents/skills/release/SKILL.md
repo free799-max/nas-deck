@@ -57,8 +57,9 @@ git tag -n1 --sort=-v:refname | head -3
 git ls-remote --tags gitlab | tail -5          # 标签已到 GitLab
 ```
 
-流水线在 `https://git.cacty.top/nas/nas-deck/-/pipelines`，只有 tag 流水线：`base-image` 复用或构建基础镜像，`app-image` 推送
-`harbor.cacty.top/library/nas-deck:<tag>`，正式版本同时打 `v主.次`、`v主`、`latest`。
+流水线在 `https://git.cacty.top/nas/nas-deck/-/pipelines`，只有 tag 流水线：`app-image` 以
+`harbor.cacty.top/library/nas-deck-base` 为基础镜像（由 `docker/base.Dockerfile` 手动构建，流水线不构建），
+推送 `harbor.cacty.top/library/nas-deck:<tag>`，正式版本同时打 `v主.次`、`v主`、`latest`。
 部署侧按标签升级：
 
 ```bash

@@ -3,6 +3,9 @@
 # 触发方式：只在推送 v主.次.修订 标签时运行（由 scripts/release.sh 生成并推送），
 # 分支推送、合并请求、手动运行都不会触发，避免每次提交都重新构建。
 #
+# 基础镜像 harbor.cacty.top/library/nas-deck-base 由 docker/base.Dockerfile 手动
+# 构建并推送，流水线只拉取使用，不构建它。
+#
 # 目标 Runner 使用 shell executor（在宿主机上直接执行），所以这里不声明
 # image / services，也不设置 DOCKER_HOST：直接使用宿主机安装的 Docker 与 buildx。
 # 如果改用 docker executor，需要恢复 docker:dind 服务并设置 DOCKER_HOST。
@@ -10,25 +13,20 @@
 # 推送 Harbor 使用 Runner 宿主机上已有的 Docker 登录状态（需提前在该机器执行
 # docker login harbor.cacty.top），流水线本身不接收 Harbor 账号密码。
 #
-# 流水线分两阶段：
-#   base  把系统依赖、Docker CLI、Python 依赖打成基础镜像推送到 Harbor，
-#         标签由 Dockerfile 与 requirements 的内容哈希决定，已存在则直接跳过。
-#   image 复用 base 镜像，只构建后端代码与前端产物，通过 buildx 的 registry 缓存加速。
+# 构建只用 Harbor 上的镜像（基础镜像与 baseimg 上游镜像），Runner 不访问 docker.io。
 
 stages:
-  - base
   - image
 
 variables:
   HARBOR_REGISTRY: harbor.cacty.top
   HARBOR_PROJECT: library
   APP_IMAGE_NAME: nas-deck
-  BASE_IMAGE_NAME: nas-deck-base
+  BASE_IMAGE: harbor.cacty.top/library/nas-deck-base:latest
+  NODE_IMAGE: harbor.cacty.top/baseimg/node:22-alpine
   # 构建期写入镜像默认值；运行时 .env 中的同名变量会覆盖它
   MANAGE_BASE_URL: https://deck-m.freeapps.uk
-  DEBIAN_MIRROR: https://mirrors.aliyun.com
-  PIP_INDEX_URL: https://mirrors.aliyun.com/pypi/simple/
-  # NAS 为 ARM 时改为 linux/arm64（base 标签含平台，不会互相覆盖）
+  # NAS 为 ARM 时改为 linux/arm64
   PLATFORMS: linux/amd64
 
 workflow:
@@ -42,38 +40,9 @@ workflow:
     - docker version
     - docker buildx version
 
-base-image:
-  extends: .docker
-  stage: base
-  script:
-    - |
-      BASE_TAG=$( { cat Dockerfile backend/requirements.txt; echo "$DEBIAN_MIRROR"; echo "$PIP_INDEX_URL"; echo "$PLATFORMS"; } | sha256sum | cut -c1-16 )
-      BASE_REF="$HARBOR_REGISTRY/$HARBOR_PROJECT/$BASE_IMAGE_NAME:$BASE_TAG"
-      echo "BASE_REF=$BASE_REF" > base.env
-      if docker manifest inspect "$BASE_REF" >/dev/null 2>&1; then
-        echo "基础镜像已存在，跳过构建：$BASE_REF"
-        exit 0
-      fi
-      docker buildx create --use --name nasdeck --driver docker-container >/dev/null 2>&1 || docker buildx use nasdeck
-      docker buildx build \
-        --target base \
-        --platform "$PLATFORMS" \
-        --build-arg "DEBIAN_MIRROR=$DEBIAN_MIRROR" \
-        --build-arg "PIP_INDEX_URL=$PIP_INDEX_URL" \
-        --cache-from "type=registry,ref=$BASE_REF-cache" \
-        --cache-to "type=registry,ref=$BASE_REF-cache,mode=max" \
-        --tag "$BASE_REF" \
-        --push .
-  artifacts:
-    reports:
-      dotenv: base.env
-
 app-image:
   extends: .docker
   stage: image
-  needs:
-    - job: base-image
-      artifacts: true
   script:
     - |
       APP_REF="$HARBOR_REGISTRY/$HARBOR_PROJECT/$APP_IMAGE_NAME"
@@ -91,7 +60,8 @@ app-image:
       docker buildx create --use --name nasdeck --driver docker-container >/dev/null 2>&1 || docker buildx use nasdeck
       docker buildx build \
         --platform "$PLATFORMS" \
-        --build-arg "BASE_IMAGE=$BASE_REF" \
+        --build-arg "BASE_IMAGE=$BASE_IMAGE" \
+        --build-arg "NODE_IMAGE=$NODE_IMAGE" \
         --build-arg "MANAGE_BASE_URL=$MANAGE_BASE_URL" \
         --label "org.opencontainers.image.title=NasDeck" \
         --label "org.opencontainers.image.version=$TAG" \

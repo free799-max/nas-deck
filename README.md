@@ -71,7 +71,7 @@ docker compose ps
 1. 在 Harbor 创建项目 `library`（或修改流水线变量 `HARBOR_PROJECT`）。
 2. 在 Runner 宿主机上执行 `docker login harbor.cacty.top`，流水线直接复用该登录状态（不再需要 `HARBOR_USER` / `HARBOR_PASSWORD`）。
 3. Runner 使用 shell executor，宿主机需安装 Docker 与 buildx，并以有权限调用 Docker 的用户运行（若改用 docker executor，需要自行恢复 `docker:dind` 服务与 `DOCKER_HOST`）。
-4. `PLATFORMS` 默认 `linux/amd64`；NAS 是 ARM 时在 CI/CD 变量中改为 `linux/arm64`，base 标签含平台，不会互相覆盖。
+4. `PLATFORMS` 默认 `linux/amd64`；NAS 是 ARM 时在 CI/CD 变量中改为 `linux/arm64`，并用同一平台重建基础镜像。
 
 发布新版本：
 
@@ -82,14 +82,20 @@ scripts/release.sh             # 写 CHANGELOG、提交、打标签并推送两�
 
 版本号按提交信息自动递增（`feat` → minor，`fix` 等 → patch，`feat!` / `BREAKING CHANGE` → major，首次发布为 `v0.1.0`），也可以显式指定 `major|minor|patch`。脚本把更新说明写入 `CHANGELOG.md`，提交 `chore(release): vX.Y.Z` 后打 annotated tag，并依次推送到 `origin` 与 `gitlab`；`gitlab` 收到标签后触发流水线。只推一个远端时用 `RELEASE_REMOTES="gitlab" scripts/release.sh`。
 
-流水线分两个阶段：
+基础镜像 `harbor.cacty.top/library/nas-deck-base` 由 `docker/base.Dockerfile` 手动构建并推送，流水线只拉取使用：
+
+```bash
+docker build -f docker/base.Dockerfile -t harbor.cacty.top/library/nas-deck-base:latest .
+docker push harbor.cacty.top/library/nas-deck-base:latest
+```
+
+系统包或 `backend/requirements.txt` 变化后重建基础镜像。应用镜像仍由标签流水线构建：
 
 | 阶段 | 产物 | 说明 |
 |---|---|---|
-| `base` | `harbor.cacty.top/library/nas-deck-base:<内容哈希>` | 系统依赖 + Docker CLI + Python 依赖；标签由 `Dockerfile` 与 `backend/requirements.txt` 的哈希决定，已存在则跳过，不重复构建 |
-| `image` | `harbor.cacty.top/library/nas-deck:<tag>` 与 `:<commit-sha>`；正式版本另打 `v主.次`、`v主`、`latest` | 直接以 base 镜像为起点，只构建后端代码与前端，配合 buildx registry 缓存 |
+| `image` | `harbor.cacty.top/library/nas-deck:<tag>` 与 `:<commit-sha>`；正式版本另打 `v主.次`、`v主`、`latest` | 以 `nas-deck-base` 为起点，只构建后端代码与前端，配合 buildx registry 缓存 |
 
-`nas-deck:buildcache` 与 `nas-deck-base:<哈希>-cache` 是 buildx 的层缓存标签，不是可部署镜像。
+`nas-deck:buildcache` 是 buildx 的层缓存标签，不是可部署镜像。
 
 构建期的 `MANAGE_BASE_URL` 由流水线变量传入并写入镜像（默认 `https://deck-m.freeapps.uk`），不随代码写死；运行时 `.env` 里的同名变量优先级更高。
 
@@ -101,7 +107,7 @@ APP_IMAGE=harbor.cacty.top/library/nas-deck:v1.2.3 docker compose pull app
 APP_IMAGE=harbor.cacty.top/library/nas-deck:v1.2.3 docker compose up -d app
 ```
 
-把 `v1.2.3` 换成 `latest` 即跟随最新正式版。本地仍可直接 `docker compose up -d --build`：不传 `BASE_IMAGE` 时使用 Dockerfile 内的 `base` 阶段，不依赖 Harbor 上的基础镜像。
+把 `v1.2.3` 换成 `latest` 即跟随最新正式版。本地 `docker compose up -d --build` 同样以 `nas-deck-base` 为基础镜像，需要先 `docker login harbor.cacty.top`。
 
 ## 本地开发（Linux）
 

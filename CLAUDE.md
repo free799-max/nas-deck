@@ -50,7 +50,7 @@ docker compose logs -f app     # 查看应用、迁移与定时任务日志
 
 生产环境只有 `app` 与 `postgres` 两个容器；`app` 内的 Nginx 对外监听 80，FastAPI 只监听容器内回环地址 5001，前端与 API 使用同一端口。
 
-镜像发布走 GitLab CI（`.gitlab-ci.yml`），且**只由推送 `v主.次.修订` 标签触发**，分支推送不构建。发版统一用 `scripts/release.sh`：按提交信息递增版本、写 `CHANGELOG.md`、提交 `chore(release): vX.Y.Z`、打标签并推送到 `origin` 与 `gitlab`（`--dry-run` 只预览）。流水线先把 Dockerfile 的 `base` 阶段（系统依赖 + Docker CLI + Python 依赖）按内容哈希推送到 `harbor.cacty.top/library/nas-deck-base`，应用镜像再通过 `--build-arg BASE_IMAGE=<base>` 复用该层，只构建后端代码与前端，产物为 `nas-deck:<tag>`（正式版本另打 `v主.次`、`v主`、`latest`）。`MANAGE_BASE_URL` 在构建期写入镜像（默认 `https://deck-m.freeapps.uk`），运行时 `.env` 可覆盖。本地构建不传 `BASE_IMAGE`，使用 Dockerfile 内的 `base` 阶段。
+镜像发布走 GitLab CI（`.gitlab-ci.yml`），且**只由推送 `v主.次.修订` 标签触发**，分支推送不构建。发版统一用 `scripts/release.sh`：按提交信息递增版本、写 `CHANGELOG.md`、提交 `chore(release): vX.Y.Z`、打标签并推送到 `origin` 与 `gitlab`（`--dry-run` 只预览）。基础镜像 `harbor.cacty.top/library/nas-deck-base` 由 `docker/base.Dockerfile` 手动构建推送，流水线不构建它，只以它为基础镜像构建后端代码与前端，产物为 `nas-deck:<tag>`（正式版本另打 `v主.次`、`v主`、`latest`）。`MANAGE_BASE_URL` 在构建期写入镜像（默认 `https://deck-m.freeapps.uk`），运行时 `.env` 可覆盖。系统包或 `backend/requirements.txt` 变化后需要重建基础镜像。
 
 ## 架构
 
