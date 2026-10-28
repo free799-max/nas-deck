@@ -93,7 +93,7 @@ docker push harbor.cacty.top/library/nas-deck-base:latest
 
 | 阶段 | 产物 | 说明 |
 |---|---|---|
-| `image` | `harbor.cacty.top/library/nas-deck:<tag>` 与 `:<commit-sha>`；正式版本另打 `v主.次`、`v主`、`latest` | 以 `nas-deck-base` 为起点，只构建后端代码与前端，配合 buildx registry 缓存 |
+| `image` | `harbor.cacty.top/library/nas-deck:<tag>`；正式版本另打 `v主.次`、`v主`、`latest` | 以 `nas-deck-base` 为起点，只构建后端代码与前端，配合 buildx registry 缓存 |
 
 `nas-deck:buildcache` 是 buildx 的层缓存标签，不是可部署镜像。
 
