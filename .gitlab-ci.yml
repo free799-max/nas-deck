@@ -1,10 +1,12 @@
 # 构建并推送 NasDeck 镜像到 Harbor。
 #
+# 目标 Runner 使用 shell executor（在宿主机上直接执行），所以这里不声明
+# image / services，也不设置 DOCKER_HOST：直接使用宿主机安装的 Docker 与 buildx。
+# 如果改用 docker executor，需要恢复 docker:dind 服务并设置 DOCKER_HOST。
+#
 # 需要预先在 GitLab 项目 Settings → CI/CD → Variables 中配置：
 #   HARBOR_USER       Harbor 用户名或机器人账号
 #   HARBOR_PASSWORD   Harbor 密码或机器人 token（勾选 Masked）
-#
-# 其余变量可在本文件或 CI/CD 变量中覆盖。Runner 需要支持 Docker-in-Docker（privileged）。
 #
 # 流水线分两阶段：
 #   base  把系统依赖、Docker CLI、Python 依赖打成基础镜像推送到 Harbor，
@@ -26,10 +28,6 @@ variables:
   PIP_INDEX_URL: https://mirrors.aliyun.com/pypi/simple/
   # NAS 为 ARM 时改为 linux/arm64（base 标签含平台，不会互相覆盖）
   PLATFORMS: linux/amd64
-  DOCKER_TLS_CERTDIR: "/certs"
-  DOCKER_HOST: tcp://docker:2376
-  DOCKER_TLS_VERIFY: "1"
-  DOCKER_CERT_PATH: "/certs/client"
 
 workflow:
   rules:
@@ -40,10 +38,9 @@ workflow:
     - if: $CI_COMMIT_TAG
 
 .docker:
-  image: docker:27
-  services:
-    - docker:27-dind
   before_script:
+    - docker version
+    - docker buildx version
     - echo "$HARBOR_PASSWORD" | docker login -u "$HARBOR_USER" --password-stdin "$HARBOR_REGISTRY"
 
 base-image:
@@ -58,7 +55,7 @@ base-image:
         echo "基础镜像已存在，跳过构建：$BASE_REF"
         exit 0
       fi
-      docker buildx create --use --name nasdeck --driver docker-container >/dev/null
+      docker buildx create --use --name nasdeck --driver docker-container >/dev/null 2>&1 || docker buildx use nasdeck
       docker buildx build \
         --target base \
         --platform "$PLATFORMS" \
@@ -88,7 +85,7 @@ app-image:
       if [ "$CI_COMMIT_BRANCH" = "$CI_DEFAULT_BRANCH" ]; then
         TAGS="$TAGS --tag $APP_REF:latest"
       fi
-      docker buildx create --use --name nasdeck --driver docker-container >/dev/null
+      docker buildx create --use --name nasdeck --driver docker-container >/dev/null 2>&1 || docker buildx use nasdeck
       docker buildx build \
         --platform "$PLATFORMS" \
         --build-arg "BASE_IMAGE=$BASE_REF" \
