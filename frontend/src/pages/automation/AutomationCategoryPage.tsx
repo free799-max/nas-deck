@@ -32,77 +32,17 @@ import {
 import { useApps, type App } from "@/hooks/useApps";
 import { useDeployTasks } from "@/hooks/useDeployTasks";
 import { cn } from "@/lib/utils";
+import { getAutomationCategoryMeta } from "@/lib/automation-categories";
 import {
   ArrowRight,
   ArrowUpCircle,
-  BookImage,
-  BookOpen,
   Boxes,
-  Film,
-  Gamepad2,
   History,
-  Images,
   Import,
   Loader2,
-  Music,
-  Newspaper,
   Rocket,
   RotateCcw,
-  type LucideIcon,
 } from "lucide-react";
-
-const CATEGORY_LABELS: Record<string, string> = {
-  media: "影视",
-  comics: "漫画",
-  books: "书籍",
-  music: "音乐",
-  games: "游戏",
-  gallery: "图库",
-  news: "资讯",
-};
-
-interface CategoryMeta {
-  icon: LucideIcon;
-  description: string;
-}
-
-const CATEGORY_META: Record<string, CategoryMeta> = {
-  media: {
-    icon: Film,
-    description:
-      "全流程影视自动化：搜索、下载、刮削、播放一体化，打造专属私人影库。",
-  },
-  comics: {
-    icon: BookImage,
-    description:
-      "漫画自动化可以帮你抓取、整理、阅读漫画资源，让书架始终保持最新。",
-  },
-  books: {
-    icon: BookOpen,
-    description:
-      "书籍自动化可以追踪新书上架、自动下载并整理书库，随时畅享阅读。",
-  },
-  music: {
-    icon: Music,
-    description:
-      "音乐自动化可以整理曲库、抓取专辑信息并搭建流媒体服务，随时畅听。",
-  },
-  games: {
-    icon: Gamepad2,
-    description:
-      "游戏自动化可以管理游戏资源、存档与相关服务，让游戏库井井有条。",
-  },
-  gallery: {
-    icon: Images,
-    description:
-      "图库自动化可以整理照片、生成缩略图并提供展示页面，轻松管理回忆。",
-  },
-  news: {
-    icon: Newspaper,
-    description:
-      "资讯自动化可以聚合 RSS、订阅源与文章，自动归档你关心的信息。",
-  },
-};
 
 /** 流程阶段：同一 group 的应用会被合并为同一阶段（如多个播放器） */
 interface Stage {
@@ -181,11 +121,12 @@ function StageFlow({
   return (
     <div className="flex flex-wrap items-start justify-center gap-x-3 gap-y-6 sm:gap-x-4">
       {stages.map((stage, index) => {
-        const isRequired =
-          !stage.group && stage.items[0]?.relation === "required";
+        const isRequired = stage.items.every(
+          (item) => item.relation === "required"
+        );
         const mutex = isMutuallyExclusive(stage.items);
         const caption = stage.group
-          ? `${stage.group} · ${mutex ? "二选一" : "可选"}`
+          ? `${stage.group} · ${mutex ? "二选一" : isRequired ? "必选" : "可选"}`
           : RELATION_LABELS[stage.items[0]?.relation] ?? "可选";
 
         return (
@@ -232,7 +173,7 @@ function OrchestrationShowcase({
   orchestrations: AppOrchestration[];
   appMap: Record<string, App>;
 }) {
-  const config = CATEGORY_META[category] ?? CATEGORY_META.media;
+  const config = getAutomationCategoryMeta(category);
   const Icon = config.icon;
   const multiple = orchestrations.length > 1;
   const isEmpty = orchestrations.length === 0;
@@ -312,8 +253,8 @@ export function AutomationCategoryPage() {
   const [isSwitching, setIsSwitching] = useState(false);
   const switchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const label = CATEGORY_LABELS[category || ""] || category || "自动化";
-  const meta = CATEGORY_META[category || ""] ?? CATEGORY_META.media;
+  const meta = getAutomationCategoryMeta(category);
+  const label = meta.label;
 
   useEffect(() => {
     setSelectedInstanceId((prev) => {

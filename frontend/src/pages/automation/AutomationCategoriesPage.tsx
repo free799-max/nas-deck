@@ -5,36 +5,14 @@
  */
 
 import { Card, CardContent } from "@/components/ui/card";
-import {
-  Film,
-  BookImage,
-  BookOpen,
-  Music,
-  Gamepad2,
-  Images,
-  Newspaper,
-  type LucideIcon,
-} from "lucide-react";
 import { Link } from "react-router-dom";
-
-interface AutomationCategory {
-  key: string;
-  label: string;
-  icon: LucideIcon;
-  description: string;
-}
-
-const CATEGORIES: AutomationCategory[] = [
-  { key: "media", label: "影视", icon: Film, description: "电影、剧集、综艺自动化下载与管理" },
-  { key: "comics", label: "漫画", icon: BookImage, description: "漫画资源抓取与阅读管理" },
-  { key: "books", label: "书籍", icon: BookOpen, description: "电子书自动下载与书库管理" },
-  { key: "music", label: "音乐", icon: Music, description: "音乐资源整理与流媒体播放" },
-  { key: "games", label: "游戏", icon: Gamepad2, description: "游戏相关服务与资源管理" },
-  { key: "gallery", label: "图库", icon: Images, description: "照片、图片资源管理与展示" },
-  { key: "news", label: "资讯", icon: Newspaper, description: "RSS、资讯聚合与归档" },
-];
+import { useOrchestrations } from "@/hooks/useOrchestrations";
+import { buildAutomationCategories } from "@/lib/automation-categories";
 
 export function AutomationCategoriesPage() {
+  const { data: orchestrations = [] } = useOrchestrations();
+  const categories = buildAutomationCategories(orchestrations);
+
   return (
     <div className="space-y-4">
       <div>
@@ -45,7 +23,7 @@ export function AutomationCategoriesPage() {
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-        {CATEGORIES.map((category) => {
+        {categories.map((category) => {
           const Icon = category.icon;
           return (
             <Link key={category.key} to={`/automation/${category.key}`}>

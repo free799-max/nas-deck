@@ -194,9 +194,18 @@ export function useComposeAction() {
       action: ComposeActionRequest["action"];
     }) => composeApi.composeAction(projectId, action),
     onSuccess: (_, { projectId, action }) => {
-      // 刷新项目列表与详情（含状态），及时反映 up/down/restart 结果
-      qc.invalidateQueries({ queryKey: ["compose", "projects"] });
-      qc.invalidateQueries({ queryKey: ["compose", "projects", projectId] });
+      // 刷新项目列表与详情（含状态）及归属容器，及时反映 up/down/restart 结果
+      const refreshCaches = () => {
+        qc.invalidateQueries({ queryKey: ["compose", "projects"] });
+        qc.invalidateQueries({ queryKey: ["compose", "projects", projectId] });
+        qc.invalidateQueries({ queryKey: ["docker", "containers"] });
+      };
+      refreshCaches();
+      // 操作是后台异步任务，POST 返回时还没真正执行完；补几次延迟刷新，
+      // 避免用户提前关闭进度弹窗后，卡片状态一直停在操作前的值
+      for (const delay of [3000, 8000, 15000]) {
+        setTimeout(refreshCaches, delay);
+      }
       const actionMap: Record<string, string> = {
         up: "启动",
         down: "停止",

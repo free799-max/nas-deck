@@ -24,12 +24,14 @@ export interface App {
   type: "compose" | "container";
   changelog: string | null;
   backup_paths: string[];
+  is_paid?: boolean;
 }
 
 /** 应用详情 */
 export interface AppDetail extends App {
   readme: string | null;
   yaml_template: string | null;
+  container_images: Record<string, string>;
 }
 
 /** 部署请求 */
@@ -60,9 +62,21 @@ export interface AppPreviewResponse {
   error: string | null;
 }
 
+/** 应用分类选项（管理端下发，value 为应用数据中的分类标识） */
+export interface CategoryOption {
+  value: string;
+  label: string;
+  order: number;
+}
+
 /** 查询应用列表 */
 export function listApps(params?: { category?: string; tag?: string }) {
   return api.get<App[]>("/apps", { params }).then((r) => r.data);
+}
+
+/** 查询应用分类字典 */
+export function listCategories() {
+  return api.get<CategoryOption[]>("/apps/categories").then((r) => r.data);
 }
 
 /** 查询单个应用详情 */

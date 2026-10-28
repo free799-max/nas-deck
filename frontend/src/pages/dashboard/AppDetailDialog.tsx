@@ -18,6 +18,7 @@ import { AppIcon } from "@/pages/apps/AppIcon";
 import { categoryLabel } from "@/lib/categories";
 import { cn, formatBytes, formatDate, formatUptime } from "@/lib/utils";
 import { useOverviewAppDetail } from "@/hooks/useDashboard";
+import { useCategories } from "@/hooks/useApps";
 import { ExternalLink, RefreshCw } from "lucide-react";
 
 const STATUS_META: Record<string, { label: string; className: string }> = {
@@ -111,6 +112,7 @@ export function AppDetailDialog({
 }) {
   const { data, isLoading, isFetching, isError, refetch } =
     useOverviewAppDetail(open ? instanceId : null);
+  const { data: categoryOptions = [] } = useCategories();
 
   const app = data?.app;
   const status = app
@@ -165,7 +167,7 @@ export function AppDetailDialog({
                       {status?.label}
                     </Badge>
                     <Badge variant="outline" className="text-[11px]">
-                      {categoryLabel(app.category)}
+                      {categoryLabel(categoryOptions, app.category)}
                     </Badge>
                     <span className="text-[11px] text-muted-foreground">
                       {app.instance_name}

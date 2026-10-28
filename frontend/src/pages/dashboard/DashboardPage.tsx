@@ -41,6 +41,7 @@ import { AppIcon } from "@/pages/apps/AppIcon";
 import { AppDetailDialog } from "./AppDetailDialog";
 import { useDockerHostInfo } from "@/hooks/useDocker";
 import { categoryLabel } from "@/lib/categories";
+import { useCategories } from "@/hooks/useApps";
 import { cn, formatBytes, formatUptime } from "@/lib/utils";
 import { useOverview, type OverviewApp } from "@/hooks/useDashboard";
 
@@ -315,10 +316,12 @@ function ServiceCard({
 
 function CategorySection({
   category,
+  label,
   apps,
   onShowDetail,
 }: {
   category: string;
+  label: string;
   apps: OverviewApp[];
   onShowDetail: (app: OverviewApp) => void;
 }) {
@@ -329,7 +332,7 @@ function CategorySection({
       <div className="flex items-center gap-2">
         <Icon className="h-4 w-4 text-primary" />
         <h2 className="text-sm font-semibold text-foreground">
-          {categoryLabel(category)}
+          {label}
         </h2>
         <span className="text-xs text-muted-foreground">
           {apps.length} 个应用
@@ -381,6 +384,7 @@ function LoadingSkeleton() {
 export function DashboardPage() {
   const { data, isLoading, isError, isFetching, refetch } = useOverview();
   const { data: hostInfo } = useDockerHostInfo();
+  const { data: categoryOptions = [] } = useCategories();
   const [search, setSearch] = useState("");
   const [detailAppId, setDetailAppId] = useState<number | null>(null);
 
@@ -396,12 +400,12 @@ export function DashboardPage() {
             app.app_name,
             app.instance_name,
             app.description ?? "",
-            categoryLabel(category.category),
+            categoryLabel(categoryOptions, category.category),
           ].some((value) => value.toLowerCase().includes(keyword))
         ),
       }))
       .filter((category) => category.apps.length > 0);
-  }, [data, search]);
+  }, [data, search, categoryOptions]);
 
   const visibleTotal = categories.reduce(
     (total, category) => total + category.apps.length,
@@ -476,6 +480,7 @@ export function DashboardPage() {
               <CategorySection
                 key={category.category}
                 category={category.category}
+                label={categoryLabel(categoryOptions, category.category)}
                 apps={category.apps}
                 onShowDetail={(app) => setDetailAppId(app.id)}
               />

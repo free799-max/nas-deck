@@ -17,8 +17,7 @@ import { Label } from "@/components/ui/label";
 import { SchemaForm } from "@/components/SchemaForm";
 import { CodeBlock } from "@/components/ui/code-block";
 import { useToast } from "@/components/ui/toast";
-import { getApp } from "@/api/apps";
-import { getImageTags } from "@/api/docker";
+import { getApp, type AppDetail } from "@/api/apps";
 import { sanitizeInstanceName, slugify } from "@/lib/utils";
 import {
   applyPortSuggestions,
@@ -94,7 +93,7 @@ export function AppDeployDialog({
   isDeploying = false,
 }: AppDeployDialogProps) {
   // 弹窗内直接请求最新应用详情，不依赖任何缓存
-  const [app, setApp] = useState<App | null>(null);
+  const [app, setApp] = useState<AppDetail | null>(null);
   const [loading, setLoading] = useState(false);
   const [fetchError, setFetchError] = useState(false);
   const [fetchErrorMessage, setFetchErrorMessage] = useState<string | null>(null);
@@ -137,8 +136,6 @@ export function AppDeployDialog({
   // 打开时随应用变化重置表单
   const [instanceName, setInstanceName] = useState("");
   const [config, setConfig] = useState<Record<string, unknown>>({});
-  const [imageTags, setImageTags] = useState<string[]>([]);
-  const [imageTagsLoading, setImageTagsLoading] = useState(false);
 
   const appDisplayName = app?.display_name || "";
   const appConfigSchema = useMemo(() => app?.config_schema || {}, [app]);
@@ -168,36 +165,13 @@ export function AppDeployDialog({
     setConfig(result.config);
   }, [portSuggestions, appConfigSchema, config]);
 
-  // 获取镜像可用标签列表
-  const appImage = app?.image;
-  useEffect(() => {
-    if (!appImage) {
-      setImageTags([]);
-      return;
-    }
-
-    const controller = new AbortController();
-    setImageTagsLoading(true);
-
-    getImageTags(appImage, controller.signal)
-      .then((tags) => {
-        setImageTags(tags.map((tag) => tag.name));
-      })
-      .catch(() => {
-        setImageTags([]);
-      })
-      .finally(() => {
-        setImageTagsLoading(false);
-      });
-
-    return () => {
-      controller.abort();
-    };
-  }, [appImage]);
-
   const toast = useToast();
 
-  const { yaml, error, isPending } = useDebouncedPreview(app, instanceName, config);
+  const { yaml, error, isPending } = useDebouncedPreview(
+    app,
+    instanceName,
+    config
+  );
 
   if (!open || !propApp) return null;
 
@@ -242,6 +216,17 @@ export function AppDeployDialog({
       toast.error("请输入有效的实例名称");
       return;
     }
+    const containerImages = config.container_images as
+      | Record<string, { repository?: unknown; tag?: unknown }>
+      | undefined;
+    const hasIncompleteImage = Object.values(containerImages || {}).some(
+      (image) =>
+        !String(image.repository || "").trim() || !String(image.tag || "").trim()
+    );
+    if (hasIncompleteImage) {
+      toast.error("请完整填写各容器的镜像地址和标签");
+      return;
+    }
     onDeploy({ instance_name: projectName, config });
   };
 
@@ -280,9 +265,7 @@ export function AppDeployDialog({
                 }
                 data={config}
                 onChange={setConfig}
-                image={app.image || ""}
-                imageTags={imageTags}
-                imageTagsLoading={imageTagsLoading}
+                containerImages={app.container_images}
               />
             </div>
 

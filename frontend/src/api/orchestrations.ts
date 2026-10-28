@@ -23,11 +23,13 @@ export interface AppOrchestration {
   display_name: string;
   description: string | null;
   category: string;
+  sort_order: number;
   icon: string | null;
   website: string | null;
   source_url: string | null;
   version: string;
   is_builtin: boolean;
+  is_listed: boolean;
   app_composition: AppCompositionItem[];
   shared_config_schema: Record<string, unknown>;
   /** 当前方案版本的更新说明（可能暂未由后端返回） */

@@ -10,6 +10,10 @@ import { PasswordInput } from "@/components/ui/password-input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { DataDirPathInput } from "@/components/DataDirPathInput";
+import {
+  ContainerImageField,
+  type ContainerImageConfig,
+} from "@/components/ContainerImageField";
 import { generatePassword } from "@/lib/utils";
 import { useStorageDirectories } from "@/hooks/useSettings";
 import type { StorageDirectory } from "@/api/settings";
@@ -80,6 +84,8 @@ interface SchemaFormProps {
   imageTags?: string[];
   /** 是否正在加载镜像标签 */
   imageTagsLoading?: boolean;
+  /** 各 Compose 服务的默认镜像，用于逐容器镜像配置 */
+  containerImages?: Record<string, string>;
   /** 目录字段选中来源后子路径为空时自动填入的默认值（如实例名称） */
   defaultDirectorySubPath?: string;
   /**
@@ -87,6 +93,21 @@ interface SchemaFormProps {
    * 公共配置等共享目录场景传 false，来源下拉默认留空。
    */
   relativeToAppDataDir?: boolean;
+}
+
+function withContainerImage(
+  data: Record<string, unknown>,
+  containerName: string,
+  value: ContainerImageConfig
+): Record<string, unknown> {
+  const overrides = (data.container_images || {}) as Record<
+    string,
+    ContainerImageConfig
+  >;
+  return {
+    ...data,
+    container_images: { ...overrides, [containerName]: value },
+  };
 }
 
 /**
@@ -496,6 +517,7 @@ function ContainerSchemaForm({
   image,
   imageTags,
   imageTagsLoading,
+  containerImages,
   directoryServices,
   defaultDirectorySubPath,
 }: {
@@ -505,6 +527,7 @@ function ContainerSchemaForm({
   image?: string;
   imageTags?: string[];
   imageTagsLoading?: boolean;
+  containerImages?: Record<string, string>;
   directoryServices: DirectoryServices;
   defaultDirectorySubPath?: string;
 }) {
@@ -590,11 +613,14 @@ function ContainerSchemaForm({
   return (
     <div className="space-y-4">
       {containers.map((container) => {
-        // 判断当前容器是否包含 image_tag 配置
-        const hasImageTag = container.settings.some(
-          (s) =>
-            s.type === "advanced" && s.fields && s.fields.includes("image_tag")
-        );
+        const defaultContainerImage = containerImages?.[container.name];
+        const hasImageTag =
+          defaultContainerImage === undefined &&
+          Boolean(image) &&
+          container.settings.some(
+            (s) =>
+              s.type === "advanced" && s.fields && s.fields.includes("image_tag")
+          );
 
         return (
           <section
@@ -612,7 +638,22 @@ function ContainerSchemaForm({
               )}
             </div>
 
-            {hasImageTag && renderImageTag()}
+            {defaultContainerImage !== undefined ? (
+              <ContainerImageField
+                containerName={container.name}
+                defaultImage={defaultContainerImage}
+                value={
+                  (data.container_images as
+                    | Record<string, ContainerImageConfig>
+                    | undefined)?.[container.name]
+                }
+                onChange={(value) =>
+                  onChange(withContainerImage(data, container.name, value))
+                }
+              />
+            ) : (
+              hasImageTag && renderImageTag()
+            )}
 
             <div className="divide-y">
               {container.settings
@@ -678,6 +719,7 @@ function PlainSchemaForm({
   image,
   imageTags,
   imageTagsLoading,
+  containerImages,
   directoryServices,
   defaultDirectorySubPath,
 }: {
@@ -687,6 +729,7 @@ function PlainSchemaForm({
   image?: string;
   imageTags?: string[];
   imageTagsLoading?: boolean;
+  containerImages?: Record<string, string>;
   directoryServices: DirectoryServices;
   defaultDirectorySubPath?: string;
 }) {
@@ -697,22 +740,41 @@ function PlainSchemaForm({
     onChange({ ...data, [key]: value });
   };
 
-  // image_tag 在表单顶部以镜像名 + 标签下拉的形式单独渲染
-  const hasImageTag = Boolean(properties.image_tag) && Boolean(image);
+  const defaultContainerImage = Object.entries(containerImages || {})[0];
+  const hasImageTag =
+    !defaultContainerImage && Boolean(properties.image_tag) && Boolean(image);
 
   return (
     <div className="space-y-4">
-      {hasImageTag && (
-        <ImageTagField
-          image={image}
-          value={String(data.image_tag || "")}
-          imageTags={imageTags}
-          imageTagsLoading={imageTagsLoading}
-          onChange={(v) => handleChange("image_tag", v)}
+      {defaultContainerImage ? (
+        <ContainerImageField
+          containerName={defaultContainerImage[0]}
+          defaultImage={defaultContainerImage[1]}
+          value={
+            (data.container_images as
+              | Record<string, ContainerImageConfig>
+              | undefined)?.[defaultContainerImage[0]]
+          }
+          onChange={(value) =>
+            onChange(withContainerImage(data, defaultContainerImage[0], value))
+          }
         />
+      ) : (
+        hasImageTag && (
+          <ImageTagField
+            image={image}
+            value={String(data.image_tag || "")}
+            imageTags={imageTags}
+            imageTagsLoading={imageTagsLoading}
+            onChange={(v) => handleChange("image_tag", v)}
+          />
+        )
       )}
       {Object.entries(properties)
-        .filter(([key]) => key !== "image_tag" || !hasImageTag)
+        .filter(
+          ([key]) =>
+            key !== "image_tag" || (!hasImageTag && !defaultContainerImage)
+        )
         .map(([key, prop]) => {
           // 数组类型（如环境变量、端口映射）走 ArrayField，避免被当成普通文本渲染
           if (prop.type === "array" && prop.items) {
@@ -776,6 +838,7 @@ export function SchemaForm({
   image,
   imageTags,
   imageTagsLoading,
+  containerImages,
   defaultDirectorySubPath,
   relativeToAppDataDir = true,
 }: SchemaFormProps) {
@@ -802,6 +865,7 @@ export function SchemaForm({
         image={image}
         imageTags={imageTags}
         imageTagsLoading={imageTagsLoading}
+        containerImages={containerImages}
         directoryServices={directoryServices}
         defaultDirectorySubPath={defaultDirectorySubPath}
       />
@@ -816,6 +880,7 @@ export function SchemaForm({
       image={image}
       imageTags={imageTags}
       imageTagsLoading={imageTagsLoading}
+      containerImages={containerImages}
       directoryServices={directoryServices}
       defaultDirectorySubPath={defaultDirectorySubPath}
     />

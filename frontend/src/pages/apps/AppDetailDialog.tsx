@@ -65,6 +65,14 @@ export function AppDetailDialog({
                 {app.description || "暂无描述"}
               </DialogDescription>
               <div className="flex flex-wrap items-center gap-2 mt-3">
+                {app.is_paid && (
+                  <Badge
+                    variant="outline"
+                    className="text-xs font-normal border-amber-500/30 bg-amber-500/10 text-amber-700"
+                  >
+                    付费
+                  </Badge>
+                )}
                 <Badge variant="outline" className="text-xs font-normal">
                   版本 {app.version}
                 </Badge>

@@ -19,9 +19,18 @@ interface AppCardProps {
 export function AppCard({ app, onDeploy, onDetail }: AppCardProps) {
   return (
     <Card
-      className="rounded-xl p-5 min-h-[140px] border border-border/80 shadow-sm hover:shadow-[0_4px_14px_rgba(0,0,0,0.08)] hover:border-border transition-all cursor-pointer"
+      className="relative rounded-xl p-5 min-h-[140px] border border-border/80 shadow-sm hover:shadow-[0_4px_14px_rgba(0,0,0,0.08)] hover:border-border transition-all cursor-pointer"
       onClick={() => onDetail(app)}
     >
+      {app.is_paid && (
+        <Badge
+          variant="outline"
+          className="absolute top-2.5 left-3 h-[18px] gap-1 border-amber-200 bg-amber-50 px-2 text-[11px] font-medium text-amber-700"
+        >
+          <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
+          付费
+        </Badge>
+      )}
       <CardContent className="p-0 h-full flex items-stretch gap-5">
         {/* 图标 */}
         <div className="shrink-0 self-center">

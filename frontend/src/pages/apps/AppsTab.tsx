@@ -15,17 +15,19 @@ import { useDeployTasks } from "@/hooks/useDeployTasks";
 import {
   useApps,
   useApp,
+  useCategories,
   useDeployApp,
   type App,
   type AppDetail,
 } from "@/hooks/useApps";
 import { Search, ChevronLeft, ChevronRight } from "lucide-react";
-import { categoryLabel } from "@/lib/categories";
+import { categoryLabel, categoryRank } from "@/lib/categories";
 
 const PAGE_SIZE_OPTIONS = [20, 40, 60, 100];
 
 export function AppsTab() {
   const { data: apps = [], isLoading } = useApps();
+  const { data: categoryOptions = [] } = useCategories();
   const deployMutation = useDeployApp();
   const toast = useToast();
   const { startTask } = useDeployTasks();
@@ -40,8 +42,11 @@ export function AppsTab() {
   const [jumpPage, setJumpPage] = useState("");
 
   const categories = useMemo(
-    () => Array.from(new Set(apps.map((a) => a.category))),
-    [apps]
+    () =>
+      Array.from(new Set(apps.map((a) => a.category))).sort(
+        (a, b) => categoryRank(categoryOptions, a) - categoryRank(categoryOptions, b)
+      ),
+    [apps, categoryOptions]
   );
 
   const filtered = useMemo(() => {
@@ -153,7 +158,7 @@ export function AppsTab() {
                       : "bg-muted/70 text-muted-foreground hover:bg-muted"
                   }`}
                 >
-                  {categoryLabel(cat)}
+                  {categoryLabel(categoryOptions, cat)}
                 </button>
               ))}
             </div>

@@ -7,11 +7,13 @@ import { useToast } from "@/components/ui/toast";
 import type { ApiError } from "@/api/types";
 import {
   listApps,
+  listCategories,
   getApp,
   deployApp,
   previewApp,
   type App,
   type AppDetail,
+  type CategoryOption,
   type DeployAppRequest,
   type AppPreviewRequest,
 } from "@/api/apps";
@@ -20,6 +22,7 @@ import {
 export type {
   App,
   AppDetail,
+  CategoryOption,
   DeployAppRequest,
   DeployAppResponse,
   AppPreviewRequest,
@@ -33,6 +36,17 @@ export function useApps(category?: string, tag?: string) {
   return useQuery<App[]>({
     queryKey: ["apps", { category, tag }],
     queryFn: () => listApps({ category, tag }),
+  });
+}
+
+/**
+ * 查询应用分类字典（显示名与排序由管理端维护）
+ */
+export function useCategories() {
+  return useQuery<CategoryOption[]>({
+    queryKey: ["app-categories"],
+    queryFn: listCategories,
+    staleTime: 5 * 60_000,
   });
 }
 

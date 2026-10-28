@@ -1,43 +1,23 @@
 /**
- * 应用分类的展示名称与排序
+ * 应用分类展示辅助
  *
- * 应用市场与服务概览共用同一套分类映射，后端只返回分类标识。
+ * 分类的显示名与排序统一由管理端维护（经后端 /api/apps/categories 下发），
+ * 前端不再内置本地映射；接口不可用时回退为显示原始分类值。
  */
 
-export const CATEGORY_LABELS: Record<string, string> = {
-  movie: "影视",
-  media: "媒体",
-  comic: "漫画",
-  book: "书籍",
-  music: "音乐",
-  game: "游戏",
-  gallery: "图库",
-  news: "资讯",
-  download: "下载",
-  docker: "Docker",
-  tool: "工具",
-  network: "网络",
-  web: "网站",
-  other: "其他",
-};
+import type { CategoryOption } from "@/api/apps";
 
-export const CATEGORY_ORDER = [
-  "movie",
-  "media",
-  "comic",
-  "book",
-  "music",
-  "download",
-  "gallery",
-  "game",
-  "news",
-  "tool",
-  "network",
-  "web",
-  "docker",
-  "other",
-];
+export function categoryLabel(
+  options: CategoryOption[],
+  category: string
+): string {
+  return options.find((option) => option.value === category)?.label ?? category;
+}
 
-export function categoryLabel(category: string): string {
-  return CATEGORY_LABELS[category] ?? category;
+export function categoryRank(
+  options: CategoryOption[],
+  category: string
+): number {
+  const index = options.findIndex((option) => option.value === category);
+  return index === -1 ? options.length : index;
 }

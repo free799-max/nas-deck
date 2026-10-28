@@ -89,7 +89,17 @@ export function StackDetailDialog({
   const containerAction = useContainerAction();
 
   const handleContainerAction = (id: string, action: "start" | "stop" | "restart") => {
-    containerAction.mutate({ id, action });
+    // 容器操作只使容器列表缓存失效，这里同时刷新 Stack 状态与归属容器，
+    // 让弹窗内的状态立即更新而不是等待下一次轮询
+    containerAction.mutate(
+      { id, action },
+      {
+        onSuccess: () => {
+          refetchStatus();
+          refetchContainers();
+        },
+      }
+    );
   };
 
   const canControlContainer = (status: string) => {

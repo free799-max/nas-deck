@@ -3,7 +3,7 @@
  *
  * 导航结构（对应整体架构设计）：
  * - 服务概览 / 服务编排（独立项）
- * - AUTOMATION 分组（7 个媒体类型）
+ * - AUTOMATION 分组（按管理端组合动态生成）
  * - DOCKER 分组（容器编排/管理/镜像/主机）
  * - 系统设置（底部独立项）
  */
@@ -13,13 +13,6 @@ import { Link, useLocation } from "react-router-dom";
 import {
   LayoutDashboard,
   Store,
-  Film,
-  BookImage,
-  BookOpen,
-  Music,
-  Gamepad2,
-  Images,
-  Newspaper,
   Layers,
   Box,
   HardDrive,
@@ -30,6 +23,8 @@ import {
 } from "lucide-react";
 import { LogoIcon } from "@/components/LogoIcon";
 import { useLicenseStatus } from "@/hooks/useLicense";
+import { useOrchestrations } from "@/hooks/useOrchestrations";
+import { buildAutomationCategories } from "@/lib/automation-categories";
 
 /** 导航项配置 */
 interface NavItemConfig {
@@ -42,17 +37,6 @@ interface NavItemConfig {
 const topItems: NavItemConfig[] = [
   { path: "/", label: "服务概览", icon: LayoutDashboard },
   { path: "/appstore", label: "应用市场", icon: Store },
-];
-
-// AUTOMATION 分组：按媒体类型划分的自动化配置
-const automationItems: NavItemConfig[] = [
-  { path: "/automation/media", label: "影视", icon: Film },
-  { path: "/automation/comics", label: "漫画", icon: BookImage },
-  { path: "/automation/books", label: "书籍", icon: BookOpen },
-  { path: "/automation/music", label: "音乐", icon: Music },
-  { path: "/automation/games", label: "游戏", icon: Gamepad2 },
-  { path: "/automation/gallery", label: "图库", icon: Images },
-  { path: "/automation/news", label: "资讯", icon: Newspaper },
 ];
 
 // DOCKER 分组：容器与主机管理
@@ -220,6 +204,14 @@ interface SidebarProps {
 export function Sidebar({ collapsed }: SidebarProps) {
   const location = useLocation();
   const pathname = location.pathname;
+  const { data: orchestrations = [] } = useOrchestrations();
+  const automationItems: NavItemConfig[] = buildAutomationCategories(
+    orchestrations
+  ).map((category) => ({
+    path: `/automation/${category.key}`,
+    label: category.label,
+    icon: category.icon,
+  }));
   const { data: license } = useLicenseStatus();
   const automationLocked = !!license && !license.valid;
 
